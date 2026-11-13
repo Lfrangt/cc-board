@@ -15,6 +15,7 @@ browser.mjs: 静音无头 Chromium 的唯一入口（`playwright-core` + 三个�
 
 - 四个脚本都不碰真实的 `~/.claude` 和真实的 tmux。假主目录让服务自认是试验场。
 - 只停自己记下进程号的进程。
+- tmux 的临时目录放在 `/tmp/ccb-tmux-*`（短路径），不放进仓库里的 `.tmp`：tmux 的套接字路径不能超过约 104 字节，仓库克隆在深目录里时会整批失败（21 项）。
 - 改了 server.mjs 里被 mutants.mjs 引用的那几行，要同步改 mutants.mjs 里的原文。
 - 服务用登录 shell（`zsh -lc 'command -v codex'`）找命令，开发机上找得到真的 codex。测 Codex 的 `/api/new` 一律带写坏的模型名，在起进程之前就被拦下；不要让测试真开 Codex 会话。
 - 无头浏览器是重活。多个窗口共用一台机器时，外面包一把全机的锁（作者这台机器用 `~/Projects/shared/fretflow-lock/heavy-lock.py`）。

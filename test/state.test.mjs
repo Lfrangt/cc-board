@@ -16,7 +16,8 @@ fs.mkdirSync(path.join(HERE, '.tmp'), { recursive: true });
 const ROOT = fs.mkdtempSync(path.join(HERE, '.tmp', 'run-'));
 const FH = path.join(ROOT, 'home'); const SESS = path.join(FH, '.claude/sessions'); const CWD = path.join(FH, 'work');
 const PROJ = path.join(FH, '.claude/projects', CWD.replace(/[^A-Za-z0-9]/g, '-'));
-for (const d of [SESS, PROJ, CWD, path.join(ROOT, 'tmux')]) fs.mkdirSync(d, { recursive: true });
+for (const d of [SESS, PROJ, CWD]) fs.mkdirSync(d, { recursive: true });
+const TMUXDIR = fs.mkdtempSync('/tmp/ccb-tmux-');      // 短路径：tmux 的套接字路径不能超过约 104 字节；放进仓库里的 .tmp，仓库一克隆到深目录就整批失败
 const NODE = process.execPath; const kids = []; const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let T = Date.now() - 600000; const ts = () => new Date((T += 1500)).toISOString();
 
@@ -105,7 +106,7 @@ fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\ncase "$*" in *TRUSTME*|*O
 const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((x) => fs.existsSync(x));
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
-const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: path.join(ROOT, 'tmux'), CCBOARD_STALL_MS: '3000', PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
+const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
 delete env.CCBOARD_DATA; delete env.CCBOARD_READONLY;
 // ── config.json：示例项目表（test/fixture-config.json），两个开关都打开。最后一段 [8] 换成写坏的 config 重启，看默认值 ──
 const DATA0 = path.join(FH, 'Library/Application Support/cc-board'); fs.mkdirSync(DATA0, { recursive: true });
@@ -326,7 +327,7 @@ try {
   try { if (TMUX_BIN) spawnSync(TMUX_BIN, ['-L', 'ccboard', 'kill-server'], { env, stdio: 'ignore' }); } catch {}      // 只关这次测试自己那个 tmux（它在自己的临时目录里）
   if (ticker) clearInterval(ticker); clearInterval(hintTick);
   if (KEEP) { console.log('\nKEEP url=http://127.0.0.1:' + PORT + '/?k=' + TOKEN + ' root=' + ROOT + ' pids=' + kids.join(',')); }
-  else { for (const p of kids) { try { process.kill(p, 'SIGTERM'); } catch {} } await sleep(300); fs.rmSync(ROOT, { recursive: true, force: true }); }
+  else { for (const p of kids) { try { process.kill(p, 'SIGTERM'); } catch {} } await sleep(300); fs.rmSync(ROOT, { recursive: true, force: true }); fs.rmSync(TMUXDIR, { recursive: true, force: true }); }
 }
 console.log(`\n结果：${pass} 过，${fail} 没过`);
 process.exit(fail ? 1 : 0);
