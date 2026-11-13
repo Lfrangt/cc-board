@@ -6,6 +6,11 @@ Delivered work comes up sharp and in front. Sessions still working sit blurred b
 > macOS (Apple Silicon) · Node 22, zero npm dependencies · MIT
 > Independent project. Not affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are Anthropic's trademarks.
 
+<p align="center">
+  <a href="docs/media/cc-board-launch.mp4"><img src="docs/media/cc-board-preview.gif" width="720" alt="cc-board: the session that delivered comes up sharp and in front, sessions still working sit blurred behind"></a>
+</p>
+<p align="center"><a href="docs/media/cc-board-launch.mp4">▶ Watch the 30-second launch video (with sound)</a></p>
+
 ## The problem
 
 Run four or five Claude Code sessions at once and your day turns into watching terminals. Which one finished? Which one is waiting on me? Which one hit the rate limit twenty minutes ago and has been sitting there ever since?
