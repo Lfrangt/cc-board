@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
- * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 「归档」自己定删还是留。
+ * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 「归档」自己定删还是留；
+ *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
  *        完全隔离：假的主目录、自己的端口、自己的 tmux 目录，服务因此自认是试验场（不碰 Ghostty、不发系统通知）。收尾只按记下的进程号停。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -90,6 +91,22 @@ mk('tidyChat', 'idle', [R.human('问个小问题'), R.final('答完了。')], { 
 mk('tidyWork', 'idle', [R.human('改一下样式'), R.tool('Edit'), R.result(), R.final('样式改好了。')], { claude: true });
 mk('tidyAsk', 'idle', [R.human('出个主意'), R.final('想了两个方向。\n\n你选 A 还是 B？')], { claude: true });
 mk('tidyUndo', 'idle', [R.human('随便问问'), R.final('好。')], { claude: true });
+// 自动收工（autoTidy）：门槛在下面的 env 里调成 快线 3 秒 / fyi 1 小时 / review 2 小时。aged() 把记录和登记都挪到很久以前，好让它们到点
+const H = 3600000;
+const aged = (ms, recs) => recs.map((r, i) => ({ ...r, timestamp: new Date(Date.now() - ms + i * 1500).toISOString() }));
+if (!process.argv.includes('--ui')) {      // 界面测试按卡数断言，这些卡不放进去
+mk('atFyi', 'idle', aged(2 * H, [R.peer('khalil-f2', '补丁验收过了'), R.tool('Edit'), R.result(), R.final('补丁已合入。')]), { statusAgo: 2 * H, claude: true });          // fyi 超 1 小时 → 收；改过文件 → 留
+mk('atRev', 'idle', aged(3 * H, [R.human('问个问题'), R.final('答完了。')]), { statusAgo: 3 * H, claude: true });                                              // 待审阅超 2 小时没点 → 收；只聊几句 → 删
+mk('atFyiNew', 'idle', aged(H / 2, [R.peer('khalil-f2', '验收过了'), R.tool('Edit'), R.result(), R.final('已合入。')]), { statusAgo: H / 2, claude: true });          // fyi 才半小时 → 不收（只读预览里会标「会收」）
+mk('atRevNew', 'idle', aged(1.5 * H, [R.human('改样式'), R.tool('Edit'), R.result(), R.final('样式改好了。')]), { statusAgo: 1.5 * H, claude: true });              // 待审阅 1.5 小时：过了 fyi 的线、没到 review 的线 → 不收
+mk('atAsk', 'idle', aged(5 * H, [R.human('出个主意'), R.final('想了两个方向。\n\n你选 A 还是 B？')]), { statusAgo: 5 * H, claude: true });                    // 待跟进放多久都不收
+mk('atBusy', 'busy', aged(5 * H, [R.human('跑一下'), R.tool(), R.result(), R.note('我先看看。')]), { statusAgo: 5 * H, claude: true });                            // 在跑的不收
+mk('atShell', 'shell', aged(5 * H, [R.peer('khalil-f2', '验收过了'), R.tool('Edit'), R.result(), R.final('已合入，回归在后台跑。')]), { statusAgo: 5 * H, claude: true });   // 放到后台的命令还在跑：不收
+mk('atHalt', 'idle', aged(5 * H, [R.human('跑回归'), R.final('回归全过。'), R.notif(), R.apiErr('rate_limit', LIMIT)]), { statusAgo: 5 * H, claude: true });      // 交付了、又被后台通知叫醒撞上额度：有 alert 的不收
+mk('atFast', 'idle', [R.human('改一下标题'), R.tool('Edit'), R.result(), R.final('标题改好了。')], { claude: true });                // 点「审完了」后安静 3 秒 → 收
+mk('atFocus', 'idle', [R.human('改一下页脚'), R.tool('Edit'), R.result(), R.final('页脚改好了。')], { claude: true });               // 同上，但他正看着总控台时先不收
+mk('atStale', 'idle', [R.human('改一下配色'), R.tool('Edit'), R.result(), R.final('配色改好了。')], { claude: true });               // 点的是上一次交付的「审完了」→ 不算
+}
 // 正文里的本机路径（界面测试核它们变成可点的链接）
 mk('links', 'idle', [R.human('整理资料'), R.final('资料在这里：\n\n- 文件夹 ~/Desktop/总控台_封面新版/\n- `~/Library/Application Support/cc-board`\n- [讲解页](file:///Users/khalil/Desktop/x%20y.html)\n- 网址 https://example.com')]);
 mk('askTag', 'idle', [R.human('出两版首页'), R.tool(), R.result(), R.final('两版都做好了。\n\n做了什么：出了两版首页\n【待跟进】回 A 或 B，图在桌面')]);
@@ -110,11 +127,11 @@ fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\ncase "$*" in *TRUSTME*|*O
 const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((x) => fs.existsSync(x));
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
-const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
+const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
 delete env.CCBOARD_DATA; delete env.CCBOARD_READONLY;
 // ── config.json：示例项目表（test/fixture-config.json），两个开关都打开。最后一段 [8] 换成写坏的 config 重启，看默认值 ──
 const DATA0 = path.join(FH, 'Library/Application Support/cc-board'); fs.mkdirSync(DATA0, { recursive: true });
-fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true }));
+fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true, autoTidy: !process.argv.includes('--ui') }));   // --ui：界面测试点「审完了」，不能让服务把卡收走
 // ── 一个总控台起过的 Codex 会话：登记在 agents.json，tmux 里有它的窗格，记录是最小的两行（--ui 场景里不放：界面测试按卡数断言）──
 const CDX = 'ccb-cdx001';
 if (!process.argv.includes('--ui') && TMUX_BIN) {
@@ -234,6 +251,39 @@ try {
   const tw = arc.items.find((x) => x.sid === S.tidyWork.sid), ta = arc.items.find((x) => x.sid === S.tidyAsk.sid);
   ok(tw && tw.state === 'archived' && tw.note && tw.note.head === '样式改好了。' && fs.existsSync(S.tidyWork.file) && ta && ta.note && /你选 A 还是 B/.test(ta.note.ask || ''), 'archive: 留着的：停掉、对话还在原处，记下了最后那句结论和要你做的事', JSON.stringify([tw, ta]));
   ok(by(st, 'tidyUndo') && fs.existsSync(S.tidyUndo.file), 'archive: 8 秒内撤销的照旧在墙上，没被删', String(!!by(st, 'tidyUndo')));
+
+  console.log('\n[4c] 自动收工（autoTidy）：结束了的窗口自己收掉，没结束的一个都不碰');
+  st = await get('/api/state'); const arc2 = await get('/api/archive'); const ai = (n) => arc2.items.find((x) => x.sid === S[n].sid);
+  ok(!by(st, 'atFyi') && ai('atFyi') && ai('atFyi').state === 'archived' && ai('atFyi').auto === true && /无需处理的交付，2 小时没人理它/.test(ai('atFyi').why) && /改过 1 次文件/.test(ai('atFyi').why) && fs.existsSync(S.atFyi.file), 'tidy: 无需处理的交付超过 1 小时没人理 → 收；改过文件 → 留着（理由里写明哪条线）', JSON.stringify(ai('atFyi')));
+  ok(!by(st, 'atRev') && !ai('atRev') && !fs.existsSync(S.atRev.file) && (arc2.dropped || []).some((x) => x.sid === S.atRev.sid && /待审阅的交付，3 小时没点「审完了」/.test(x.why) && /只聊了几句/.test(x.why)), 'tidy: 待审阅超过 2 小时没点「审完了」 → 收；只聊了几句 → 和手点归档一样删（对话挪进暂存处）', JSON.stringify(arc2.dropped));
+  const stay = ['atFyiNew', 'atRevNew', 'atAsk', 'atBusy', 'atShell', 'atHalt', 'atStale'];
+  ok(stay.every((n) => by(st, n) && !ai(n)), 'tidy: 没到线的（fyi 才半小时 / 待审阅 1.5 小时）、待跟进放了 5 小时、在跑的、后台命令还在跑的、被后台叫醒撞上额度的、点的是旧交付的 → 一个都没动', JSON.stringify(stay.map((n) => [n, !!by(st, n), !!ai(n)])));
+  ok(kind(st, 'atHalt') === 'limit' && by(st, 'atHalt').done === true, 'tidy: atHalt 交付了、又报了额度的错 = 有 alert，不收（守卫是真会碰到的）', kind(st, 'atHalt') + ' done=' + by(st, 'atHalt').done);
+  const prc = async (map) => (await post('/api/processed', { map })).body;
+  const bads = [await prc([1, 2]), await prc({ x: 'y' }), await prc({ [S.atFast.sid]: { a: 1 } })];
+  ok(bads.every((b) => b.ok && b.n === 0), '/api/processed：不是对象、sid 写法不对、时间不是字符串或数字 → 都忽略，不崩', JSON.stringify(bads));
+  const seen4c = []; const poll4c = async (f) => { const r = await get('/api/state' + (f ? '?f=1' : '')); for (const n of r.notices || []) seen4c.push(n.text); return r; };
+  const focus4c = setInterval(() => poll4c(true).catch(() => {}), 700);      // 他正看着总控台：从打标记之前就开始，一直到下面检查完；「审完了」过 3 秒就到点，之后只有「正看着」在拦着
+  const pm = await prc({ [S.atFast.sid]: by(st, 'atFast').resultAt, [S.atFocus.sid]: by(st, 'atFocus').resultAt, [S.atStale.sid]: '2020-01-01T00:00:00.000Z' });
+  ok(pm.ok && pm.n === 3, '/api/processed：三条记录都收下', JSON.stringify(pm));
+  const pm2 = await prc({ [S.atBusy.sid]: 'x' }), pm3 = (await post('/api/processed', { clear: [S.atBusy.sid] })).body, pm4 = await prc({ 'ghost000-0000-4000-8000-000000000000': 'x' });
+  await sleep(2500); const pm5 = await prc({});
+  ok(pm2.n === 4 && pm3.n === 3 && pm4.n === 4 && pm5.n === 3, '/api/processed：只增不整份替换（再来一条 → 4）、clear 撤销一条 → 3、已经不在墙上的会话（ghost）扫一遍就清掉 → 3', JSON.stringify([pm2.n, pm3.n, pm4.n, pm5.n]));
+  await sleep(7500); st = await poll4c(true); clearInterval(focus4c);
+  ok(by(st, 'atFast') && by(st, 'atFocus'), 'tidy: 他正看着总控台时不收（卡片不在他眼前消失）', JSON.stringify([!!by(st, 'atFast'), !!by(st, 'atFocus')]));
+  let arc3 = { items: [] }; for (let i = 0; i < 30; i++) { await sleep(1000); await poll4c(false); arc3 = await get('/api/archive'); if (['atFast', 'atFocus'].every((n) => arc3.items.some((x) => x.sid === S[n].sid && x.state === 'archived'))) break; }
+  const a3 = (n) => arc3.items.find((x) => x.sid === S[n].sid); st = await get('/api/state');
+  ok(['atFast', 'atFocus'].every((n) => a3(n) && a3(n).state === 'archived' && a3(n).auto === true && /^你点过「审完了」，改过 1 次文件$/.test(a3(n).why)), 'tidy: 他离开之后，点过「审完了」又安静 3 秒的收掉，改过文件 → 留着', JSON.stringify([a3('atFast'), a3('atFocus')]));
+  ok(by(st, 'atStale') && !a3('atStale'), 'tidy: 点的是上一次交付的「审完了」（时间对不上）→ 不算，还在墙上');
+  const tl = log().split('\n').filter((x) => x.startsWith('tidy '));
+  ok(['atFast', 'atFocus'].every((n) => { const ls = tl.filter((x) => x.includes(' ' + S[n].sid.slice(0, 8) + ' ')); return ls.length === 1 && / keep \S+ fast /.test(ls[0]); }), '日志：两个同一拍到点的，各自只记一行、都是 keep（收拾 A 的过程里不会再进来收拾 B，B 也不会被记成删）', tl.join(' | '));
+  ok(seen4c.some((x) => /^自动收工：留了 2 个，删了 0 个（「.+」「.+」）$/.test(x)), '界面会收到一条提示：「自动收工：留了 2 个，删了 0 个（…）」', JSON.stringify(seen4c));
+  // 只读预览：只记「会收」，什么都不动（拿真实会话预览时靠它不误关）。同一份假主目录，另起一份只读服务，把 fyi 的线调成 1 分钟
+  const logD = path.join(ROOT, 'server-dry.out'); const outD = fs.openSync(logD, 'w');
+  const srvD = spawn(NODE, [SERVER], { env: { ...env, CCBOARD_PORT: String(PORT + 100), CCBOARD_READONLY: '1', CCBOARD_TIDY_FYI_MS: '60000' }, stdio: ['ignore', outD, outD] }); kids.push(srvD.pid);
+  await sleep(4500); const dlog = fs.readFileSync(logD, 'utf8'); try { process.kill(srvD.pid, 'SIGTERM'); } catch {}     // 它要是自己退出了，日志会写在失败信息里
+  const arc4 = await get('/api/archive'); st = await get('/api/state');
+  ok(new RegExp('tidy \\S+ dry ' + S.atFyiNew.sid.slice(0, 8) + ' fyi ').test(dlog) && !/tidy \S+ (keep|drop) /.test(dlog) && by(st, 'atFyiNew') && !arc4.items.some((x) => x.sid === S.atFyiNew.sid) && (() => { try { process.kill(S.atFyiNew.pid, 0); return true; } catch { return false; } })(), 'tidy: 只读预览：日志里写「dry … 会收」，但没归档、没停进程', dlog.split('\n').filter((x) => x.startsWith('tidy')).join(' | ') + ' ‖ 预览服务日志末尾：' + dlog.slice(-500));
 
   console.log('\n[5] 做到一半进程没了 → 留一张卡；空闲时退出的不算');
   process.kill(S.gone.pid, 'SIGTERM'); process.kill(S.goneIdle.pid, 'SIGTERM');
@@ -358,6 +408,7 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 90000);
   console.log('\n[8] config.json 写坏了：照常起来、记一行日志、用默认值（空项目表；自动点信任和 Codex 都关着）');
   process.kill(srv.pid, 'SIGTERM');
   for (let i = 0; i < 25; i++) { await sleep(200); try { await fetch('http://127.0.0.1:' + PORT + '/health'); } catch { break; } }
+  mk('atOff', 'idle', aged(3 * H, [R.peer('khalil-f2', '验收过了'), R.tool('Edit'), R.result(), R.final('已合入。')]), { statusAgo: 3 * H, claude: true });      // fyi 超线 3 小时：autoTidy 默认关，就一动不动
   fs.writeFileSync(path.join(DATA, 'config.json'), '{ 写坏了');
   const log2File = path.join(ROOT, 'server2.out'); const out2 = fs.openSync(log2File, 'w');
   const srv2 = spawn(NODE, [SERVER], { env, stdio: ['ignore', out2, out2] }); kids.push(srv2.pid);
@@ -375,6 +426,8 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 90000);
   await sleep(6000); st = await get('/api/state');
   const pend8 = (st.pending || []).find((x) => x.name === n1.body.name);
   ok(trustNow() === null && pend8 && pend8.dialog && pend8.dialog.options[1] === 'Yes, I trust this folder', 'autoTrust 关着：信任框留在「启动中」卡片上给他选', JSON.stringify(pend8 && pend8.dialog));
+  const arc8 = await get('/api/archive');
+  ok(by(st, 'atOff') && !arc8.items.some((x) => x.sid === S.atOff.sid) && !fs.readFileSync(log2File, 'utf8').split('\n').some((x) => x.startsWith('tidy ')), 'autoTidy 默认关：超线 3 小时的 fyi 也一动不动，日志里没有 tidy', JSON.stringify([!!by(st, 'atOff'), arc8.items.length]));
 } catch (e) { if (e.message !== 'ui-fixture-done') throw e; } finally {
   try { if (TMUX_BIN) spawnSync(TMUX_BIN, ['-L', 'ccboard', 'kill-server'], { env, stdio: 'ignore' }); } catch {}      // 只关这次测试自己那个 tmux（它在自己的临时目录里）
   if (ticker) clearInterval(ticker); clearInterval(hintTick);

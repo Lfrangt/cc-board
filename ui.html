@@ -4,6 +4,7 @@
  [OUTPUT]: 提供总控台的全部界面：封面 / 墙两个视图、卡片、回话框、新任务、归档、干净的对话；window.ccbNew / ccbBlank 给原生菜单调用
  [POS]: 单文件界面，没有构建步骤。一个会话算什么状态只在 view() 一处判断，排位、左上角的状态标志、顶栏计数、底下的点和 Dock 角标都从它来；
         「为什么停了」由服务端的 alert 给，「交付了什么、要不要你回」由服务端的 digest 给；这里只负责显示，记「先不管」（ccb_ack）和「审完了 / 先放着」（ccb_done）。看一眼、点开都不改状态。
+        ccb_done 经 syncDone() 告诉服务的 /api/processed（点的时候、撤销的时候、页面第一次轮询成功之后全发一遍）：服务端的自动收工只认他明确点过的「审完了」。
         正文里的本机路径（file://、~/…、/Users/…、反引号里的路径）都变成可点的链接，点了交给服务的 /api/open。
         放大看一张卡：⌘O（zoomTarget() 定哪一张）、双击卡片封面、右上角 ⤢，都走 zoomCard() → openDetail()。卡片右上角「归档」由服务定删还是留。
         回话框上的预判只读服务端的 suggest 字段（服务从终端屏幕读来的灰字建议和「下一步 1/2/3」）：灰字 Tab 收下，三条点一下或按数字键，都只是填进输入框当草稿，不自己发。
@@ -424,7 +425,8 @@ const RULES = [
   [/^(交付|上一次交付) · (.+?)( · 后台任务还在跑)?$/, (m, a, b, c) => EN[a] + ' · ' + b + (c ? ' · background task still running' : '')],
   [/^这一轮还没有交付，已经做了 (\d+) 步$/, 'No delivery in this turn yet · $1 steps so far'],
   [/^你 · (.+)$/, 'You · $1'], [/^默认（(.+)）$/, 'Default ($1)'], [/^归档 (\d+)$/, 'Archive $1'],
-  [/^已归档「(.*)」：(.*)，能接回来$/, 'Archived “$1”: $2 — can be resumed'], [/^删了「(.*)」：(.*)（对话在暂存处放 30 天）$/, 'Deleted “$1”: $2 (transcript kept 30 days)'],
+  [/^自动收工：留了 (\d+) 个，删了 (\d+) 个（(.*)）$/, 'Auto-tidied: kept $1, deleted $2 ($3)'],
+  [/^已归档「(.*)」：(.*)，能接回来$/, 'Archived “$1”: $2 — can be resumed'],[/^删了「(.*)」：(.*)（对话在暂存处放 30 天）$/, 'Deleted “$1”: $2 (transcript kept 30 days)'],
   [/^点「归档」：没留下东西的直接删（对话在暂存处放 (\d+) 天），其余停掉会话、对话留着，能恢复。$/, 'Archive: sessions that left nothing behind are deleted (transcript kept $1 days); the rest are stopped and kept, and can be restored.'],
   [/^自动删掉的（没留下东西；对话在暂存处放 (\d+) 天）$/, 'Deleted automatically (left nothing behind; transcript kept $1 days)'],
   [/^已归档「(.*)」$/, 'Archived “$1”'], [/^已删除「(.*)」$/, 'Deleted “$1”'], [/^归档「(.*)」？$/, 'Archive “$1”?'], [/^删除「(.*)」？$/, 'Delete “$1”?'], [/^恢复「(.*)」$/, 'Restore “$1”'],
@@ -714,13 +716,15 @@ function pickChip(sid, n) {                   // 第 1 条：终端里按 1 和�
   return fillDraft(sid, n === 1 && sg.ghost ? sg.ghost : o.label);
 }
 function goTerminal(s) { api('/api/focus', { sid: s.sid }).then((r) => { if (!r.ok) toast(r.error); }); }
+// 自动收工只认你明确点过「审完了」的：告诉服务哪些会话的哪一次交付你处理过（map 新增 / 更新，clear 撤销）。服务只存内存，所以页面每次载入把 ccb_done 全发一遍（只增不删，几个页面同时开着也不会互相清掉）。失败不要紧，服务回头靠安静时长兜底
+function syncDone(map, clear) { api('/api/processed', { map: map || {}, clear: clear || [] }).catch(() => {}); }
 function markDone(s) {                          // 你点「审完了 / 先放着」才算处理过；可以撤销
   if (!s || !s.resultAt) return; const prev = done[s.sid];
-  done[s.sid] = s.resultAt; store('ccb_done', done);
+  done[s.sid] = s.resultAt; store('ccb_done', done); syncDone({ [s.sid]: s.resultAt });
   if (mode === 'flow' && cur === s.sid) pickNext = s.sid;   // 顶上下一张要你处理的
   paint(last);
   toast('已处理「' + cut(s.title, 16) + '」', { action: '撤销', ms: 6000, onAction: () => {
-    if (prev) done[s.sid] = prev; else delete done[s.sid]; store('ccb_done', done);
+    if (prev) done[s.sid] = prev; else delete done[s.sid]; store('ccb_done', done); if (prev) syncDone({ [s.sid]: prev }); else syncDone(null, [s.sid]);
     if (mode === 'flow' && cards.has(s.sid)) { cur = s.sid; curAt = navAt = Date.now(); } paint(last); } });
 }
 function flash(sid, kind, text) {
@@ -1040,10 +1044,10 @@ function paint(st) {
   for (const n of st.notices || []) toast(n.text);
   first = false;
 }
-let pollT, polling = false;
+let pollT, polling = false, synced = false;
 async function poll() {
   if (polling) return; polling = true; clearTimeout(pollT);
-  try { paint(await api('/api/state' + (document.hasFocus() && !document.hidden ? '?f=1' : ''))); } catch (e) { $('#hint').textContent = T('总控台服务没应答'); }
+  try { paint(await api('/api/state' + (document.hasFocus() && !document.hidden ? '?f=1' : ''))); if (!synced) { synced = true; syncDone(done); } } catch (e) { $('#hint').textContent = T('总控台服务没应答'); }
   polling = false; pollT = setTimeout(poll, document.hidden ? 4000 : 1500);
 }
 const refresh = () => { clearTimeout(pollT); pollT = setTimeout(poll, 60); };

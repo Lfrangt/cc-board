@@ -10,7 +10,9 @@
  *        digest() 从每次交付里取一句结论和要你做的事，分「待跟进 / 待审阅」；它自己写了【待跟进】/【待审阅】/【在跑】那一行就以它为准。
  *        换了端口、数据目录或主目录就自认是试验场：不碰 Ghostty、不发系统通知。
  *        suggestLoop 每 2.5 秒读一遍空闲 tmux 会话的屏幕（capture-pane -e，只读），交给 suggest.mjs 取灰字建议和「下一步 1/2/3」，挂在 /api/state 的 suggest 字段上；它们不进对话记录。
- *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex 两个开关默认关。
+ *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex、autoTidy 三个开关默认关。
+ *        autoTidy 打开时，watchTidy() 把「已经交付、歇着、没人在等、没人再理」的会话交给 archiveSession 自动收工（tidyDue 定哪些，tidyVerdict 定删还是留）；
+ *        「你点过审完了」由界面经 /api/processed 告诉它（map 新增 / clear 撤销），只存在内存里，界面每次载入时重发一遍。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 // 只读 ~/.claude/sessions（会话登记）和 ~/.claude/projects（对话记录），不读终端画面（弹着选择框的会话除外）。
@@ -46,21 +48,25 @@ const STALL_MS = Number(process.env.CCBOARD_STALL_MS) || 20 * 60000;   // 显示
 const REAL_HOME = (() => { try { return os.userInfo().homedir; } catch { return HOME; } })();
 const SANDBOX = HOME !== REAL_HOME || PORT !== 4747 || path.resolve(DATA) !== path.join(REAL_HOME, 'Library/Application Support/cc-board');
 const READONLY = process.env.CCBOARD_READONLY === '1';                 // 只读：所有会改东西的接口一律拒绝（拿真实会话预览时用）
+// 自动收工的三条线（autoTidy 打开时）。Khalil 11/13 16:10：「有些 Tab 我打完就懒得关……自动分析当前窗口结束了没」。
+const TIDY_FAST_MS = Number(process.env.CCBOARD_TIDY_FAST_MS) || 10 * 60000;          // 你点了「审完了」之后，它再安静这么久
+const TIDY_FYI_MS = Number(process.env.CCBOARD_TIDY_FYI_MS) || 48 * 3600000;          // 无需处理的交付（回给别的窗口的、过程汇报），没人再理它这么久。线定得最长：长期项目的负责窗口大多在回别的窗口，交付总是 fyi，睡一觉不该被收（11/13 拿真实会话预览：8 个 fyi 全是这类）
+const TIDY_REVIEW_MS = Number(process.env.CCBOARD_TIDY_REVIEW_MS) || 24 * 3600000;    // 待审阅的交付，一直没点「审完了」这么久
 
 // ───────────── config.json：项目表、自动点信任、Codex ─────────────
 // 数据目录里一个文件，启动时读一次（./build.sh update 会重启服务）。没有或读不了就用默认值，记一行日志，不崩。
-// 键：projects [{key, name, dir, word}]、neutral、roots（交给 projects.mjs 的 useRules）；autoTrust、codex（true / false，默认都是 false）
+// 键：projects [{key, name, dir, word}]、neutral、roots（交给 projects.mjs 的 useRules）；autoTrust、codex、autoTidy（true / false，默认都是 false）
 const CONFIG_FILE = path.join(DATA, 'config.json');
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false };
+  const def = { autoTrust: false, codex: false, autoTidy: false };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
     if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('不是一个 JSON 对象');
-    for (const k of ['autoTrust', 'codex']) if (k in c && typeof c[k] !== 'boolean') throw new Error(k + ' 要是 true 或 false');
+    for (const k of ['autoTrust', 'codex', 'autoTidy']) if (k in c && typeof c[k] !== 'boolean') throw new Error(k + ' 要是 true 或 false');
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}`);
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true };
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}`);
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true };
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -393,6 +399,7 @@ let archive = { items: {} };
 try { const a = JSON.parse(fs.readFileSync(ARCHIVE_FILE, 'utf8')); if (a && a.items) archive = a; } catch {}
 function saveArchive() { const tmp = ARCHIVE_FILE + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(archive, null, 1)); fs.renameSync(tmp, ARCHIVE_FILE); }
 const stopTimers = new Map();
+const processed = new Map();   // 你点过「审完了」的：sid → { at: 那一次交付的时间, seenAt: 服务第一次知道的时间 }。界面发来，只在内存里；不在墙上的会话由 watchTidy 清掉
 
 const CODEX_HOME = path.join(HOME, '.codex');
 const AGENTS_FILE = path.join(DATA, 'agents.json');   // 总控台起的 Codex 会话：tmux 名 → {cwd, at, prompt, sid, rollout}
@@ -638,6 +645,7 @@ function scanSessions() {
   allSessions = out; otherCount = others;
   sessions = out.filter((x) => !archive.items[x.sid]);
   watchAlerts();
+  watchTidy();
 }
 
 function askView(ask) {
@@ -985,16 +993,64 @@ function tidyNote(s, st) {
   const dg = s.digest || {};
   return { project: s.project ? s.project.name : null, head: dg.head || null, ask: dg.need === 'reply' ? dg.ask || null : null, roots, human: st.nHuman, tools: st.nTools, edits: st.nEdits };
 }
-function archiveSession(sid, force) {
+function archiveSession(sid, force, auto) {      // auto = 自动收工的理由（字符串）；手点的不带
   const s = allSessions.find((x) => x.sid === sid);
   if (!s) return { ok: false, error: '这个会话已经不在了' };
   if (archive.items[sid]) return { ok: true, grace: GRACE };
   if (s.status === 'busy' && !force) return { ok: false, needConfirm: true, error: '它还在做事，归档会打断它。' };
   const tr = tracks.get(sid) || codexTracks.get(sid), st = tr ? tr.st : newState(), v = tidyVerdict(s, st);
+  const why = auto ? auto + '，' + v.why : v.why;
   archive.items[sid] = { sid, provider: s.provider || 'claude', title: s.title, cwd: s.cwd, file: tr ? tr.file : null, prompt: s.prompt, resultAt: s.resultAt,
-    archivedAt: Date.now(), state: 'archiving', stopAt: Date.now() + GRACE, note: tidyNote(s, st), why: v.why, ...(v.keep ? {} : { drop: true }) };
+    archivedAt: Date.now(), state: 'archiving', stopAt: Date.now() + GRACE, note: tidyNote(s, st), why, ...(auto ? { auto: true } : {}), ...(v.keep ? {} : { drop: true }) };
+  processed.delete(sid);
   saveArchive(); scheduleStop(sid); scanSessions();
-  return { ok: true, grace: GRACE, keep: v.keep, why: v.why };
+  return { ok: true, grace: GRACE, keep: v.keep, why };
+}
+
+// ── 自动收工：这个窗口结束了没？（Khalil 11/13 16:10：「有些 Tab 我打完我就懒得关……自动分析当前窗口结束了没，然后你关掉」）──
+// 「结束了」= 这一轮已经交付、现在歇着、没有人在等它、也没有人再理它。拿不准就不收：多留一个标签的代价是他现状，误关一个还在等他的窗口才是事故。
+// 三条线（谁来收拾 → archiveSession；删还是留 → tidyVerdict，和手点「归档」同一套）：
+//   fast   待审阅，他点过「审完了」，之后安静 TIDY_FAST_MS（他明说看完了）
+//   fyi    无需处理的交付（回给别的窗口的、过程汇报），没人再理它 TIDY_FYI_MS
+//   review 待审阅却一直没点「审完了」，TIDY_REVIEW_MS（他显然丢开了；归档笔记里留着那句结论）
+// 绝不收：在跑 / 等你选 / 停住了（有 alert）/ 待跟进 / 它说后台还在跑 / 这一轮没收尾 / 还没交付过。
+const tidySpan = (ms) => (ms < 90000 ? '几十秒' : ms < 5400000 ? Math.round(ms / 60000) + ' 分钟' : Math.round(ms / 3600000) + ' 小时');
+function tidyDue(s, now) {
+  if (s.status !== 'idle' || s.ask || s.alert || !s.done || !s.result || !s.digest) return null;
+  const need = s.digest.need;                                                                // 下面三条线各认自己的 need：reply（待跟进）、bg（后台还在跑）哪条都不沾
+  const t0 = Date.parse(s.resultAt || ''); if (!t0) return null;
+  const last = Math.max(t0, Date.parse(s.lastAt || '') || 0, s.statusAt || 0);              // 交付之后它又有过什么动静，从那时算起
+  const quiet = now - last, p = processed.get(s.sid);
+  if (need === 'review' && p && p.at === String(s.resultAt) && now - Math.max(last, p.seenAt) >= TIDY_FAST_MS) return { line: 'fast', why: '你点过「审完了」' };
+  if (need === 'fyi' && quiet >= TIDY_FYI_MS) return { line: 'fyi', why: '无需处理的交付，' + tidySpan(quiet) + '没人理它' };
+  if (need === 'review' && quiet >= TIDY_REVIEW_MS) return { line: 'review', why: '待审阅的交付，' + tidySpan(quiet) + '没点「审完了」' };
+  return null;
+}
+let tidyBusy = false;
+const tidyLogged = new Set();   // 只读预览时每个会话只记一次「会收」，别每 1.2 秒刷一行
+function watchTidy() {
+  const live = new Set(sessions.map((x) => x.sid));
+  for (const k of processed.keys()) if (!live.has(k)) processed.delete(k);     // 已经不在墙上的会话，它的「审完了」不用再记
+  if (!CONFIG.autoTidy || tidyBusy) return;              // archiveSession 里会再扫一遍：tidyBusy 挡住那一层
+  const now = Date.now();
+  if (now - uiFocusAt < 6000) return;                    // 他正看着总控台：卡片不在他眼前消失，等他离开再收
+  const due = [];
+  for (const s of sessions) { const d = tidyDue(s, now); if (d) due.push({ s, d }); }
+  if (!due.length) return;
+  tidyBusy = true;
+  try {
+    const kept = [], dropped = [];
+    for (const { s, d } of due) {
+      const tag = `${s.sid.slice(0, 8)} ${d.line}`;
+      if (READONLY) { const k = s.sid + '@' + s.resultAt; if (!tidyLogged.has(k)) { tidyLogged.add(k); console.log(`tidy ${new Date().toISOString()} dry ${tag} ${d.why}`); } continue; }
+      const r = archiveSession(s.sid, false, d.why);
+      console.log(`tidy ${new Date().toISOString()} ${r.ok ? (r.keep ? 'keep' : 'drop') : 'fail'} ${tag} ${r.ok ? r.why : r.error}`);
+      if (r.ok) (r.keep ? kept : dropped).push(s.title);
+    }
+    const all = kept.concat(dropped);
+    if (all.length) notices.push({ id: crypto.randomBytes(4).toString('hex'),
+      text: '自动收工：留了 ' + kept.length + ' 个，删了 ' + dropped.length + ' 个（' + all.slice(0, 3).map((t) => '「' + String(t).replace(/\s+/g, ' ').slice(0, 14) + '」').join('') + (all.length > 3 ? ' 等' : '') + '）' });
+  } finally { tidyBusy = false; }
 }
 
 async function unarchive(sid) {
@@ -1312,7 +1368,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && u.pathname === '/api/archive') {
       const items = Object.values(archive.items).sort((a, b) => b.archivedAt - a.archivedAt)
-        .map((x) => ({ sid: x.sid, title: x.title, cwd: x.cwd, prompt: x.prompt, resultAt: x.resultAt, archivedAt: x.archivedAt, state: x.state, note: x.note || null, why: x.why || null }));
+        .map((x) => ({ sid: x.sid, title: x.title, cwd: x.cwd, prompt: x.prompt, resultAt: x.resultAt, archivedAt: x.archivedAt, state: x.state, note: x.note || null, why: x.why || null, auto: x.auto === true }));
       const dropped = (archive.dropped || []).filter((x) => Date.now() - x.at < KEEP_DELETED_DAYS * 86400000);
       return reply(res, 200, { items, dropped, keepDays: KEEP_DELETED_DAYS });
     }
@@ -1331,6 +1387,17 @@ const server = http.createServer(async (req, res) => {
       const it = archive.items[String(body.sid || '')];
       if (it && it.lost) { delete it.lost; saveArchive(); }
       return reply(res, 200, { ok: true });
+    }
+    if (u.pathname === '/api/processed') {          // 界面把「审完了」告诉服务：map 新增 / 更新，clear 撤销。只增不整份替换：几个页面同时开着，后开的空页面不会把别人的清掉
+      const okSid = (x) => typeof x === 'string' && /^[\w-]{8,64}$/.test(x);
+      const m = body.map && typeof body.map === 'object' && !Array.isArray(body.map) ? body.map : {};
+      for (const [sid, at] of Object.entries(m).slice(0, 2000)) {
+        if (!okSid(sid) || (typeof at !== 'string' && typeof at !== 'number')) continue;
+        const prev = processed.get(sid);
+        if (!prev || prev.at !== String(at)) processed.set(sid, { at: String(at), seenAt: Date.now() });
+      }
+      for (const sid of (Array.isArray(body.clear) ? body.clear : []).slice(0, 2000)) if (okSid(sid)) processed.delete(sid);
+      return reply(res, 200, { ok: true, n: processed.size });
     }
     if (u.pathname === '/api/send') {
       return reply(res, 200, await sendTo(String(body.sid || ''), String(body.text || '').trim(), body.files));

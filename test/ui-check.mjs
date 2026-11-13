@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 .tmp/ui-fixture.json（state.test.mjs --ui 写的试验实例地址）；依赖 ./browser.mjs 的静音无头 Chromium
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；截图放 .tmp/shots（墙 / 封面、深色 / 浅色、英文）
- * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、正文里的本机路径能点、放大看（⌘O / 双击）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」、输入框上的预判（灰字 Tab 收下、1/2/3 填进输入框、数字键、封面视图）。
+ * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、正文里的本机路径能点、放大看（⌘O / 双击）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」、输入框上的预判（灰字 Tab 收下、1/2/3 填进输入框、数字键、封面视图）、点「审完了」/ 撤销 / 页面载入时把记录告诉服务（自动收工靠它）。
  *        只读页面 + 点「先不管」和筛选，不往任何会话里发话。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -119,10 +119,18 @@ try {
   ok(/^待跟进 · /.test(s.cards.peerAsk.meta), 'peerAsk：别的窗口开的头、但要你本人决定 → 还是「待跟进」', s.cards.peerAsk.meta);
   const lk = await page.evaluate((sid) => { const a = document.querySelector('.card[data-sid="' + sid + '"] .body a[href^="http://127.0.0.1:4791/?k=abc"]'); return a ? a.target + '|' + a.textContent : ''; }, FX.sids.askCond);
   ok(lk === '_blank|http://127.0.0.1:4791/?k=abc', '正文里直接贴的网址变成能点的链接（新窗口打开 = 原生外壳交给默认浏览器），后面的中文句号不算进去', lk);
+  const procReq = []; const onProc = (r) => { if (r.method() === 'POST' && r.url().includes('/api/processed')) { try { procReq.push(JSON.parse(r.postData() || '{}')); } catch (e) {} } }; page.on('request', onProc);   // 自动收工靠界面把「审完了」告诉服务
   await page.click(`.card[data-sid="${FX.sids.done}"] [data-act="done"]`); await sleep(400); s = await cardsOf(page);
   ok(/^处理过 · /.test(s.cards.done.meta) && /s-handled/.test(s.cards.done.cls) && s.segs.includes('待审阅' + (nReview0 - 1)), '点「审完了」→「处理过」，顶栏的待审阅少一个', s.cards.done.meta + ' / ' + s.segs.join('|'));
+  ok(procReq.length === 1 && typeof procReq[0].map[FX.sids.done] === 'string' && procReq[0].clear.length === 0, '点「审完了」→ 同时告诉服务（POST /api/processed，带这一次交付的时间）', JSON.stringify(procReq));
   await page.click('#toast button'); await sleep(400); s = await cardsOf(page);
   ok(/^待审阅 · /.test(s.cards.done.meta) && s.segs.includes('待审阅' + nReview0), '提示条上点「撤销」→ 回到「待审阅」', s.cards.done.meta + ' / ' + s.segs.join('|'));
+  page.off('request', onProc);
+  ok(procReq.length === 2 && procReq[1].clear.length === 1 && procReq[1].clear[0] === FX.sids.done && Object.keys(procReq[1].map).length === 0, '点「撤销」→ 也告诉服务（clear 里是这个会话），自动收工不再认它', JSON.stringify(procReq[1]));
+  const ctxS = await browser.newContext({ viewport: { width: 1200, height: 800 } }); const pgS = await ctxS.newPage(); const loadSync = [];      // 页面一载入：把已经点过的全发一遍（服务重启后靠它恢复）
+  pgS.on('request', (r) => { if (r.method() === 'POST' && r.url().includes('/api/processed')) loadSync.push(r.postData()); });
+  await pgS.goto(FX.url + '&lang=zh'); await pgS.waitForSelector('.card'); await sleep(2600); await ctxS.close();
+  ok(loadSync.length === 1 && /"map":\{/.test(loadSync[0]), '页面载入、第一次轮询成功之后：把已点过的「审完了」发给服务，只发这一次', JSON.stringify(loadSync));
   // 「先不管」
   await page.click(`.card[data-sid="${FX.sids.limit}"] [data-act="ack"]`); await sleep(400); s = await cardsOf(page);
   ok(!/alert/.test(s.cards.limit.cls) && s.cards.limit.meta === '停住了 · 额度用完' && !s.cards.limit.pill && s.segs.includes('停住了' + (nStop - 1)), '点「先不管」：不再计数、药丸变回灰字，原因还写着', s.cards.limit.cls + ' / ' + s.segs.join('|'));

@@ -44,7 +44,7 @@ const MUTANTS = {
   'codex-new-off':       ["  if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };\n  const provider", "  const provider"],
   'codex-listed-off':    ["...(CONFIG.codex ? { codex:", "...(true ? { codex:"],
   'codex-pane-pending':  ["    if (agents[pane.name] && !CONFIG.codex) continue;", ""],
-  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true };", "    return def;"],
+  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true };", "    return def;"],
   'bad-config-crashes':  ["  } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }", "  } catch (e) { throw e; }"],
   'trust-any-dialog':    ["    const i = d.options.findIndex((o) => TRUST_OPT.test(o));", "    const i = d.options.length - 1;"],
   'no-flagged':          ["  const flagged = m.stop_reason === 'refusal' || /safeguards flagged/i.test(text);", "  const flagged = false;"],
@@ -54,6 +54,21 @@ const MUTANTS = {
   'suggest-loop-off':    ["  fastLoop(); slowLoop(); suggestLoop();", "  fastLoop(); slowLoop();"],
   'suggest-plain-screen': ["['capture-pane', '-p', '-e', '-t', s.tmux]", "['capture-pane', '-p', '-t', s.tmux]"],
   'suggest-stale-kept':  ["  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);", ""],
+  // 自动收工（autoTidy）：每一道守卫、每一条线、两个开关，各有一个改坏版
+  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false };", "  const def = { autoTrust: false, codex: false, autoTidy: true };"],
+  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false };"],
+  'auto-ignores-focus':  ["  if (now - uiFocusAt < 6000) return;", ""],
+  'auto-acts-in-readonly': ["      if (READONLY) { const k = s.sid + '@' + s.resultAt;", "      if (false) { const k = s.sid + '@' + s.resultAt;"],
+  'auto-stale-mark':     ["if (need === 'review' && p && p.at === String(s.resultAt) &&", "if (need === 'review' && p && true &&"],
+  'auto-fyi-no-wait':    ["if (need === 'fyi' && quiet >= TIDY_FYI_MS)", "if (need === 'fyi' && quiet >= 0)"],
+  'auto-review-short':   ["if (need === 'review' && quiet >= TIDY_REVIEW_MS)", "if (need === 'review' && quiet >= TIDY_FYI_MS)"],
+  'auto-takes-reply':    ["if (need === 'review' && quiet >= TIDY_REVIEW_MS)", "if (quiet >= TIDY_REVIEW_MS)"],
+  'auto-ignores-alert':  ["if (s.status !== 'idle' || s.ask || s.alert || !s.done", "if (s.status !== 'idle' || s.ask || !s.done"],
+  'auto-takes-shell':    ["if (s.status !== 'idle' || s.ask || s.alert || !s.done", "if (s.ask || s.alert || !s.done"],
+  'auto-reentrant':      ["  if (!CONFIG.autoTidy || tidyBusy) return;", "  if (!CONFIG.autoTidy) return;"],
+  'auto-processed-replaces': ["      const okSid = (x) => typeof x === 'string'", "      processed.clear();\n      const okSid = (x) => typeof x === 'string'"],
+  'auto-clear-ignored':  ["if (okSid(sid)) processed.delete(sid);", "if (okSid(sid)) void 0;"],
+  'auto-no-prune':       ["  for (const k of processed.keys()) if (!live.has(k)) processed.delete(k);", ""],
 };
 for (const [name, [a]] of Object.entries(MUTANTS)) { const n = src.split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 server.mjs 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边

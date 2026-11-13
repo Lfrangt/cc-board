@@ -15,7 +15,7 @@ docs/ - README 用的图和视频
 server.mjs - 服务。读会话登记和对话记录，算出每个会话的状态，提供 /api。
 projects.mjs - 分组规则。按会话动过的文件夹和标题认出它属于哪个项目；项目表由 server.mjs 从 config.json 读出来交给 useRules()。server.mjs 引用它，所以上线时四个文件一起拷（server.mjs、ui.html、projects.mjs、suggest.mjs）。
 suggest.mjs - 输入框上的预判的解析器（纯函数 `parseSuggest()`）。从 tmux 屏幕文本里取灰字建议和「下一步 1/2/3」。server.mjs 引用它，见「输入框上的预判」一节。
-<数据目录>/config.json - 本机设置（不在仓库里）：项目表、哪些文件夹算证据、自动点信任、Codex。见下面「config.json」一节；测试用 test/fixture-config.json。
+<数据目录>/config.json - 本机设置（不在仓库里）：项目表、哪些文件夹算证据、自动点信任、Codex、自动收工。见下面「config.json」一节；测试用 test/fixture-config.json。
 ui.html - 界面。轮询 /api/state，画卡片。
 build.sh - `./build.sh update` 换界面和服务（server.mjs、ui.html、projects.mjs、suggest.mjs）；不带参数是重新编译安装。
 README.md、CONTRIBUTING.md、LICENSE - 对外的英文文档和 MIT 许可。README 里写的每一句都要有代码依据。
@@ -129,6 +129,29 @@ Khalil 11/13 16:10：「原生 Claude Code 里有那个 Tab，它会预判我们
   - 只给空闲、能回话的卡；刚回车发出去的 8 秒内不给；封面里旁边的卡（`.side`）和输入框一起淡掉。
 - 没做的：开在 Ghostty 标签里的会话（不是 tmux）读不到屏幕，没有预判；Codex 没有。
 
+## 自动收工（11/13 khalil-42）
+
+Khalil 11/13 16:10 的原话：「有一些 Tab 我打完我就懒得关……能不能在总控台里加入这个功能：自动去分析当前窗口结束了没，OK 你关掉。关掉的话应该带有记忆性，你要去判断是可以删除，还是要保留记忆」。
+
+- 开关：config.json 的 `autoTidy`（仓库默认 `false`，作者本机打开）。关着时 `watchTidy()` 什么都不做。
+- 「删还是留」不新写：`watchTidy()` 调 `archiveSession(sid, false, 理由)`，和手点「归档」同一套（`tidyVerdict` 定删留、`tidyNote` 记笔记、停进程、关 Ghostty 标签、先等 8 秒）。归档记录多一个 `auto: true`，`why` 前面加收工的理由（如「你点过「审完了」，改过 3 次文件」）。
+- 「结束了没」由 `tidyDue()` 判断。先要满足：状态 idle、这一轮已收尾且有交付（`done`）、没有 `alert`、没有 `ask`。再看三条线：
+
+| 线 | 条件 | 常量（环境变量覆盖） |
+|---|---|---|
+| fast | 待审阅，他点过「审完了」，之后它再安静 10 分钟 | `TIDY_FAST_MS`（`CCBOARD_TIDY_FAST_MS`） |
+| fyi | 无需处理的交付（回给别的窗口的、过程汇报），48 小时没人理 | `TIDY_FYI_MS` |
+| review | 待审阅，一直没点「审完了」，24 小时 | `TIDY_REVIEW_MS` |
+
+  「安静」从交付时间、最后一条对话记录、登记里的状态时间三者里最晚的那个算起。
+- 绝不收：在跑、等你选、停住了（有 alert）、待跟进（含他点了「先放着」的）、它说后台还在跑、这一轮没收尾、还没交付过。多留一个标签是他现在的状态；误关一个还在等他的窗口才是事故，所以拿不准就不收。
+- 他正看着总控台时不收（`uiFocusAt` 6 秒内）：卡片不在他眼前消失，等他离开再收。收了以后界面弹一条「自动收工：留了 N 个，删了 M 个（…）」，日志写 `tidy <时间> keep|drop|fail <会话 id 前 8 位> <线> <理由>`。
+- 「审完了」是界面的 `ccb_done`（localStorage）。界面用 `syncDone()` 告诉 `POST /api/processed`：点的时候发 `map`（新增），撤销的时候发 `clear`，页面第一次轮询成功之后把 `ccb_done` 全发一遍。服务只增不整份替换：原生窗口和浏览器页同时开着，后开的空页面不会清掉别人的标记。服务只存内存（`processed`），每次扫描清掉已经不在墙上的会话。服务重启而页面没重载时，fast 线暂时不认人，fyi 和 review 两条线不受影响。服务只认「那一次交付」的标记：记的时间和会话现在的 `resultAt` 对不上就不算。
+- 只读预览（`CCBOARD_READONLY=1`）只在日志里写 `tidy … dry …`，不归档、不停进程。上线前先这样预览一遍，看它会收哪几个。
+- fyi 线最长（48 小时）的原因：11/13 拿真实会话预览，墙上 21 个窗口里 8 个是 fyi，全是 FretFlow 的总设计师、总调度、界面线、识谱线、音色这类长期项目的负责窗口。它们大多在回别的窗口，交付总被归成 fyi。12 小时的线会让他睡一觉就收掉这些协调窗口。
+- 没做的：收之前不问；归档列表里还没有「自动」标记（`/api/archive` 已返回 `auto`）。没验过：长期不关的协调窗口被 fyi 线收掉以后，别的窗口发给它的消息收不到，要先从「归档」接回来。11/13 Ghostty 被误退出后接回的窗口，名字全变了（khalil-46 变成 khalil-6c），所以靠窗口名找人本来就不稳。
+- 11/13 16:3x 预览结果：本机 21 个窗口，一个都不会收（刚接回来，都在 2 小时内动过）。这只证明没有误收；「该收的会收」靠测试。
+
 ## 提醒走三条路
 
 1. 卡片：右上角的药丸，排到最前面（只在「等你选」之后）。
@@ -175,6 +198,7 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 | `roots` | 哪些上级文件夹下面的一层算证据，相对主目录写（长的优先，如 `Projects/shared` 和 `Projects` 一起列）。iCloud 云盘根写 `com~apple~CloudDocs`，记成 `iCloud/<名>` | `["Projects", "Desktop"]`（主目录下） |
 | `autoTrust` | 总控台在主目录开的 Claude 会话，替他点「Yes, I trust this folder」 | `false` |
 | `codex` | Codex 会话：新任务里的「交给谁」、开 Codex 会话、读以前起的 Codex 会话和记录 | `false` |
+| `autoTidy` | 自动收工：已经交付、歇着、没人在等、没人再理的会话，自动「归档」（见上面「自动收工」） | `false` |
 
 - `codex` 关着时：服务的 `providers` 只报 Claude Code，界面不显示「交给谁」；`/api/new` 和恢复都拒绝 Codex；`agents.json` 里以前起的 Codex 会话不上墙、它们的窗格也不当成「启动中」。代码都留着，打开就和以前一样。
 - 迁移核对（11/13）：作者本机的 config.json 从迁移前代码里的项目表原样导出，自己的文件夹布局写在它的 `roots` 里，不进仓库。换代码前后拿最近 7 天的 30 份对话记录、15369 次工具调用对比：认出的文件夹和分组 0 处不同；只读预览 15 个活会话，分组也一个不差。
@@ -196,10 +220,10 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 ```bash
 node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；--mutants 跑 6 个改坏版
 node test/suggest.test.mjs               # 输入框预判的解析 28 项，不到 1 秒；--mutants 跑 8 个改坏版
-node test/state.test.mjs                 # 服务端 99 项，约 100 秒
-node test/mutants.mjs                    # 44 个改坏版，每个都必须让上面的测试变红，约 10 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/state.test.mjs                 # 服务端 113 项，约 200 秒
+node test/mutants.mjs                    # 58 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 116 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 119 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。
