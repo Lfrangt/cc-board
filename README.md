@@ -30,7 +30,7 @@ cc-board never runs an agent loop and never replaces your CLI.
 ## What you see
 
 - **Cover view** (default): the session that most needs you is front and sharp; running ones fade back. Reply, press Return, and the next delivery comes up. **Wall view**: everything at a glance, one column per project.
-- **Why it stopped**, written on the card: running (with how long), or stopped because the quota ran out, the login expired, the API errored, you interrupted it, it never finished, or its process exited. A session that is "running" but has been silent for 20 minutes says so. You also get a system notification and a Dock badge when you're not looking.
+- **Why it stopped**, written on the card: running (with how long), or stopped because the quota ran out, the login expired, the model's safeguards blocked the message, the API errored, you interrupted it, it never finished, or its process exited. A session that is "running" but has been silent for 20 minutes says so. You also get a system notification and a Dock badge when you're not looking.
 - **What it delivered**: a one-line conclusion and the single thing it wants from you. *Needs follow-up* (it wants a decision) is separate from *ready to review* (here is a result) and *no action needed*.
 - **Start and tidy up from the board**: new tasks (⌘N, or the "+ New task" in a project column), image and file attachments, zoom a card (⌘O or double-click), archive (empty sessions are deleted, the rest are kept with a note, undo for 8 seconds).
 - English and Chinese UI; it follows the system language, or add `?lang=en` to the URL.
@@ -39,7 +39,8 @@ cc-board never runs an agent loop and never replaces your CLI.
 |---|---|
 | Stopped · quota used up | assistant message flagged `isApiErrorMessage` with `error: rate_limit` |
 | Stopped · login expired | the same, `authentication_failed` |
-| Stopped · error | any other API error (context too long, blocked request) |
+| Stopped · blocked by safeguards | assistant message flagged `isApiErrorMessage` with `stop_reason: refusal`. The card also shows Claude Code's own advice: press Esc twice to edit your last message, or switch models with `/model` |
+| Stopped · error | any other API error (context too long, for example) |
 | Stopped · interrupted | `[Request interrupted by user]` in the middle of a turn |
 | Stopped · unfinished | idle, did work this turn, never wrote a closing message |
 | Running · N min quiet | busy, but no new transcript or subagent activity for 20 minutes |

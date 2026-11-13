@@ -44,7 +44,7 @@ try {
   for (const [n, v] of Object.entries(c)) console.log('   ' + n.padEnd(9) + v.meta.padEnd(22) + v.cls.replace('card ', ''));
   ok(/^运行中 · /.test(c.run.meta) && /s-busy/.test(c.run.cls) && !/alert/.test(c.run.cls), 'run：右上角「运行中 · 时长」', c.run.meta);
   ok(c.run.pill && c.run.anim === 'live', 'run：是药丸，前面那颗点在呼吸（动画 live）', 'pill=' + c.run.pill + ' anim=' + c.run.anim);
-  const want = { limit: '停住了 · 额度用完', auth: '停住了 · 登录过期', err: '停住了 · 报错', intr: '停住了 · 被打断', unfin: '停住了 · 没做完', gone: '停住了 · 进程退出' };
+  const want = { limit: '停住了 · 额度用完', auth: '停住了 · 登录过期', err: '停住了 · 报错', flag: '停住了 · 被安全检查拦了', intr: '停住了 · 被打断', unfin: '停住了 · 没做完', gone: '停住了 · 进程退出' };
   for (const [n, t] of Object.entries(want)) ok(c[n] && c[n].meta === t && /s-stopped/.test(c[n].cls) && /alert/.test(c[n].cls) && c[n].pill && c[n].mark === '"!"' && c[n].anim === 'none', `${n}：「${t}」，琥珀药丸带 !，不闪`, c[n] && (c[n].meta + ' / ' + c[n].cls + ' / mark=' + c[n].mark + ' anim=' + c[n].anim));
   ok(/^运行中 · \d+ 分钟没动静$/.test(c.stall.meta) && /s-busy/.test(c.stall.cls) && /alert/.test(c.stall.cls) && c.stall.mark === '"!"', 'stall：「运行中 · N 分钟没动静」，变成琥珀', c.stall.meta + ' / ' + c.stall.cls);
   ok(/^待审阅 · /.test(c.done.meta) && /s-review/.test(c.done.cls) && c.done.pill && c.done.mark === '"✓"' && c.done.head === '总结写好了。', 'done：交付了还没处理 → 青色药丸「✓ 待审阅 · 时间」，封面上一句结论', c.done.meta + ' / ' + c.done.cls + ' / ' + c.done.head);
@@ -52,9 +52,10 @@ try {
   ok(/^后台在跑 · /.test(c.bgOpen.meta) && !/alert|s-stopped/.test(c.bgOpen.cls), 'bgOpen：后台的活还在跑时，不说它「没做完就停了」', c.bgOpen.meta + ' / ' + c.bgOpen.cls);
   ok(/额度用完了/.test(c.limit.why) && /weekly limit/.test(c.limit.screen) && c.limit.btns.join() === '去终端看,先不管', 'limit：正文先说原因、带报错原文、有「去终端看 / 先不管」', c.limit.why + ' | ' + c.limit.btns.join());
   ok(c.intr.you.endsWith('重构播放器'), 'intr：你说的话没被打断标记顶掉', c.intr.you);
+  ok(c.flag.head === '被安全检查拦了，这一轮停在这里。' && /按两下 Esc/.test(c.flag.body) && /\/model/.test(c.flag.body) && /可能再被拦/.test(c.flag.body) && /safeguards flagged/.test(c.flag.screen) && c.flag.btns.join() === '去终端看,先不管', 'flag：封面写「被安全检查拦了」，正文不用点开就写着「按两下 Esc / 用 /model 换模型、可能再被拦」，带原文', c.flag.head + ' | ' + (c.flag.body || '').slice(0, 80));
   ok(c.gone.btns.join() === '接回来,看对话,知道了' && /进程退出了/.test(c.gone.why), 'gone：有「接回来 / 看对话 / 知道了」');
   const nStop = Object.values(c).filter((v) => /alert/.test(v.cls)).length, nBusy = Object.values(c).filter((v) => /s-busy|(^| )bg( |$)/.test(v.cls)).length;
-  ok(s.segs.includes('停住了' + nStop) && nStop === 8, '顶栏「停住了 8」', s.segs.join('|') + ' nStop=' + nStop);
+  ok(s.segs.includes('停住了' + nStop) && nStop === 9, '顶栏「停住了 9」', s.segs.join('|') + ' nStop=' + nStop);
   ok(s.segs.includes('运行中' + nBusy) && nBusy === 6, '顶栏「运行中 6」（4 个在做 + 2 个后台在跑）', s.segs.join('|') + ' nBusy=' + nBusy);
   const nTodo = nStop + Object.values(c).filter((v) => /s-review|s-reply/.test(v.cls)).length;
   ok(new RegExp('^\\(' + nTodo + '\\) ').test(s.title) && nTodo > nStop, '标题和 Dock 角标的数 = 待跟进 + 待审阅 + 停住了', s.title + ' nTodo=' + nTodo);
@@ -124,14 +125,14 @@ try {
   ok(/^待审阅 · /.test(s.cards.done.meta) && s.segs.includes('待审阅' + nReview0), '提示条上点「撤销」→ 回到「待审阅」', s.cards.done.meta + ' / ' + s.segs.join('|'));
   // 「先不管」
   await page.click(`.card[data-sid="${FX.sids.limit}"] [data-act="ack"]`); await sleep(400); s = await cardsOf(page);
-  ok(!/alert/.test(s.cards.limit.cls) && s.cards.limit.meta === '停住了 · 额度用完' && !s.cards.limit.pill && s.segs.includes('停住了7'), '点「先不管」：不再计数、药丸变回灰字，原因还写着', s.cards.limit.cls + ' / ' + s.segs.join('|'));
+  ok(!/alert/.test(s.cards.limit.cls) && s.cards.limit.meta === '停住了 · 额度用完' && !s.cards.limit.pill && s.segs.includes('停住了' + (nStop - 1)), '点「先不管」：不再计数、药丸变回灰字，原因还写着', s.cards.limit.cls + ' / ' + s.segs.join('|'));
   ok(s.cards.limit.btns.join() === '去终端看', '点过之后只剩「去终端看」');
   // 筛选「停住了」
   await page.click('#filters [data-f="stop"]'); await sleep(300); s = await cardsOf(page);
   const vis = Object.entries(s.cards).filter(([, v]) => !v.hidden).map(([n]) => n).sort().join();
-  ok(vis === 'auth,err,gone,intr,relimit,stall,unfin', '筛选「停住了」只剩要跟进的 7 张', vis);
+  ok(vis === 'auth,err,flag,gone,intr,relimit,stall,unfin', '筛选「停住了」只剩要跟进的 8 张', vis);
   const grf = await groupsOf();
-  ok(!grf.on && grf.cols.length === 0 && grf.loose.length === 7, '筛选后只剩一个项目有卡：回到平铺的格子，不留空列', JSON.stringify({ on: grf.on, cols: grf.cols.length, loose: grf.loose.length }));
+  ok(!grf.on && grf.cols.length === 0 && grf.loose.length === 8, '筛选后只剩一个项目有卡：回到平铺的格子，不留空列', JSON.stringify({ on: grf.on, cols: grf.cols.length, loose: grf.loose.length }));
   await page.screenshot({ path: path.join(OUT, 'wall-dark-filter.png') });
   ok(errs.length === 0, '页面没有报错', errs.join(' | ')); await ctx.close();
 
@@ -191,8 +192,8 @@ try {
   console.log('\n[墙 · 英文] 顶栏：' + s.segs.join(' | '));
   for (const [n, v] of Object.entries(s.cards)) console.log('   ' + n.padEnd(9) + v.meta);
   ok(/^Background task · /.test(s.cards.bg.meta), '英文：后台在跑也是英文', s.cards.bg.meta);
-  ok(/^Running · /.test(s.cards.run.meta) && s.cards.limit.meta === 'Stopped · out of quota' && s.cards.gone.meta === 'Stopped · process exited' && /^Running · no activity for \d+ min$/.test(s.cards.stall.meta), '英文：右上角的标志是英文', s.cards.run.meta + ' | ' + s.cards.limit.meta + ' | ' + s.cards.stall.meta);
-  const zh = await page.evaluate(() => { const bad = []; for (const el of document.querySelectorAll('.meta,.why,.lbl,.body button,.chead .done,#filters button,.pager,.reply textarea,.ghead')) { const t = (el.textContent || '') + ' ' + (el.getAttribute('placeholder') || ''); if (/[一-鿿]/.test(t)) bad.push(t.trim().slice(0, 40)); } return bad; });
+  ok(/^Running · /.test(s.cards.run.meta) && s.cards.limit.meta === 'Stopped · out of quota' && s.cards.flag.meta === 'Stopped · blocked by safeguards' && s.cards.flag.head === "Blocked by the model's safeguards, so it stopped here." && s.cards.gone.meta === 'Stopped · process exited' && /^Running · no activity for \d+ min$/.test(s.cards.stall.meta), '英文：右上角的标志是英文', s.cards.run.meta + ' | ' + s.cards.limit.meta + ' | ' + s.cards.stall.meta);
+  const zh = await page.evaluate(() => { const bad = []; for (const el of document.querySelectorAll('.meta,.why,.next,.lbl,.body button,.chead .done,#filters button,.pager,.reply textarea,.ghead')) { const t = (el.textContent || '') + ' ' + (el.getAttribute('placeholder') || ''); if (/[一-鿿]/.test(t)) bad.push(t.trim().slice(0, 40)); } return bad; });
   ok(zh.length === 0, '英文：标志、原因、按钮、顶栏里没有漏翻的中文', zh.join(' | '));
   await page.screenshot({ path: path.join(OUT, 'wall-dark-en.png') }); await ctx.close();
   ({ ctx, page, errs } = await open({ mode: 'wall', w: 390, h: 844 }));

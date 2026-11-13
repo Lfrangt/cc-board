@@ -140,7 +140,10 @@ const isInterrupt = (text) => /^\s*\[Request interrupted by user/.test(text);
 // API 报错在记录里是一条 model 为 <synthetic> 的 assistant 消息，error 字段说是哪一类
 function haltOf(d, m) {
   const text = m.content.filter((b) => b && b.type === 'text' && b.text).map((b) => b.text).join('\n').trim();
-  const kind = d.error === 'rate_limit' ? 'limit' : d.error === 'authentication_failed' ? 'auth' : 'error';
+  // 安全检查拦下这条消息（11/13 Khalil 定单独标出来）：error 是 invalid_request、stop_reason 是 refusal，正文是「<模型>'s safeguards flagged this message」。
+  // 11/12 12:00 起本机 22 条 API 报错里 18 条是它。上下文过长也是 invalid_request，但 stop_reason 是 stop_sequence，不能认成它
+  const flagged = m.stop_reason === 'refusal' || /safeguards flagged/i.test(text);
+  const kind = flagged ? 'flagged' : d.error === 'rate_limit' ? 'limit' : d.error === 'authentication_failed' ? 'auth' : 'error';
   return { kind, text: text.slice(0, 600), at: d.timestamp };
 }
 
@@ -552,7 +555,7 @@ function watchGone(out, seen) {
 }
 
 // 系统通知：你不在总控台前面时才发；几个窗口一起停（比如额度用完）合成一条；启动后的第一轮只记账不发。
-const WHY = { limit: '额度用完了', auth: '登录过期了', error: '报错了', interrupt: '被打断了', unfinished: '没做完就停了', stall: '可能卡住了', gone: '进程退出了' };
+const WHY = { limit: '额度用完了', auth: '登录过期了', flagged: '被安全检查拦了', error: '报错了', interrupt: '被打断了', unfinished: '没做完就停了', stall: '可能卡住了', gone: '进程退出了' };
 const alerted = new Map();     // sid → 已经提醒过的 key
 const alertHold = new Map();   // sid → {key, since}：站稳 4 秒才算，免得状态闪一下就打扰你
 let alertBase = false, alertQueue = [], alertTimer = null, uiFocusAt = 0;

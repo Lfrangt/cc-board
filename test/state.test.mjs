@@ -59,6 +59,10 @@ mk('done', 'idle', [R.human('写个总结'), R.tool(), R.result(), R.final('总�
 mk('limit', 'idle', [R.human('改首页'), R.tool(), R.result(), R.note('改到一半。'), R.apiErr('rate_limit', LIMIT)]);
 mk('auth', 'idle', [R.human('部署一下'), R.tool(), R.apiErr('authentication_failed', 'Login expired · Please run /login')]);
 mk('err', 'idle', [R.human('读这份文档'), R.apiErr('invalid_request', 'Prompt is too long · the request is ~205181 tokens (limit 200000)')]);
+// 安全检查拦下：原文照 11/13 本机真实记录（error=invalid_request、stop_reason=refusal、model=<synthetic>），两个模型只差模型名和最后一个链接
+const FLAG = (model, link) => "API Error: " + model + "'s safeguards flagged this message (https://www.anthropic.com/legal/aup). This sometimes happens with safe, normal conversations. Claude Code can't respond to this message with " + model + ".\n\nDouble press esc to edit your last message, or try a different model with /model.\n\nSend feedback with /feedback or learn more: https://support.claude.com/en/articles/" + link + "\n\nDetails: `[reasoning_extraction]`\n\nRequest ID: req_test01\n\nMessage ID: msg_test01";
+mk('flag', 'idle', [R.human('整理这份报告'), R.tool(), R.apiErr('invalid_request', FLAG('Opus 5.5', '8106465'), 'refusal')]);
+if (!process.argv.includes('--ui')) mk('flagFable', 'idle', [R.human('写个脚本'), R.apiErr('invalid_request', FLAG('Fable 5.2', '15363606'), 'refusal')]);   // 界面测试按卡数断言，只放 Opus 那张
 mk('intr', 'idle', [R.human('重构播放器'), R.tool(), R.result(), R.interrupt()]);
 mk('intrIdle', 'idle', [R.human('查一下日志'), R.final('日志里没有报错。'), R.interrupt()]);
 mk('compact', 'busy', [R.human('做发布片'), R.tool(), R.result(), R.compact(), R.tool()]);
@@ -141,6 +145,9 @@ try {
   await sleep(1600);
   if (process.argv.includes('--ui')) {
     process.kill(S.gone.pid, 'SIGTERM');                      // 让「进程退出」的卡片也出现
+    // 等服务真的把它挂出来再说「好了」：服务要连着几轮看不到进程才认（约 6 秒），慢机器（CI）上更久。不能让 ui-check 靠固定的等待去赌
+    let lostUp = false; for (let i = 0; i < 150 && !lostUp; i++) { await sleep(200); try { lostUp = ((await get('/api/state')).lost || []).length === 1; } catch {} }
+    if (!lostUp) { console.log('UI fixture FAILED: 30 秒内「进程退出」的卡片没出现'); throw new Error('ui-fixture-not-ready'); }
     fs.writeFileSync(path.join(HERE, '.tmp', 'ui-fixture.json'), JSON.stringify({ url: 'http://127.0.0.1:' + PORT + '/?k=' + TOKEN, pid: process.pid, sids: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v.sid])) }));
     console.log('UI fixture ready pid=' + process.pid);
     await new Promise((resolve) => { process.on('SIGTERM', resolve); process.on('SIGINT', resolve); setTimeout(resolve, Number(process.env.T_UI_SECONDS || 600) * 1000); });
@@ -150,9 +157,10 @@ try {
   console.log('\n[1] 一开始的状态（alert 字段）');
   ok(st.sandbox === true, '试验场被认出来了（sandbox=true，不碰 Ghostty、不发通知）', 'sandbox=' + st.sandbox);
   ok(st.ghostty === false, 'Ghostty 没被碰');
-  const want = { relimit: 'limit', bg: null, bgOpen: null, run: null, done: null, limit: 'limit', auth: 'auth', err: 'error', intr: 'interrupt', intrIdle: null, compact: null, unfin: 'unfinished', recover: null, gone: null, goneIdle: null };
+  const want = { relimit: 'limit', bg: null, bgOpen: null, run: null, done: null, limit: 'limit', auth: 'auth', err: 'error', flag: 'flagged', flagFable: 'flagged', intr: 'interrupt', intrIdle: null, compact: null, unfin: 'unfinished', recover: null, gone: null, goneIdle: null };
   for (const [n, k] of Object.entries(want)) ok(kind(st, n) === k, `${n}: alert=${k}`, 'got ' + kind(st, n));
   ok(by(st, 'limit') && by(st, 'limit').alert && /weekly limit/.test(by(st, 'limit').alert.text), 'limit: 带着报错原文');
+  ok(['flag', 'flagFable'].every((n) => by(st, n) && by(st, n).alert && /safeguards flagged/.test(by(st, n).alert.text)), 'flag / flagFable：被安全检查拦了，带着原文（Opus 5.5、Fable 5.2 各一条）', ['flag', 'flagFable'].map((n) => by(st, n) && by(st, n).alert && by(st, n).alert.text.slice(0, 40)).join(' | '));
   ok(by(st, 'intr') && by(st, 'intr').prompt === '重构播放器', 'intr: 「你说的话」还是原来那句，不是打断标记', by(st, 'intr') && by(st, 'intr').prompt);
   ok(by(st, 'intrIdle') && by(st, 'intrIdle').prompt === '查一下日志' && by(st, 'intrIdle').done === true, 'intrIdle: 没在做事时的 Esc 不算停住，交付还在');
   ok(by(st, 'compact') && by(st, 'compact').prompt === '做发布片', 'compact: 压缩摘要没被当成你说的话', by(st, 'compact') && by(st, 'compact').prompt);

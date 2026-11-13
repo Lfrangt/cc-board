@@ -31,12 +31,14 @@ package.json - 只有测试用的 playwright-core；服务和界面本身零依�
 |---|---|---|
 | limit | assistant 消息 `model` 是 `<synthetic>`、`isApiErrorMessage`、`error: rate_limit` | 停住了 · 额度用完 |
 | auth | 同上，`error: authentication_failed` | 停住了 · 登录过期 |
-| error | 同上，其余 `error`（上下文超长、请求被拦） | 停住了 · 报错 |
+| flagged | 同上，`stop_reason: refusal`（`error` 是 invalid_request，正文「<模型>'s safeguards flagged this message」） | 停住了 · 被安全检查拦了 |
+| error | 同上，其余 `error`（上下文超长等；上下文超长的 stop_reason 是 stop_sequence，不算 flagged） | 停住了 · 报错 |
 | interrupt | user 消息正文是 `[Request interrupted by user…]`，且当时一轮没收尾 | 停住了 · 被打断 |
 | unfinished | 状态不是 busy，这一轮有过动作，没有收尾的话 | 停住了 · 没做完 |
 | stall | 状态是 busy，对话记录和 subagents 文件夹 20 分钟没有新内容 | 运行中 · N 分钟没动静 |
 | （gone） | 上一轮状态是 busy / waiting，这一轮进程没了，且不是总控台自己停的 | 停住了 · 进程退出 |
 
+- `flagged`（11/13 Khalil 定，khalil-3f 提的）：11/12 12:00 起本机 22 条 API 报错里 18 条是它（Opus 5.5 ×12、Fable 5.2 ×6），以前全落进「报错」。卡片正文多一行 `WHY_NEXT.flagged`，不用点开就看得到：按两下 Esc 改上一条消息，或用 /model 换个模型（照 Claude Code 报错里自己的建议），并写明同一段对话可能再被拦。不写「回一句话就能接着做」：被拦后的第一个动作，5 分钟内又被拦的有 5/18（回话 7 次里 2 次、/model 3 次里 2 次、/effort 4 次里 1 次）。
 - 状态是 `shell`（它自己歇着，放到后台的命令还在跑，跑完会自己接着做）不在上表里：它不算停住，`alertOf` 对它不报 unfinished。界面的 `view()` 把它算在跑（`bg`），卡片左上角显示「后台在跑 · 时长」（点在呼吸），计入顶栏的「运行中」，排在要你处理的后面。
 - 界面上没有「已看」这个词（Khalil 11/12：看过不等于处理过）。
 
@@ -174,10 +176,10 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 
 ```bash
 node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；--mutants 跑 6 个改坏版
-node test/state.test.mjs                 # 服务端 88 项，约 100 秒
-node test/mutants.mjs                    # 38 个改坏版，每个都必须让上面的测试变红，约 9 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/state.test.mjs                 # 服务端 91 项，约 100 秒
+node test/mutants.mjs                    # 40 个改坏版，每个都必须让上面的测试变红，约 10 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 92 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 94 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

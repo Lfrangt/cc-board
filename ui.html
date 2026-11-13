@@ -205,6 +205,7 @@ body.flow .alert .meta::before{width:16px;height:16px;margin:0}
 .go:hover{background:var(--fill);color:var(--text)} body.flow .go{height:30px;padding:0 14px 0 11px;font-size:13.5px;gap:6px} body.flow .card.side .go{visibility:hidden}
 .s-reply .done{color:var(--text-2);border-color:var(--hair-2)} .s-reply .done:hover{background:var(--fill)}
 .why{font-size:13px;font-weight:600;margin:0 0 8px}
+.next{font-size:14px;line-height:1.55;margin:0 0 10px;color:var(--text)}
 /* 封面视图里退到后面的卡片整张是模糊的，状态标志跟着糊掉就白做了：给它单独一层不模糊的，叠在卡片原来的位置上，跟着卡片一起动 */
 body.flow .halo{position:absolute;left:50%;top:calc(50% - 14px);width:var(--cw);height:var(--ch);margin:calc(var(--ch) / -2) 0 0 calc(var(--cw) / -2);pointer-events:none;
   transition:transform var(--d-move) var(--spring),opacity var(--d3) var(--ease)}
@@ -387,10 +388,12 @@ const EN = {
   '还没有归档的会话。': 'Nothing archived yet.', '在卡片右上角的菜单里选「归档」。': 'Use the ⋯ menu on a card to archive it.', '这一轮还没有交付': 'No delivery in this turn yet',
   '加附件': 'Attach', '去掉': 'Remove', '选要发给它的文件': 'Choose files to send', '一次最多 10 个附件': 'Up to 10 attachments at a time', '附件没传上去': 'Attachment upload failed',
   '加图片或文件，也可以直接粘贴或拖进来': 'Attach images or files. You can also paste or drop them.', '没有内容': 'Nothing to send',
-  '运行中': 'Running', '额度用完': 'out of quota', '登录过期': 'login expired', '报错': 'error', '被打断': 'interrupted', '没做完': 'unfinished', '没动静': 'no activity', '进程退出': 'process exited',
+  '运行中': 'Running', '额度用完': 'out of quota', '登录过期': 'login expired', '被安全检查拦了': 'blocked by safeguards', '报错': 'error', '被打断': 'interrupted', '没做完': 'unfinished', '没动静': 'no activity', '进程退出': 'process exited',
   '去终端看': 'Open in terminal', '先不管': 'Dismiss', '知道了': 'Got it', '接回来': 'Resume', '它最后说的是': 'Its last line:',
   '额度用完了，它停在这里。额度恢复后回它一句「继续」。': 'Out of quota, so it stopped here. Once the quota is back, reply “continue”.',
   '登录过期了，它停在这里。去终端里输入 /login，再回它一句「继续」。': 'The login expired, so it stopped here. Run /login in the terminal, then reply “continue”.',
+  '被安全检查拦了，这一轮停在这里。': "Blocked by the model's safeguards, so it stopped here.",
+  '去终端：按两下 Esc 改上一条消息，或用 /model 换个模型（Claude Code 的建议）。同一段对话可能再被拦。': "In the terminal: press Esc twice to edit your last message, or switch models with /model (Claude Code's own advice). The same conversation may be blocked again.",
   '报错了，这一轮没做完。': 'It hit an error. This turn did not finish.', '这一轮被打断了，之后没有接着做。': 'This turn was interrupted and never resumed.',
   '这一轮没写完就停了，没有交付。': 'This turn stopped before delivering anything.', '可能卡住了：还显示在运行，但已经很久没有新动静。': 'Possibly stuck: it still shows as running, but nothing new has happened for a long time.',
   '做到一半，它的进程退出了（终端被关、崩溃或重启）。对话还在。': 'Its process exited mid-task (terminal closed, crash or restart). The conversation is kept.',
@@ -568,12 +571,15 @@ function coverOf(s, v) {
   return { head: d.head || firstSentence(s.result), ask: v.need === 'reply' ? d.ask || '' : '' };
 }
 let ack = store('ccb_ack') || {};            // 点过「先不管」的：会话 → 那一次停住的 key
-const WHY = { limit: '额度用完', auth: '登录过期', error: '报错', interrupt: '被打断', unfinished: '没做完', stall: '没动静', gone: '进程退出' };
+const WHY = { limit: '额度用完', auth: '登录过期', flagged: '被安全检查拦了', error: '报错', interrupt: '被打断', unfinished: '没做完', stall: '没动静', gone: '进程退出' };
 const WHY_LONG = {
   limit: '额度用完了，它停在这里。额度恢复后回它一句「继续」。', auth: '登录过期了，它停在这里。去终端里输入 /login，再回它一句「继续」。',
+  flagged: '被安全检查拦了，这一轮停在这里。',
   error: '报错了，这一轮没做完。', interrupt: '这一轮被打断了，之后没有接着做。', unfinished: '这一轮没写完就停了，没有交付。',
   stall: '可能卡住了：还显示在运行，但已经很久没有新动静。', gone: '做到一半，它的进程退出了（终端被关、崩溃或重启）。对话还在。',
 };
+// 停住了以后怎么接着做，写在正文里（不用点开）。只写 Claude Code 自己的建议：11/12–11/13 被拦后不管是回话、/model 还是 /effort，5 分钟内又被拦的都有（18 次里 5 次），哪个办法都不稳
+const WHY_NEXT = { flagged: '去终端：按两下 Esc 改上一条消息，或用 /model 换个模型（Claude Code 的建议）。同一段对话可能再被拦。' };
 const alertRow = (v) => '<div class="row"><button class="bordered" data-act="focus">去终端看</button>' + (v.alert ? '<button class="plain" data-act="ack">先不管</button>' : '') + '</div>';
 function doAck(s) { if (!s || !s.alert) return; ack[s.sid] = s.alert.key; store('ccb_ack', ack); paint(last); }
 function dialogHTML(d) {
@@ -592,7 +598,7 @@ function bodyHTML(s, v) {
     h = (v.why === 'stall' ? '<div class="why">' + WHY_LONG.stall + '</div>' + alertRow(v) + '<div class="sep"></div>' : '') +
       '<div class="lbl">现在</div><div class="md">' + (s.note ? md(s.note) : '<p class="empty">开工了，还没有阶段性说明。</p>') + '</div><div class="tick num"></div>';
   } else if (v.k === 'stopped') {                    // 先说为什么停，再给原话（报错原文 / 它最后一句），最后是能做的事
-    h = '<div class="why">' + WHY_LONG[v.why] + '</div>' + (s.alert && s.alert.text ? '<pre class="screen">' + esc(s.alert.text) + '</pre>' : '') +
+    h = '<div class="why">' + WHY_LONG[v.why] + '</div>' + (WHY_NEXT[v.why] ? '<p class="next">' + WHY_NEXT[v.why] + '</p>' : '') + (s.alert && s.alert.text ? '<pre class="screen">' + esc(s.alert.text) + '</pre>' : '') +
       (s.note ? '<div class="lbl" style="margin-top:10px">它最后说的是</div><div class="md">' + md(s.note) + '</div>' : '') + alertRow(v);
   }
   if (s.result) {
