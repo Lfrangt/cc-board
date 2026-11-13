@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    # The service shells out to tmux, ps and osascript, so it only makes sense on macOS.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: brew install tmux
+      - run: node --check server.mjs && node --check projects.mjs
+      - run: node test/projects.test.mjs
+      - run: node test/state.test.mjs
+
+  ui:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: brew install tmux
+      - run: npm ci
+      - run: npx playwright-core install chromium
+      - name: UI checks (headless Chromium against a fake $HOME)
+        run: |
+          node test/state.test.mjs --ui > ui-fixture.log 2>&1 &
+          for i in $(seq 1 180); do [ -f test/.tmp/ui-fixture.json ] && break; sleep 1; done
+          test -f test/.tmp/ui-fixture.json || { cat ui-fixture.log; exit 1; }
+          node test/ui-check.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-shots
+          path: test/.tmp/shots
+          if-no-files-found: ignore
