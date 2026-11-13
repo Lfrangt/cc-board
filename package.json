@@ -1,0 +1,17 @@
+{
+  "name": "cc-board",
+  "version": "0.2.0",
+  "private": true,
+  "description": "One window for every Claude Code session you run.",
+  "license": "MIT",
+  "author": "Khalil Wu",
+  "repository": { "type": "git", "url": "git+https://github.com/Lfrangt/cc-board.git" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node test/projects.test.mjs && node test/state.test.mjs",
+    "test:mutants": "node test/mutants.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.58.0"
+  }
+}

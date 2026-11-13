@@ -1,0 +1,10 @@
+{
+  "projects": [
+    { "key": "fretflow", "name": "FretFlow", "dir": "^Projects/(fretflow|shared/fretflow-(?!lock))", "word": "f(?:ret|reight|ragrant)\\s*-?\\s*flow|吉他|和弦" },
+    { "key": "ccboard", "name": "总控台", "dir": "^Projects/cc-?board", "word": "总控台|cc-?board|多窗口" },
+    { "key": "acme", "name": "Acme App", "dir": "^Projects/acme-", "word": "(?:^|[^A-Za-z])acme(?![A-Za-z])" },
+    { "key": "docs", "name": "Docs Site", "dir": "^Projects/(docs-site|shared/docs-)", "word": "docs\\s*site|(?:^|[^A-Za-z])DOC(?![A-Za-z])" }
+  ],
+  "neutral": "^Projects/shared$|^Projects/shared/fretflow-lock$",
+  "roots": ["Projects/shared", "Projects", "Desktop", "com~apple~CloudDocs"]
+}

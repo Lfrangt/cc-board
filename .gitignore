@@ -1,0 +1,10 @@
+# runtime and build output
+build/
+server.log
+test/.tmp/
+node_modules/
+.DS_Store
+
+# local only: previous live copies, private launch/posting notes
+.rollback/
+publish/
