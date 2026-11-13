@@ -7,9 +7,9 @@ Delivered work comes up sharp and in front. Sessions still working sit blurred b
 > Independent project. Not affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are Anthropic's trademarks.
 
 <p align="center">
-  <a href="docs/media/cc-board-launch.mp4"><img src="docs/media/cc-board-preview.gif" width="720" alt="cc-board: the session that delivered comes up sharp and in front, sessions still working sit blurred behind"></a>
+  <img src="docs/media/cc-board-preview.gif" width="720" alt="cc-board: the session that delivered comes up sharp and in front, sessions still working sit blurred behind">
 </p>
-<p align="center"><a href="docs/media/cc-board-launch.mp4">▶ Watch the 30-second launch video (with sound)</a></p>
+<p align="center"><a href="docs/media/cc-board-launch.mp4">Download the 30-second launch video</a> (6 MB, with sound)</p>
 
 ## The problem
 
