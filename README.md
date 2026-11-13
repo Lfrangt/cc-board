@@ -113,4 +113,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) for the code. The launch video and preview in `docs/media/` are not covered by it: the soundtrack uses Apple Loops from GarageBand, which Apple licenses for use in finished works, not for redistribution on their own.
