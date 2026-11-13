@@ -15,8 +15,9 @@ jobs:
         with:
           node-version: 22
       - run: brew install tmux
-      - run: node --check server.mjs && node --check projects.mjs
+      - run: node --check server.mjs && node --check projects.mjs && node --check suggest.mjs
       - run: node test/projects.test.mjs
+      - run: node test/suggest.test.mjs
       - run: node test/state.test.mjs
 
   ui:

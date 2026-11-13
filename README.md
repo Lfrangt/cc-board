@@ -33,6 +33,7 @@ cc-board never runs an agent loop and never replaces your CLI.
 - **Why it stopped**, written on the card: running (with how long), or stopped because the quota ran out, the login expired, the model's safeguards blocked the message, the API errored, you interrupted it, it never finished, or its process exited. A session that is "running" but has been silent for 20 minutes says so. You also get a system notification and a Dock badge when you're not looking.
 - **What it delivered**: a one-line conclusion and the single thing it wants from you. *Needs follow-up* (it wants a decision) is separate from *ready to review* (here is a result) and *no action needed*.
 - **Start and tidy up from the board**: new tasks (⌘N, or the "+ New task" in a project column), image and file attachments, zoom a card (⌘O or double-click), archive (empty sessions are deleted, the rest are kept with a note, undo for 8 seconds).
+- **Next-step suggestions in the reply box**: for sessions in cc-board's own tmux, the ghost-text suggestion Claude Code shows in its prompt, and the numbered next steps a next-steps plugin draws above it, are read off the terminal screen (read-only) and shown on the card. Press Tab in the empty box to take the suggestion, or click a step (or press 1–3 on the card you are looking at) to drop it into the box as a draft. Nothing is sent until you press Return. Step 1 uses the full suggestion; steps 2 and 3 use their short label, because that is all the screen shows.
 - English and Chinese UI; it follows the system language, or add `?lang=en` to the URL.
 
 | Card says | Evidence in the transcript |
@@ -59,7 +60,7 @@ open ~/Applications/总控台.app
 
 The app bundle is still called 总控台 ("main console" in Chinese); an English name is an open question. Node is looked up at `~/.local/node/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. On first launch macOS asks whether the app may control Ghostty. Every rebuild changes the ad-hoc signature, so it asks again.
 
-After you pull changes, `./build.sh update` swaps in the new `ui.html`, `server.mjs` and `projects.mjs` and restarts the service. No recompile, no new permission prompt.
+After you pull changes, `./build.sh update` swaps in the new `ui.html`, `server.mjs`, `projects.mjs` and `suggest.mjs` and restarts the service. No recompile, no new permission prompt.
 
 Want a look without building anything?
 
@@ -105,6 +106,7 @@ The tests never touch your real `~/.claude`, tmux or Ghostty. The server treats 
 server.mjs     the service: reads sessions, works out each card's state, serves /api
 ui.html        the whole interface, one file
 projects.mjs   project grouping (pure functions)
+suggest.mjs    reads Claude Code's ghost-text suggestion and next-step options off the tmux screen (pure function)
 app/           the native shell (Swift, WKWebView)
 test/          isolated tests
 CLAUDE.md      long-form design notes in Chinese: each rule, why it is that way, and the feedback behind it

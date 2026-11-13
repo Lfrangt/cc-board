@@ -110,7 +110,7 @@ fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\ncase "$*" in *TRUSTME*|*O
 const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((x) => fs.existsSync(x));
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
-const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
+const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
 delete env.CCBOARD_DATA; delete env.CCBOARD_READONLY;
 // ── config.json：示例项目表（test/fixture-config.json），两个开关都打开。最后一段 [8] 换成写坏的 config 重启，看默认值 ──
 const DATA0 = path.join(FH, 'Library/Application Support/cc-board'); fs.mkdirSync(DATA0, { recursive: true });
@@ -310,6 +310,50 @@ try {
   // 模型名故意写坏：过了 Codex 开关那一关，在起进程之前被拦下。不能真起：服务用登录 shell 找 codex，开发机上找得到真的
   n1 = await post('/api/new', { prompt: '用 Codex 做', cwd: '~', provider: 'codex', model: 'bad model!' });
   ok(!n1.body.ok && /写法不对/.test(n1.body.error || ''), '选 Codex：过了开关，走到核对模型名那一步', JSON.stringify(n1.body));
+
+  console.log('\n[7e] 输入框上的预判：读空闲会话的屏幕，灰字和「下一步 1/2/3」挂在 /api/state 的 suggest 上');
+  // 假终端：把文件里的内容原样画到窗格里，文件一改就重画；它自己就是会话的进程（窗格里的进程号 = 登记的 pid）
+  const SG = 'ccb-sug001', SGF = path.join(ROOT, 'sug-screen.txt');
+  fs.writeFileSync(path.join(BIN, 'screen.mjs'), `import fs from 'node:fs';
+const f = process.argv[2]; let last = null; fs.writeFileSync(f + '.pid', String(process.pid));
+const draw = () => { let t = ''; try { t = fs.readFileSync(f, 'utf8'); } catch {} if (t !== last) { last = t; process.stdout.write('\\x1b[2J\\x1b[H' + t); } };
+draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 90000);
+`);
+  const BD = '\x1b[38;5;245m' + '─'.repeat(140), SUGGESTED = '把这个改动提交，然后跑一遍全部测试', SGL = ['提交并跑测试', '看一下改动', '先放着'];
+  const bandRows = ['\x1b[38;5;241m下一步：\x1b[39m', ...SGL.map((l, i) => `  \x1b[38;5;69m${i + 1}\x1b[39m: ${l}`), '  \x1b[38;5;69m0\x1b[39m: 关闭'];
+  const sgScreen = (chips, composer) => ['⏺ 这是一段做完了的交付。', '', ...chips, '', BD, composer, BD, '  ⏵⏵ bypass permissions on', ''].join('\n');
+  const GH = (t) => '\x1b[39m❯\xa0\x1b[2m' + t + '\x1b[0m';
+  fs.writeFileSync(SGF, sgScreen(bandRows, GH(SUGGESTED)));
+  spawnSync(TMUX_BIN, ['-L', 'ccboard', 'new-session', '-d', '-s', SG, '-x', '160', '-y', '48', NODE, path.join(BIN, 'screen.mjs'), SGF], { env, stdio: 'ignore' });
+  let sgPid = 0; for (let i = 0; i < 40 && !sgPid; i++) { await sleep(150); try { sgPid = Number(fs.readFileSync(SGF + '.pid', 'utf8')); } catch {} }
+  const sgSid = 'sug00000-0000-4000-8000-' + String(sgPid).padStart(12, '0');
+  fs.writeFileSync(path.join(PROJ, sgSid + '.jsonl'), [R.human('给个建议'), R.final('这是一段做完了的交付。')].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const sgReg = (status) => fs.writeFileSync(path.join(SESS, sgPid + '.json'), JSON.stringify({ pid: sgPid, sessionId: sgSid, cwd: CWD, startedAt: Date.now() - 3600000, kind: 'interactive', entrypoint: 'cli',
+    name: 'w-sug', nameSource: 'derived', status, statusUpdatedAt: Date.now() - 60000, updatedAt: Date.now() - 60000 }));
+  sgReg('idle');
+  const sgNow = async () => (await get('/api/state')).sessions.find((x) => x.sid === sgSid);
+  const until = async (fn, ms = 20000) => { const end = Date.now() + ms; let v; while (Date.now() < end) { v = await fn(); if (v) return v; await sleep(400); } return v; };
+  let sg = await until(async () => { const x = await sgNow(); return x && x.suggest ? x : null; });
+  ok(sg && sg.channel === 'tmux' && sg.tmux === SG, '假终端里的会话对上了 tmux 窗格', JSON.stringify(sg && [sg.channel, sg.tmux]));
+  ok(sg && sg.suggest && sg.suggest.ghost === SUGGESTED, 'suggest.ghost：输入行 ❯ 后面暗色字 = 灰字建议', JSON.stringify(sg && sg.suggest));
+  ok(sg && sg.suggest && JSON.stringify(sg.suggest.options) === JSON.stringify(SGL.map((label, i) => ({ n: i + 1, label }))), 'suggest.options：输入框上方的 1 / 2 / 3 三条标签', JSON.stringify(sg && sg.suggest));
+  st = await get('/api/state');
+  ok(st.sessions.filter((x) => x.suggest).length === 1, '只有这一个会话有预判（别的会话不是 tmux 空闲会话，或屏幕上没有）', JSON.stringify(st.sessions.filter((x) => x.suggest).map((x) => x.title)));
+  fs.writeFileSync(SGF, sgScreen(bandRows, '\x1b[39m❯\xa0正在自己打字'));
+  sg = await until(async () => { const x = await sgNow(); return x && x.suggest && x.suggest.ghost === '' ? x : null; });
+  ok(sg && sg.suggest.options.length === 3, '他在输入框里打字：灰字没了，1 / 2 / 3 还在', JSON.stringify(sg && sg.suggest));
+  fs.writeFileSync(SGF, sgScreen([], GH('')));
+  sg = await until(async () => { const x = await sgNow(); return x && !x.suggest ? x : null; });
+  ok(sg && !sg.suggest, '屏幕上什么预判都没有了：suggest 字段跟着没有（不留旧的）');
+  fs.writeFileSync(SGF, sgScreen(bandRows, GH(SUGGESTED)));
+  await until(async () => { const x = await sgNow(); return x && x.suggest; });
+  sgReg('busy');
+  sg = await until(async () => { const x = await sgNow(); return x && x.status === 'busy' && !x.suggest ? x : null; });
+  ok(sg && sg.status === 'busy' && !sg.suggest, '会话转成忙：屏幕上的预判再没画完也不给界面（只给空闲的）', JSON.stringify(sg && [sg.status, sg.suggest]));
+  sgReg('shell'); await sleep(200);
+  sg = await until(async () => { const x = await sgNow(); return x && x.status === 'shell' && x.suggest ? x : null; });
+  ok(sg && sg.suggest && sg.suggest.ghost === SUGGESTED, '放到后台的命令还在跑（shell）：终端里照样能回话、照样显示建议，所以也给', JSON.stringify(sg && [sg.status, sg.suggest]));
+  sgReg('idle');
 
   console.log('\n[8] config.json 写坏了：照常起来、记一行日志、用默认值（空项目表；自动点信任和 Codex 都关着）');
   process.kill(srv.pid, 'SIGTERM');

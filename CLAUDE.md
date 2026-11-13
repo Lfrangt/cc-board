@@ -13,10 +13,11 @@ docs/ - README 用的图和视频
 
 <config>
 server.mjs - 服务。读会话登记和对话记录，算出每个会话的状态，提供 /api。
-projects.mjs - 分组规则。按会话动过的文件夹和标题认出它属于哪个项目；项目表由 server.mjs 从 config.json 读出来交给 useRules()。server.mjs 引用它，所以上线时三个文件一起拷。
+projects.mjs - 分组规则。按会话动过的文件夹和标题认出它属于哪个项目；项目表由 server.mjs 从 config.json 读出来交给 useRules()。server.mjs 引用它，所以上线时四个文件一起拷（server.mjs、ui.html、projects.mjs、suggest.mjs）。
+suggest.mjs - 输入框上的预判的解析器（纯函数 `parseSuggest()`）。从 tmux 屏幕文本里取灰字建议和「下一步 1/2/3」。server.mjs 引用它，见「输入框上的预判」一节。
 <数据目录>/config.json - 本机设置（不在仓库里）：项目表、哪些文件夹算证据、自动点信任、Codex。见下面「config.json」一节；测试用 test/fixture-config.json。
 ui.html - 界面。轮询 /api/state，画卡片。
-build.sh - `./build.sh update` 换界面和服务（server.mjs、ui.html、projects.mjs）；不带参数是重新编译安装。
+build.sh - `./build.sh update` 换界面和服务（server.mjs、ui.html、projects.mjs、suggest.mjs）；不带参数是重新编译安装。
 README.md、CONTRIBUTING.md、LICENSE - 对外的英文文档和 MIT 许可。README 里写的每一句都要有代码依据。
 package.json - 只有测试用的 playwright-core；服务和界面本身零依赖。
 .github/workflows/ci.yml - macOS 上跑服务端测试和界面测试。
@@ -110,6 +111,24 @@ Khalil 11/12 18:30：「以后你把这些资料直接把链接给我，我可�
   - 两种都先等 8 秒（`GRACE`），提示条上能撤销。计数（`nHuman`、`nTools`、`nEdits`）来自服务读进来的那一段对话记录（最近 4 MB 起），长会话照样算「做了很多事」。
   - 归档列表里每一行还能手动「删除」。
 
+## 输入框上的预判（11/13 khalil-90）
+
+Khalil 11/13 16:10：「原生 Claude Code 里有那个 Tab，它会预判我们下一步要干什么……Claude Code 有一次会给我预判 1、2、3 选项……也要在我们这个输入框里加入」。
+
+- 两样东西：
+  - 灰字：输入框空着时 Claude Code 显示的一句建议，Tab 收下。屏幕上是输入行 `❯` 后面的暗色字（SGR 2）。
+  - 「下一步 1/2/3」：next-steps 类插件（`next-steps@claude-community` 或它的改写版）画在输入框上边框之上的三条。每轮结束后它 fork 一次会话，让模型写最多 3 条 `{label, prompt}`；按数字键把 prompt 填进输入框，0 关闭；第 1 条的 prompt 同时是灰字。屏幕上只有标签行 `n: 标签`，以 `0:` 行收尾。
+- 数据只能从屏幕读。两样都不写进对话记录（11/13 拿两条真实建议在本机所有对话记录里 grep 过，一条都没有）。`suggestLoop()` 每 2.5 秒（`CCBOARD_SUGGEST_MS`）对「tmux 里的 Claude 会话、状态 idle 或 shell（放到后台的命令还在跑，终端里照样能回话）、交付过一轮」跑一次 `capture-pane -p -e`（只读，不碰输入框，不调模型），交给 `suggest.mjs` 的 `parseSuggest()`。结果放在会话的 `suggest` 字段：`{ ghost, options: [{ n, label }] }`；`withSuggest()` 只在状态仍是 idle / shell 时带上（刚转忙的那一两秒不带）。
+- 认输入框靠结构，不靠字面：屏幕最下面两条边框（`─` 连成的线）夹住、第一行以 `❯` 开头的那段。三条靠「边框上面 3 行以内有一行 `0: …`，往上连着 `1:`（`2:` `3:`）」；`0:` 后面写什么字都行。屏幕上有 `Enter to confirm / select` 提示行就不认（那是选择框）。
+- 灰字和他自己打的字靠颜色分：整段都是暗色才算灰字，有正常颜色的字 = 他在终端里打的，不当建议。真彩色 `38;2;r;g;b` 里的 `2` 不是暗色，解析时跳过。新会话空输入框里的 `Try "…"` 示例也是暗色字，认出来丢掉。
+- 模型写的字先过 `clean()`：去掉控制字符、零宽和方向字符；带 Unicode tag 字符（U+E0000–E007F，只能用来藏指令）的整条不要；灰字最长 600 字，标签 80 字；三条里有一条不干净就整组不要（数字键要和位置对得上）。
+- 界面（ui.html）：
+  - 灰字盖在空输入框上（`.ghost`，单行、截省略号，右边一个 `Tab` 键帽）。框里有字或有附件就隐藏；灰字显示时输入框自己的提示字变透明。框里空着按 Tab 收下整句（`fillDraft()`）；框里有字时 Tab 不动它。
+  - 三条在输入框上面（`.sg` / `.chip`）。点一条，或没在打字时按数字键（作用在 `zoomTarget()` 那张）：填进输入框、光标进框，**不会自己发出去**，改完回车才发。在输入框里打字时数字就是数字（中文输入法要拿它选字）。
+  - 第 1 条填灰字的完整句子（终端里按 1 和按 Tab 是同一句；11/13 拿 5 个真会话核过，标签和灰字对得上）。第 2、3 条屏幕上只有标签，填标签。要拿到它们的完整 prompt，得让插件自己多存一份，总控台这边读不到。
+  - 只给空闲、能回话的卡；刚回车发出去的 8 秒内不给；封面里旁边的卡（`.side`）和输入框一起淡掉。
+- 没做的：开在 Ghostty 标签里的会话（不是 tmux）读不到屏幕，没有预判；Codex 没有。
+
 ## 提醒走三条路
 
 1. 卡片：右上角的药丸，排到最前面（只在「等你选」之后）。
@@ -176,10 +195,11 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 
 ```bash
 node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；--mutants 跑 6 个改坏版
-node test/state.test.mjs                 # 服务端 91 项，约 100 秒
-node test/mutants.mjs                    # 40 个改坏版，每个都必须让上面的测试变红，约 10 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/suggest.test.mjs               # 输入框预判的解析 28 项，不到 1 秒；--mutants 跑 8 个改坏版
+node test/state.test.mjs                 # 服务端 99 项，约 100 秒
+node test/mutants.mjs                    # 44 个改坏版，每个都必须让上面的测试变红，约 10 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 94 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 116 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

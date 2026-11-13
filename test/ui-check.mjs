@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 .tmp/ui-fixture.json（state.test.mjs --ui 写的试验实例地址）；依赖 ./browser.mjs 的静音无头 Chromium
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；截图放 .tmp/shots（墙 / 封面、深色 / 浅色、英文）
- * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、正文里的本机路径能点、放大看（⌘O / 双击）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」。
+ * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、正文里的本机路径能点、放大看（⌘O / 双击）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」、输入框上的预判（灰字 Tab 收下、1/2/3 填进输入框、数字键、封面视图）。
  *        只读页面 + 点「先不管」和筛选，不往任何会话里发话。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -289,6 +289,57 @@ try {
     if (off) ok(v.field === 'none' && v.provs.join() === 'Claude Code' && !e3.length, 'codex 关着：新任务里不显示「交给谁」', JSON.stringify({ v, e3 }));
     else ok(v.field !== 'none' && v.provs.join() === 'Claude Code,Codex', 'codex 打开：「交给谁」照旧显示 Claude Code / Codex', JSON.stringify(v));
     await c3.close();
+  }
+  // ── 输入框上的预判（11/13）：灰字 Tab 收下；1/2/3 填进输入框，不会自己发出去。读屏幕那一半在 state.test.mjs 的 [7e]；这里把 suggest 塞进应答，只测界面 ──
+  const SGX = { ghost: '把这个改动提交，然后跑一遍全部测试，再把结果和耗时逐项写进说明里，最后把说明发到群里让大家看一眼', options: [{ n: 1, label: '提交并跑测试' }, { n: 2, label: '看一下改动' }, { n: 3, label: '先放着' }] };
+  for (const lang of ['zh', 'en']) {
+    ({ ctx, page, errs } = await open({ mode: 'wall', lang })); let sentTo = [];
+    await page.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json();
+      for (const x of j.sessions) if (x.sid === FX.sids.done || x.sid === FX.sids.run) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; x.suggest = SGX; }      // done 是空闲的，run 是忙着的
+      await route.fulfill({ response: r, json: j }); });
+    await page.route('**/api/send', async (route) => { sentTo.push(JSON.parse(route.request().postData() || '{}')); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, delivered: true }) }); });
+    await sleep(2800);
+    const dc = `.card[data-sid="${FX.sids.done}"]`, rc = `.card[data-sid="${FX.sids.run}"]`;
+    const sgs = (sel) => page.evaluate((q) => { const c = document.querySelector(q), g = c.querySelector('.ghost'), ta = c.querySelector('textarea'), gr = g.getBoundingClientRect(), tr = ta.getBoundingClientRect(), cl = c.querySelector('.clip').getBoundingClientRect();
+      const ch = c.querySelector('.chip'); return { chips: [...c.querySelectorAll('.sg .chip')].map((b) => b.querySelector('kbd').textContent + ':' + b.querySelector('span').textContent), sgHidden: c.querySelector('.sg').hidden,
+        ghost: g.hidden ? null : c.querySelector('.gt').textContent, key: g.querySelector('kbd').textContent, value: ta.value, phClear: getComputedStyle(ta, '::placeholder').color === 'rgba(0, 0, 0, 0)',
+        inside: gr.left >= tr.left && gr.right <= cl.left + 1 && gr.height > 0, ellipsis: getComputedStyle(c.querySelector('.gt')).textOverflow === 'ellipsis', focus: document.activeElement === ta, title: ch ? ch.title : '' }; }, sel);
+    const a0 = await sgs(dc), b0 = await sgs(rc);
+    ok(a0.chips.join('|') === '1:提交并跑测试|2:看一下改动|3:先放着' && !a0.sgHidden && a0.ghost === SGX.ghost && a0.key === 'Tab', lang + '：空闲的卡：输入框上方 1 / 2 / 3 三条，输入框里是灰字，旁边一个 Tab 键帽', JSON.stringify(a0));
+    ok(a0.phClear && a0.inside && a0.ellipsis, lang + '：灰字显示时输入框自己的提示字透明（不叠在一起）；很长的灰字截成省略号，不压到回形针和发送键', JSON.stringify({ phClear: a0.phClear, inside: a0.inside, ellipsis: a0.ellipsis }));
+    ok(b0.sgHidden && b0.ghost === null, lang + '：忙着的卡不显示预判（屏幕上的建议是上一轮的）', JSON.stringify(b0));
+    if (lang === 'en') { ok(a0.title === 'Fill the box, edit, then send', 'en：三条的提示语是英文', a0.title); ok(errs.length === 0, 'en：预判没有页面报错', errs.join(' | ')); await ctx.close(); continue; }
+    await page.locator(dc).screenshot({ path: path.join(OUT, 'suggest-wall.png') });
+    await page.click(dc + ' textarea'); await page.keyboard.press('Tab'); await sleep(150); const a1 = await sgs(dc);
+    ok(a1.value === SGX.ghost && a1.ghost === null && a1.focus, 'Tab：空输入框里按 Tab，收下灰字（整句进输入框），灰字让位，光标还在框里', JSON.stringify({ value: a1.value, ghost: a1.ghost, focus: a1.focus }));
+    await page.fill(dc + ' textarea', ''); await sleep(100); const a2 = await sgs(dc);
+    ok(a2.ghost === SGX.ghost, '把框清空：灰字又出来', JSON.stringify(a2.ghost));
+    await page.fill(dc + ' textarea', '先写了一半'); await page.keyboard.press('Tab'); await sleep(150); const a3 = await sgs(dc);
+    ok(a3.value === '先写了一半' && a3.ghost === null, '框里已经有字：Tab 不碰它（灰字也不显示）', JSON.stringify({ value: a3.value, ghost: a3.ghost }));
+    await page.fill(dc + ' textarea', ''); await page.click(dc + ' .chip[data-sg="2"]'); await sleep(150); const c2 = await sgs(dc);
+    ok(c2.value === '看一下改动' && c2.focus && sentTo.length === 0, '点第 2 条：标签填进输入框当草稿、光标进框，没有自己发出去', JSON.stringify({ value: c2.value, focus: c2.focus, sent: sentTo.length }));
+    await page.fill(dc + ' textarea', ''); await page.click(dc + ' .chip[data-sg="1"]'); await sleep(150); const c1 = await sgs(dc);
+    ok(c1.value === SGX.ghost, '点第 1 条：和 Tab 是同一句（终端里按 1 和按 Tab 也是同一句）', JSON.stringify(c1.value));
+    await page.fill(dc + ' textarea', ''); await page.evaluate((q) => document.querySelector(q + ' textarea').blur(), dc); await page.hover(dc + ' .head'); await page.keyboard.press('3'); await sleep(150); const k3 = await sgs(dc);
+    ok(k3.value === '先放着' && k3.focus, '没在打字时，鼠标停在哪张卡上，按数字键 3 就填它的第 3 条', JSON.stringify({ value: k3.value, focus: k3.focus }));
+    await page.fill(dc + ' textarea', ''); await page.click(dc + ' textarea'); await page.keyboard.press('2'); await sleep(100); const k2 = await sgs(dc);
+    ok(k2.value === '2', '在输入框里打字时数字就是数字（不被当成快捷键）', JSON.stringify(k2.value));
+    await page.fill(dc + ' textarea', ''); await page.click(dc + ' textarea'); await page.keyboard.press('Tab'); await page.keyboard.press('Enter'); await sleep(800); const s1 = await sgs(dc);
+    ok(sentTo.length === 1 && sentTo[0].text === SGX.ghost && sentTo[0].sid === FX.sids.done, 'Tab 收下后回车：发给服务的就是那整句', JSON.stringify(sentTo));
+    ok(s1.sgHidden && s1.ghost === null, '发出去以后：这张卡上的预判马上收起（它们是上一轮的）', JSON.stringify({ sg: s1.sgHidden, ghost: s1.ghost }));
+    ok(errs.length === 0, '预判：页面没有报错', errs.join(' | ')); await ctx.close();
+  }
+  // 封面视图（一张一张翻）和浅色：灰字和三条的样子
+  for (const scheme of ['light', 'dark']) {
+    ({ ctx, page, errs } = await open({ mode: 'flow', scheme }));
+    await page.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json(); for (const x of j.sessions) if (x.sid === FX.sids.done) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; x.suggest = SGX; } await route.fulfill({ response: r, json: j }); });
+    await sleep(2800);
+    const fr = await page.evaluate((sid) => { const c = document.querySelector('.card[data-sid="' + sid + '"]'); const sg = c.querySelector('.sg'), rp = c.querySelector('.reply'); return { side: c.classList.contains('side'), sg: sg.hidden ? null : sg.getBoundingClientRect().height, above: sg.getBoundingClientRect().bottom <= rp.getBoundingClientRect().top + 1 }; }, FX.sids.done);
+    if (!fr.side) { ok(fr.sg > 40 && fr.above, `封面（${scheme}）：三条在输入框上面、不压住它`, JSON.stringify(fr)); await page.screenshot({ path: path.join(OUT, `suggest-flow-${scheme}.png`) }); }
+    else { const front = await page.evaluate(() => document.querySelector('.card:not(.side)').dataset.sid); await page.evaluate((sid) => { document.querySelector('.card[data-sid="' + sid + '"]').click(); }, FX.sids.done); await sleep(900);
+      const fr2 = await page.evaluate((sid) => { const c = document.querySelector('.card[data-sid="' + sid + '"]'); const sg = c.querySelector('.sg'), rp = c.querySelector('.reply'); return { side: c.classList.contains('side'), sg: sg.hidden ? null : sg.getBoundingClientRect().height, above: sg.getBoundingClientRect().bottom <= rp.getBoundingClientRect().top + 1 }; }, FX.sids.done);
+      ok(!fr2.side && fr2.sg > 40 && fr2.above, `封面（${scheme}）：翻到这张后三条在输入框上面、不压住它`, JSON.stringify({ front, fr2 })); await page.screenshot({ path: path.join(OUT, `suggest-flow-${scheme}.png`) }); }
+    ok(errs.length === 0, `封面（${scheme}）预判：页面没有报错`, errs.join(' | ')); await ctx.close();
   }
 } finally { await browser.close(); }
 console.log(`\n界面结果：${pass} 过，${fail} 没过；截图在 ${OUT}`);

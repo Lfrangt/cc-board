@@ -50,9 +50,14 @@ const MUTANTS = {
   'no-flagged':          ["  const flagged = m.stop_reason === 'refusal' || /safeguards flagged/i.test(text);", "  const flagged = false;"],
   'flag-all-invalid':    ["  const flagged = m.stop_reason === 'refusal' || /safeguards flagged/i.test(text);", "  const flagged = d.error === 'invalid_request';"],
   'note-on-card':        ["  launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });", "  launches.set(name, { at: Date.now(), prompt: text, cwd: dir, provider });"],
+  'suggest-not-attached': ["sessions: sessions.map(withSuggest), others: otherCount,", "sessions, others: otherCount,"],
+  'suggest-loop-off':    ["  fastLoop(); slowLoop(); suggestLoop();", "  fastLoop(); slowLoop();"],
+  'suggest-plain-screen': ["['capture-pane', '-p', '-e', '-t', s.tmux]", "['capture-pane', '-p', '-t', s.tmux]"],
+  'suggest-stale-kept':  ["  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);", ""],
 };
 for (const [name, [a]] of Object.entries(MUTANTS)) { const n = src.split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 server.mjs 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边
+fs.copyFileSync(path.join(HERE, '../suggest.mjs'), path.join(TMP, 'suggest.mjs'));     // 同理 import './suggest.mjs'
 const run = ([name, [a, b]], i) => new Promise((resolve) => {
   const file = path.join(TMP, name + '.mjs'); fs.writeFileSync(file, src.replace(a, b));
   let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(4770 + i) } });

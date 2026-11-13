@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * [INPUT]: 依赖 ~/.claude/sessions 的会话登记（进程号、状态）、~/.claude/projects 和 ~/.codex/sessions 的对话记录（jsonl，只读）；
- *          依赖 tmux -L ccboard 和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 /usr/bin/open 打开正文里的路径（/api/open）
+ *          依赖 tmux -L ccboard 和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 ./suggest.mjs 读输入框上的预判；依赖 /usr/bin/open 打开正文里的路径（/api/open）
  * [OUTPUT]: 对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state、turns、send、new、archive、unarchive、delete、ack、answer…）
  * [POS]: 总控台唯一的服务进程，由 app/main.swift 启动和重启，ui.html 只通过 /api 和它说话。
  *        它把每个会话压成四样：你问了什么 / 它在干嘛 / 它交付了什么 / 它为什么停了（alertOf 是「要不要你跟进」的唯一判断处）。
@@ -9,6 +9,7 @@
  *        在某一列列头开的新任务，tmux 名 → 那一列记在 pins.json，classify 拿它当提示分；开工前的「信任这个文件夹」由 autoTrust 替他点（config 打开、开在主目录时）。
  *        digest() 从每次交付里取一句结论和要你做的事，分「待跟进 / 待审阅」；它自己写了【待跟进】/【待审阅】/【在跑】那一行就以它为准。
  *        换了端口、数据目录或主目录就自认是试验场：不碰 Ghostty、不发系统通知。
+ *        suggestLoop 每 2.5 秒读一遍空闲 tmux 会话的屏幕（capture-pane -e，只读），交给 suggest.mjs 取灰字建议和「下一步 1/2/3」，挂在 /api/state 的 suggest 字段上；它们不进对话记录。
  *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex 两个开关默认关。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -21,6 +22,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseSuggest } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
 import { noteTool, classify, pinnable, useRules } from './projects.mjs';     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
 
 const HOME = os.homedir();
@@ -1119,6 +1121,25 @@ async function refreshWaitScreens() {
   }
   for (const k of [...waitScreens.keys()]) if (!names.has(k)) waitScreens.delete(k);
 }
+// ───────────── 输入框上的「预判」：灰字建议 + 下一步 1/2/3 ─────────────
+// Khalil 11/13 16:10：原生 Claude Code 的输入框里有灰字（Tab 收下），next-steps 插件在输入框上方给「1 / 2 / 3」，总控台卡片的输入框也要有。
+// 两样都只画在终端屏幕上、不写进对话记录（拿真实记录 grep 过），所以只能读屏幕，由 suggest.mjs 解析。读屏只读，不碰会话的输入框，不调模型。
+// 只看 tmux 里的 Claude 会话、状态是 idle 或 shell、已经交付过一轮的：忙着的没有预判；没交付过的新会话输入框里的 Try "…" 也是暗色字。
+const SUGGEST_MS = Number(process.env.CCBOARD_SUGGEST_MS || 2500);
+const SUGGEST_STATUS = new Set(['idle', 'shell']);    // shell = 放到后台的命令还在跑，终端里照样能回话、照样显示建议
+const suggests = new Map();   // tmux 会话名 → { ghost, options: [{ n, label }] }
+async function refreshSuggest() {
+  const names = new Set();
+  for (const s of sessions) {
+    if (s.channel !== 'tmux' || s.provider !== 'claude' || !SUGGEST_STATUS.has(s.status) || s.ask || !s.resultAt) continue;
+    const cap = await tmux(['capture-pane', '-p', '-e', '-t', s.tmux]);
+    const g = cap.ok ? parseSuggest(cap.out) : null;
+    if (g) { suggests.set(s.tmux, g); names.add(s.tmux); }
+  }
+  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);
+}
+const withSuggest = (s) => (SUGGEST_STATUS.has(s.status) && s.tmux && suggests.has(s.tmux) ? { ...s, suggest: suggests.get(s.tmux) } : s);   // 刚转忙的那一两秒不再带
+
 const launches = new Map();   // tmux 会话名 → {at, prompt, cwd}
 let codexBin = null;
 async function findCodex() {
@@ -1241,6 +1262,10 @@ async function slowLoop() {
   try { await refreshPanes(); await resolvePanes(); pending = await pendingLaunches(); await refreshWaitScreens(); } catch {}
   setTimeout(slowLoop, 4000);
 }
+async function suggestLoop() {
+  try { await refreshSuggest(); } catch {}
+  setTimeout(suggestLoop, SUGGEST_MS);
+}
 function fastLoop() {
   try { scanSessions(); } catch (e) { console.error('scan', e); }
   setTimeout(fastLoop, 1200);
@@ -1280,7 +1305,7 @@ const server = http.createServer(async (req, res) => {
       const live = new Set(allSessions.filter((x) => x.tmux).map((x) => x.tmux));     // 已经上墙的就不再算「启动中」
       const lost = Object.values(archive.items).filter((x) => x.lost && x.state === 'archived')
         .map((x) => ({ sid: x.sid, provider: x.provider, title: x.title, cwd: x.cwd, prompt: x.prompt, lostAt: x.lostAt, project: x.project || classify(null, { title: x.title, prompt: x.prompt, cwd: x.cwd, home: HOME }) }));
-      const out = { now: Date.now(), sessions, others: otherCount, ghostty: ghosttyOk, pending: pending.filter((x) => !live.has(x.name)).map((x) => ({ ...x, project: classify(null, { prompt: x.prompt, cwd: x.cwd, home: HOME, pin: pinOf(x.name) }) })), home: HOME, notices, providers: providers(),
+      const out = { now: Date.now(), sessions: sessions.map(withSuggest), others: otherCount, ghostty: ghosttyOk, pending: pending.filter((x) => !live.has(x.name)).map((x) => ({ ...x, project: classify(null, { prompt: x.prompt, cwd: x.cwd, home: HOME, pin: pinOf(x.name) }) })), home: HOME, notices, providers: providers(),
         archived: Object.values(archive.items).filter((x) => x.state !== 'restoring').length, lost, stallMs: STALL_MS, sandbox: SANDBOX };
       notices = [];
       return reply(res, 200, out);
@@ -1384,5 +1409,5 @@ server.listen(PORT, '127.0.0.1', () => {
   for (const [sid, it] of Object.entries(archive.items)) if (it.state === 'archiving') scheduleStop(sid);   // 上次没来得及停的，接着办
   purgeDeleted(); purgeUploads(); setInterval(() => { purgeDeleted(); purgeUploads(); }, 12 * 3600 * 1000);
   if (CONFIG.codex) findCodex();
-  fastLoop(); slowLoop();
+  fastLoop(); slowLoop(); suggestLoop();
 });
