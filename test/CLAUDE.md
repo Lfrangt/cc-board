@@ -16,6 +16,7 @@ browser.mjs: 静音无头 Chromium 的唯一入口（`playwright-core` + 三个�
 
 - 五个脚本都不碰真实的 `~/.claude` 和真实的 tmux。输入框预判那一段用自己的假终端窗格，不读真实会话的屏幕。假主目录让服务自认是试验场。
 - 只停自己记下进程号的进程。
+- state.test.mjs 被杀（SIGTERM / Ctrl-C）时也收尾：关这次测试自己的 tmux（kill-server 带它自己的 TMUX_TMPDIR）、停它起的进程、删两个临时目录，再以 143 / 130 退出。以前只在 finally 里收，被杀时 finally 不跑，留下过 4 个 tmux 和 138 个进程。`--keep` 照旧什么都留着。
 - tmux 的临时目录放在 `/tmp/ccb-tmux-*`（短路径），不放进仓库里的 `.tmp`：tmux 的套接字路径不能超过约 104 字节，仓库克隆在深目录里时会整批失败（21 项）。
 - 改了 server.mjs 里被 mutants.mjs 引用的那几行，要同步改 mutants.mjs 里的原文（11/13 改 config 的返回行时 `config-ignored` 的原文也要跟着改，不改的话 mutants.mjs 一启动就报错）。
 - 写断言先问「把规则改坏，这条断言还会过吗」：「日志里有一行 keep」在重入守卫被拿掉时照样过（那个会话记了两行，一行 keep 一行 drop），所以断言写成「恰好一行、而且是 keep」。写完断言就造对应的改坏版，不等审查来问。

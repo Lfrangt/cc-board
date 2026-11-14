@@ -128,6 +128,16 @@ const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmu
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
 const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
+// 被杀（SIGTERM / Ctrl-C）时 finally 不跑：这里做同样的收尾，不然这次测试的 tmux 服务、假会话进程和两个临时目录会一直留着（11/13 一次被杀的改坏对照留下 4 个 tmux 和 138 个进程）。
+// kill-server 带的是这次测试自己的 TMUX_TMPDIR（env），碰不到真总控台的 -L ccboard。--keep 是故意留着，不管
+let cleaned = false;
+function cleanupNow() {
+  if (cleaned) return; cleaned = true;
+  try { if (TMUX_BIN) spawnSync(TMUX_BIN, ['-L', 'ccboard', 'kill-server'], { env, stdio: 'ignore' }); } catch {}
+  for (const p of kids) { try { process.kill(p, 'SIGTERM'); } catch {} }
+  for (const d of [ROOT, TMUXDIR]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+}
+if (!KEEP) for (const [sig, code] of [['SIGTERM', 143], ['SIGINT', 130]]) process.on(sig, () => { cleanupNow(); process.exit(code); });
 delete env.CCBOARD_DATA; delete env.CCBOARD_READONLY;
 // ── config.json：示例项目表（test/fixture-config.json），两个开关都打开。最后一段 [8] 换成写坏的 config 重启，看默认值 ──
 const DATA0 = path.join(FH, 'Library/Application Support/cc-board'); fs.mkdirSync(DATA0, { recursive: true });
