@@ -172,7 +172,12 @@ body:not(.grouped) .chead .proj,body.wall .chead .proj{display:none}
 /* 卡片 */
 .card{background:var(--surface);border-radius:var(--r-card);display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative}
 .card[hidden]{display:none}
-.chead{display:flex;align-items:center;gap:8px;padding:12px 10px 0 16px;min-height:36px}
+.card{container-type:inline-size}
+.chead{display:flex;align-items:center;gap:8px;padding:12px 10px 0 16px;min-height:36px;flex-wrap:wrap;row-gap:6px}
+/* 卡头放不下（11/13 Khalil「修吧」）：墙上的窄卡（1520 px 宽的窗口里约 356 px）里，药丸 + 审完了 + 去终端 + 归档 + 放大看排不下，按钮被切掉、点不到。
+   卡窄于 540 px 时（英文带字的按钮排一行要约 523 px）「去终端」「归档」只留图标，名字还在 title / aria-label 里，间距和「审完了」的内边距也收一点；
+   再放不下就换行（上面的 flex-wrap），宁可多一行也不切掉。用容器查询而不是窗口宽度：同一个窗口里墙的卡窄、封面的卡宽，只有量卡自己分得出来 */
+@container (max-width:540px){.chead{gap:6px}.chead .grow{min-width:0}.chead .done{padding:0 8px}.chead .go{width:24px;padding:0;justify-content:center}.chead .go>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .grow{flex:1;min-width:8px}
 /* 状态标志在左上角：一个符号 + 字。琥珀色 = 要你动手（等你选 / 停住了 / 待跟进），青色 = 交付了等你审、在跑，灰色 = 处理过 / 空闲 */
 .meta{display:flex;align-items:center;gap:6px;height:22px;padding:0;border-radius:var(--r-pill);font-size:12px;font-weight:600;white-space:nowrap;flex:none;color:var(--text-2)}
@@ -403,7 +408,7 @@ const EN = {
   '还没有归档的会话。': 'Nothing archived yet.', '在卡片右上角的菜单里选「归档」。': 'Use the ⋯ menu on a card to archive it.', '这一轮还没有交付': 'No delivery in this turn yet',
   '加附件': 'Attach', '去掉': 'Remove', '选要发给它的文件': 'Choose files to send', '一次最多 10 个附件': 'Up to 10 attachments at a time', '附件没传上去': 'Attachment upload failed',
   '加图片或文件，也可以直接粘贴或拖进来': 'Attach images or files. You can also paste or drop them.', '没有内容': 'Nothing to send',
-  '运行中': 'Running', '额度用完': 'out of quota', '登录过期': 'login expired', '被安全检查拦了': 'blocked by safeguards', '报错': 'error', '被打断': 'interrupted', '没做完': 'unfinished', '没动静': 'no activity', '进程退出': 'process exited',
+  '运行中': 'Running', '额度用完': 'out of quota', '登录过期': 'login expired', '被安全检查拦了': 'safety block', '报错': 'error', '被打断': 'interrupted', '没做完': 'unfinished', '没动静': 'no activity', '进程退出': 'process exited',
   '去终端看': 'Open in terminal', '先不管': 'Dismiss', '知道了': 'Got it', '接回来': 'Resume', '它最后说的是': 'Its last line:',
   '额度用完了，它停在这里。额度恢复后回它一句「继续」。': 'Out of quota, so it stopped here. Once the quota is back, reply “continue”.',
   '登录过期了，它停在这里。去终端里输入 /login，再回它一句「继续」。': 'The login expired, so it stopped here. Run /login in the terminal, then reply “continue”.',
@@ -466,6 +471,7 @@ const sentAt = {};                         // 刚回车发出去的：先当它�
 
 const ICON = {
   term: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4 5.5 7l-3 3M7.5 10.5h4"/></svg>',
+  archive: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5h10v2.5H2zM3 6v5.5h8V6M5.75 8.25h2.5"/></svg>',
   open: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5H11.5V5.5M11.5 2.5 8 6M5.5 11.5H2.5V8.5M2.5 11.5 6 8"/></svg>',
   more: '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/><circle cx="11" cy="7" r="1.2"/></svg>',
   send: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11.5V2.5M3 6.5l4-4 4 4"/></svg>',
@@ -538,9 +544,9 @@ function md(src) {
 // ── 时间 ──
 const p2 = (n) => String(n).padStart(2, '0');
 const hm = (t) => { if (!t) return ''; const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()); };
-function when(t, now) {
+function when(t, now, pill) {            // pill：卡片右上角的药丸里，英文去掉 ago（窄卡里省 30 px），中文照旧
   if (!t) return ''; const ms = typeof t === 'number' ? t : Date.parse(t), s = Math.max(0, (now - ms) / 1000);
-  if (s < 90) return LANG === 'en' ? 'just now' : '刚刚'; if (s < 3600) return Math.round(s / 60) + (LANG === 'en' ? ' min ago' : ' 分钟前');
+  if (s < 90) return LANG === 'en' ? 'just now' : '刚刚'; if (s < 3600) return Math.round(s / 60) + (LANG === 'en' ? (pill ? ' min' : ' min ago') : ' 分钟前');
   const d = new Date(ms), today = new Date(now).toDateString() === d.toDateString();
   return (today ? '' : (d.getMonth() + 1) + '/' + d.getDate() + ' ') + hm(ms);
 }
@@ -669,8 +675,8 @@ function makeCard(sid) {
   const el = document.createElement('article'); el.className = 'card'; el.dataset.sid = sid;
   el.innerHTML = L('<div class="chead"><span class="meta num"></span><span class="tag" hidden></span><span class="proj"></span><span class="grow"></span>' +
     '<button class="done" data-act="done" hidden title="只有点这里、或回它一句，才算处理过"></button>' +
-    '<button class="go" data-act="focus" title="去终端">' + ICON.term + '<span>去终端</span></button>' +
-    '<button class="go" data-act="archive" title="归档：没留下东西的删掉，其余留着、能接回来"><span>归档</span></button>' +
+    '<button class="go" data-act="focus" aria-label="去终端" title="去终端">' + ICON.term + '<span>去终端</span></button>' +
+    '<button class="go" data-act="archive" aria-label="归档" title="归档：没留下东西的删掉，其余留着、能接回来">' + ICON.archive + '<span>归档</span></button>' +
     '<button class="ib" data-act="detail" aria-label="看对话" title="放大看（双击封面 / ⌘O）">' + ICON.open + '</button></div>' +
     '<h2 class="title" title="双击放大（⌘O）"></h2><p class="head"></p><p class="ask" hidden></p>' +
     '<p class="you"></p><div class="body"></div>' +
@@ -920,7 +926,7 @@ function paint(st) {
     const tt = $('.title', el); if (tt.textContent !== s.title) tt.textContent = s.title;
     const tg = $('.tag', el); const tgv = s.provider === 'codex' ? 'Codex' : ''; if (tg.textContent !== tgv) { tg.textContent = tgv; tg.hidden = !tgv; }
     const mt = T(v.bg ? '后台在跑 · ' + dur(s.statusAt || s.resultAt, st.now) : v.k === 'busy' ? (v.why === 'stall' ? '运行中 · ' + Math.round((s.quiet || 0) / 60000) + ' 分钟没动静' : '运行中 · ' + dur(s.turnAt || s.promptAt, st.now))
-      : v.k === 'stopped' ? '停住了 · ' + WHY[v.why] : v.k === 'done' ? v.label + ' · ' + when(s.resultAt, st.now) : v.label);
+      : v.k === 'stopped' ? '停住了 · ' + WHY[v.why] : v.k === 'done' ? v.label + ' · ' + when(s.resultAt, st.now, true) : v.label);
     const me = $('.meta', el); if (me.textContent !== mt) me.textContent = mt;
     const you = $('.you', el); const yk = s.prompt || '';
     if (you.dataset.k !== yk) { you.dataset.k = yk; you.innerHTML = '<span class="who">' + T('你') + '</span>' + (s.prompt ? esc(cut(s.prompt, 400)) : T('还没给它派过活')); }

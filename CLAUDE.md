@@ -57,6 +57,7 @@ Khalil 11/12 的原话：「已看这个 tag 打得非常没有用……你要�
 
 - 每张卡上半截是「封面」：左上角状态药丸（符号 + 字）→ 标题（宽屏 31px）→ 一句结论（20px）→ 要你做的事（琥珀色框，前面一个 ↩）→ 你说的话（一行）→ 正文（15px，一行最多 40 个字）。
 - 卡片右上角一直有「去终端」按钮（11/13 Khalil：「每次还要点菜单不方便」），和正文里的「去终端看」走同一个 `data-act="focus"` → `goTerminal()`；「⋯」菜单里只剩归档 / 删除。「进程退出」和「启动中」的卡片用自己的模板，没有这个按钮。
+- 卡头放不下时（11/13 Khalil「修吧」）：`.card` 是容器（`container-type:inline-size`），卡窄于 540 px（墙上 8 格的卡约 356–456 px；英文带字的按钮排一行要约 523 px）时「去终端」「归档」只留图标，名字留在 aria-label / title，间距和「审完了」的内边距收一点；还放不下就换行（`flex-wrap`），不切掉。英文药丸里交付时间去掉 ago（`when(…, pill)`），「被安全检查拦了」的英文药丸是 `safety block`。中文药丸不变。用容器查询不用窗口宽度：同一个窗口里墙的卡窄、封面的卡宽。
 - 颜色只给状态：青 = 交付了 / 在跑，琥珀 = 要你动手，灰 = 处理过 / 空闲。按会话上色试过，他否了（11/12：「没什么质感，很 low」）；质感靠灰阶、细边和顶上一道光。
 - 两边紧挨着的两张不糊、不压在中间那张上（窗口不够宽就缩小，最小 0.46 倍），只把正文淡到 0.28；隔一张以上的才模糊。底下一排点代替页码，一张卡一个点。
 - 正文里直接贴的网址、写在反引号里的网址都变成链接（新窗口打开）。原生外壳把新窗口和外站的链接都交给默认浏览器，所以点了是在浏览器里开，不会把总控台本身换掉。
@@ -223,7 +224,7 @@ node test/suggest.test.mjs               # 输入框预判的解析 28 项，不
 node test/state.test.mjs                 # 服务端 113 项，约 200 秒
 node test/mutants.mjs                    # 58 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 119 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 128 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

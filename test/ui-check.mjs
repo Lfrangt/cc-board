@@ -200,7 +200,7 @@ try {
   console.log('\n[墙 · 英文] 顶栏：' + s.segs.join(' | '));
   for (const [n, v] of Object.entries(s.cards)) console.log('   ' + n.padEnd(9) + v.meta);
   ok(/^Background task · /.test(s.cards.bg.meta), '英文：后台在跑也是英文', s.cards.bg.meta);
-  ok(/^Running · /.test(s.cards.run.meta) && s.cards.limit.meta === 'Stopped · out of quota' && s.cards.flag.meta === 'Stopped · blocked by safeguards' && s.cards.flag.head === "Blocked by the model's safeguards, so it stopped here." && s.cards.gone.meta === 'Stopped · process exited' && /^Running · no activity for \d+ min$/.test(s.cards.stall.meta), '英文：右上角的标志是英文', s.cards.run.meta + ' | ' + s.cards.limit.meta + ' | ' + s.cards.stall.meta);
+  ok(/^Running · /.test(s.cards.run.meta) && s.cards.limit.meta === 'Stopped · out of quota' && s.cards.flag.meta === 'Stopped · safety block' && s.cards.flag.head === "Blocked by the model's safeguards, so it stopped here." && s.cards.gone.meta === 'Stopped · process exited' && /^Running · no activity for \d+ min$/.test(s.cards.stall.meta), '英文：右上角的标志是英文', s.cards.run.meta + ' | ' + s.cards.limit.meta + ' | ' + s.cards.stall.meta);
   const zh = await page.evaluate(() => { const bad = []; for (const el of document.querySelectorAll('.meta,.why,.next,.lbl,.body button,.chead .done,#filters button,.pager,.reply textarea,.ghead')) { const t = (el.textContent || '') + ' ' + (el.getAttribute('placeholder') || ''); if (/[一-鿿]/.test(t)) bad.push(t.trim().slice(0, 40)); } return bad; });
   ok(zh.length === 0, '英文：标志、原因、按钮、顶栏里没有漏翻的中文', zh.join(' | '));
   await page.screenshot({ path: path.join(OUT, 'wall-dark-en.png') }); await ctx.close();
@@ -348,6 +348,48 @@ try {
       const fr2 = await page.evaluate((sid) => { const c = document.querySelector('.card[data-sid="' + sid + '"]'); const sg = c.querySelector('.sg'), rp = c.querySelector('.reply'); return { side: c.classList.contains('side'), sg: sg.hidden ? null : sg.getBoundingClientRect().height, above: sg.getBoundingClientRect().bottom <= rp.getBoundingClientRect().top + 1 }; }, FX.sids.done);
       ok(!fr2.side && fr2.sg > 40 && fr2.above, `封面（${scheme}）：翻到这张后三条在输入框上面、不压住它`, JSON.stringify({ front, fr2 })); await page.screenshot({ path: path.join(OUT, `suggest-flow-${scheme}.png`) }); }
     ok(errs.length === 0, `封面（${scheme}）预判：页面没有报错`, errs.join(' | ')); await ctx.close();
+  }
+  // ── 卡片头部不溢出（11/13 Khalil「修吧」）：墙上的窄卡里药丸 + 按钮排不下，按钮被切掉、点不到（英文 1520 px 时 31 张里 30 张）。
+  //    中英文 × 三种窗口宽：每张看得见的卡，卡头都放得下（scrollWidth ≤ clientWidth），卡头里的按钮都在卡内、都有名字（字或 aria-label）──
+  for (const lang of ['zh', 'en']) for (const w of [1440, 1520, 1728]) {
+    const c4 = await browser.newContext({ viewport: { width: w, height: 900 }, colorScheme: 'dark' });
+    await c4.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('wall')); } catch (e) {} });
+    const pg = await c4.newPage(); await pg.goto(FX.url + '&lang=' + lang); await pg.waitForSelector('.card'); await sleep(2200);
+    const r = await pg.evaluate(() => { const out = { n: 0, over: [], outside: [], noName: 0, iconOnly: 0, wrapped: [] };
+      for (const el of document.querySelectorAll('.card')) { if (el.hidden || !el.offsetWidth) continue; out.n++;
+        const h = el.querySelector('.chead'), cr = el.getBoundingClientRect();
+        if (h.scrollWidth > h.clientWidth) out.over.push((el.querySelector('.meta') || {}).textContent + ' +' + (h.scrollWidth - h.clientWidth));
+        const tops = [...h.children].filter((x) => x.offsetWidth).map((x) => Math.round(x.getBoundingClientRect().top + x.getBoundingClientRect().height / 2));
+        if (Math.max(...tops) - Math.min(...tops) > 4) out.wrapped.push((el.querySelector('.meta') || {}).textContent);   // 换行只是兜底：这几种常见宽度下都该排在一行
+        for (const b of h.querySelectorAll('button')) { if (!b.offsetWidth) continue; const br = b.getBoundingClientRect();   // display:none 的（比如没交付时的「审完了」）不算
+          if (br.right > cr.right + 0.5 || br.left < cr.left - 0.5) out.outside.push(b.className + ':' + (b.getAttribute('aria-label') || b.textContent.trim()));
+          if (!(b.getAttribute('aria-label') || b.textContent.trim())) out.noName++;
+          if (b.classList.contains('go') && br.width <= 26) out.iconOnly++; } }
+      return out; });
+    ok(r.n > 0 && !r.over.length && !r.outside.length && !r.noName && !r.wrapped.length, lang + ' ' + w + ' px 墙：' + r.n + ' 张卡的卡头都排在一行、放得下，按钮都在卡内、都有名字（' + r.iconOnly + ' 个按钮收成了图标）', JSON.stringify({ over: r.over.slice(0, 4), outside: r.outside.slice(0, 4), noName: r.noName, wrapped: r.wrapped.slice(0, 4) }));
+    if (lang === 'en' && w === 1520) {      // 兜底：卡再窄（硬压到 260 px），图标也排不下时换行，不切掉
+      const z = await pg.evaluate(() => { let over = 0, outside = 0, n = 0;
+        for (const el of document.querySelectorAll('.card')) { if (el.hidden || !el.offsetWidth) continue; el.style.width = '260px'; el.style.maxWidth = '260px'; }
+        for (const el of document.querySelectorAll('.card')) { if (el.hidden || !el.offsetWidth) continue; n++; const h = el.querySelector('.chead'), cr = el.getBoundingClientRect();
+          if (h.scrollWidth > h.clientWidth) over++;
+          for (const b of h.querySelectorAll('button')) { if (!b.offsetWidth) continue; const br = b.getBoundingClientRect(); if (br.right > cr.right + 0.5) outside++; } }
+        return { n, over, outside }; });
+      ok(z.n > 0 && z.over === 0 && z.outside === 0, 'en 墙：卡硬压到 260 px 时卡头换行，不溢出、按钮不出卡', JSON.stringify(z));
+    }
+    await c4.close();
+  }
+  // 封面不变：最前面那张宽卡里「去终端」照旧带字，卡头也放得下
+  for (const lang of ['zh', 'en']) {
+    const c5 = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: 'dark' });
+    await c5.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('flow')); } catch (e) {} });
+    const pg = await c5.newPage(); await pg.goto(FX.url + '&lang=' + lang); await pg.waitForSelector('.card'); await sleep(2200);
+    // 两边的卡是用 transform 缩小的，量布局宽度（offsetWidth），不量缩小后的样子
+    const f = await pg.evaluate(() => { const rows = [...document.querySelectorAll('.card')].filter((x) => !x.hidden && x.offsetWidth).map((x) => {
+        const h = x.querySelector('.chead'), sp = h.querySelector('.go[data-act="focus"] > span');
+        return { over: h.scrollWidth - h.clientWidth, textW: sp ? sp.offsetWidth : null }; }).filter((r) => r.textW !== null);
+      return { n: rows.length, over: rows.filter((r) => r.over > 0).length, narrow: rows.filter((r) => r.textW <= 20).length }; });
+    ok(f.n > 0 && f.over === 0 && f.narrow === 0, lang + ' 封面：' + f.n + ' 张带「去终端」的卡都照旧带字，卡头放得下', JSON.stringify(f));
+    await c5.close();
   }
 } finally { await browser.close(); }
 console.log(`\n界面结果：${pass} 过，${fail} 没过；截图在 ${OUT}`);
