@@ -6,10 +6,9 @@ Delivered work comes up sharp and in front. Sessions still working sit blurred b
 > macOS (Apple Silicon) · Node 22, zero npm dependencies · MIT
 > Independent project. Not affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are Anthropic's trademarks.
 
-<p align="center">
-  <img src="docs/media/cc-board-preview.gif" width="720" alt="cc-board: the session that delivered comes up sharp and in front, sessions still working sit blurred behind">
-</p>
-<p align="center"><a href="docs/media/cc-board-launch.mp4">Download the 30-second launch video</a> (6 MB, with sound)</p>
+https://github.com/user-attachments/assets/7762fc75-473b-4fbf-aecc-2832c3b4d52b
+
+<sub>The video was recorded on an earlier build of the UI, before stop-reason pills, project columns, zoom, archive and next-step suggestions. [Download it](docs/media/cc-board-launch.mp4) (6 MB, with sound).</sub>
 
 ## The problem
 
