@@ -219,6 +219,53 @@ try {
   ok(opened && opened.path === '~/Desktop/总控台_封面新版/', '点路径：交给服务的 /api/open（打开还是只在访达里选中由服务定）', JSON.stringify(opened));
   ok(errs.length === 0, '点路径：页面没有报错', errs.join(' | ')); await ctx.close();
 
+  // 内置预览（11/15 Khalil：「点 HTML 还要到浏览器里……做一个内置的预览功能」）：.html 路径在总控台里开，⌘ 点照旧去浏览器
+  const PVD = path.join(FX.home, 'Desktop', 'pv'); fs.mkdirSync(path.join(PVD, 'sub'), { recursive: true });
+  fs.writeFileSync(path.join(PVD, 'page.html'), '<!doctype html><link rel="stylesheet" href="sub/s.css"><h1>preview ok</h1><script>localStorage.setItem("k", "v")</script>');
+  fs.writeFileSync(path.join(PVD, 'sub', 's.css'), 'h1{color:rgb(255,0,0)}');
+  for (const lang of ['zh', 'en']) {
+    ({ ctx, page, errs } = await open({ mode: 'wall', lang }));
+    let asked = null, opened2 = null;
+    await page.route('**/api/preview', async (route) => { asked = JSON.parse(route.request().postData() || '{}'); await route.continue({ postData: JSON.stringify({ path: path.join(PVD, 'page.html') }) }); });   // 夹具里那条路径换成真实存在的页面，走真的预览端口
+    await page.route('**/api/open', async (route) => { opened2 = JSON.parse(route.request().postData() || '{}'); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, action: 'open' }) }); });
+    const htmlLink = `.card[data-sid="${FX.sids.links}"] .body [data-path$=".html"]`;
+    await page.evaluate((sel) => document.querySelector(sel).click(), htmlLink);
+    await page.waitForFunction(() => document.querySelector('#pWait').hidden, null, { timeout: 5000 }).catch(() => {});
+    const pv = await page.evaluate(() => { const d = document.querySelector('#preview'), r = d.getBoundingClientRect(), f = document.querySelector('#pFrame');
+      return { open: d.open, name: document.querySelector('#pTitle').textContent, dir: document.querySelector('#pDir').textContent, src: f.src, w: Math.round(r.width), h: Math.round(r.height), vw: innerWidth, vh: innerHeight,
+        head: [...document.querySelectorAll('#preview .dhead button')].map((b) => b.textContent.trim() || b.getAttribute('aria-label')).join('|') }; });
+    const fr = page.frames().find((x) => /\/page\.html$/.test(x.url()));
+    const inner = fr ? await fr.evaluate(async (probe) => {
+      let parentRead = 'read'; try { void parent.document.title; } catch { parentRead = 'blocked'; }
+      let api = 'skipped'; if (probe) try { const r = await fetch(location.origin.replace(/:(\d+)$/, (m, n) => ':' + (n - 1000)) + '/api/state'); api = 'status ' + r.status; } catch { api = 'blocked'; }
+      return { text: document.querySelector('h1').textContent, color: getComputedStyle(document.querySelector('h1')).color, ls: localStorage.getItem('k'), parentRead, api, origin: location.origin };
+    }, lang === 'zh') : null;   // 只在中文那遍探 /api：浏览器会为被拦的请求打两行报错，下面「没有报错」要把这两行认出来扣掉
+    const boardPort = Number(new URL(FX.url).port);
+    if (lang === 'zh') {
+      ok(asked && asked.path === '/Users/khalil/Desktop/x y.html' && !opened2, '预览：点正文里的 .html 路径 → 问服务要预览网址，不再交给浏览器', JSON.stringify([asked, opened2]));
+      ok(pv.open && pv.name === 'page.html' && pv.dir === '~/Desktop/pv' && Number(new URL(pv.src).port) === boardPort + 1000 && pv.w >= pv.vw - 40 && pv.h >= pv.vh - 40, '预览：几乎占满窗口，顶栏写文件名和 ~ 开头的文件夹，页面在另一个端口', JSON.stringify(pv));
+      ok(inner && inner.text === 'preview ok' && inner.color === 'rgb(255, 0, 0)' && inner.ls === 'v', '预览：页面、它子文件夹里的 CSS、localStorage 都正常（不是被沙盒的空源）', JSON.stringify(inner));
+      ok(inner && inner.parentRead === 'blocked' && (inner.api === 'blocked' || /^status 4/.test(inner.api)), '预览：页面里的脚本读不到总控台的页面，也调不通 /api', JSON.stringify(inner));
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('#preview')).opacity === '1', null, { timeout: 3000 }).catch(() => {});   // 弹层淡入约 0.2 秒，截在中途会是半透明的
+      await page.screenshot({ path: path.join(OUT, 'preview-dark.png') });
+      await page.keyboard.press('Escape'); await sleep(400);
+      const closed = await page.evaluate(() => ({ open: document.querySelector('#preview').open, src: document.querySelector('#pFrame').getAttribute('src') }));
+      ok(!closed.open && closed.src === 'about:blank', '预览：Esc 关掉，页面跟着卸载（音视频不在背后接着放）', JSON.stringify(closed));
+      await page.evaluate((sel) => document.querySelector(sel).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })), htmlLink); await sleep(300);
+      ok(opened2 && opened2.path === '/Users/khalil/Desktop/x y.html' && !(await page.evaluate(() => document.querySelector('#preview').open)), '预览：⌘ 点同一条路径 → 照旧交给 /api/open（默认浏览器）', JSON.stringify(opened2));
+      opened2 = null; await page.unroute('**/api/preview');
+      await page.route('**/api/preview', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, reason: 'not-page', error: 'x' }) }));
+      await page.evaluate((sel) => document.querySelector(sel).click(), htmlLink); await sleep(300);
+      ok(opened2 && !(await page.evaluate(() => document.querySelector('#preview').open)), '预览：服务说它不是网页（比如叫 .html 的文件夹）→ 改走 /api/open', JSON.stringify(opened2));
+    } else {
+      const zhLeft = pv.head.match(/[一-鿿]+/g) || [];
+      ok(pv.open && zhLeft.length === 0 && /Open in browser/.test(pv.head), '预览（英文）：顶栏按钮都翻好了', pv.head);
+    }
+    const probeErr = (m) => m.includes("from origin 'http://127.0.0.1:" + (boardPort + 1000) + "' has been blocked by CORS") || m === 'Failed to load resource: net::ERR_FAILED';   // 上面故意探 /api 被拦的那两行
+    const realErrs = lang === 'zh' ? errs.filter((m) => !probeErr(m)) : errs;
+    ok(realErrs.length === 0 && (lang !== 'zh' || errs.length - realErrs.length <= 2), '预览（' + lang + '）：页面没有报错（中文那遍除了故意探 /api 被拦的两行）', errs.join(' | ')); await ctx.close();
+  }
+
   // 放大看：⌘O、双击封面；再按 ⌘O / 双击标题栏收回；双击正文里的字照旧选词（11/13 Khalil）
   ({ ctx, page, errs } = await open({ mode: 'wall' }));
   const dOpen = () => page.evaluate(() => ({ open: document.querySelector('#detail').open, title: document.querySelector('#dTitle').textContent }));

@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 ../server.mjs 的原文（按字符串精确替换造改坏版）和 ./state.test.mjs。分组规则本身（projects.mjs）的改坏对照不在这里，跑 projects.test.mjs --mutants
+ * [INPUT]: 依赖 ../server.mjs 和 ../preview.mjs 的原文（按字符串精确替换造改坏版）和 ./state.test.mjs。分组规则本身（projects.mjs）的改坏对照不在这里，跑 projects.test.mjs --mutants
  * [OUTPUT]: 每个改坏版变红了几条；有一个没变红就退出码 1
  * [POS]: test/ 的「测试自己靠不靠得住」检查：每次只改坏服务的一处规则，state.test.mjs 必须变红。
  *        改坏版仍带着试验场保护（不碰 Ghostty、不发通知）。要替换的原文在 server.mjs 里找不到或不唯一时直接报错，免得悄悄没改成。
@@ -8,12 +8,13 @@
 // 用法：node test/mutants.mjs        （全部改坏版，一次跑 4 个，约 7 分钟）；node test/mutants.mjs 名字,名字 只跑这几个
 import fs from 'node:fs'; import path from 'node:path'; import { spawn } from 'node:child_process';
 const HERE = path.dirname(new URL(import.meta.url).pathname); const TMP = path.join(HERE, '.tmp', 'mutants'); fs.mkdirSync(TMP, { recursive: true });
-const src = fs.readFileSync(path.join(HERE, '../server.mjs'), 'utf8');
+const SRC = Object.fromEntries(['server.mjs', 'preview.mjs'].map((f) => [f, fs.readFileSync(path.join(HERE, '..', f), 'utf8')]));
+const src = SRC['server.mjs'];
 const MUTANTS = {
   'tidy-keeps-all':      ["return { keep: false, why: '只聊了几句，没改过文件' };", "return { keep: true, why: '只聊了几句，没改过文件' };"],
   'tidy-drop-not-moved': ["    if (r.ok && cur.drop) { dropArchived(sid, cur); return; }", "    if (false) { dropArchived(sid, cur); return; }"],
   'open-scripts':        ["  return OPEN_EXT.has(ext) ? 'open' : 'reveal';", "  return 'open';"],
-  'open-any-origin':     ["const og = req.headers.origin; if (og && og !== 'http://127.0.0.1:' + PORT", "const og = ''; if (og && og !== 'http://127.0.0.1:' + PORT"],
+  'open-any-origin':     ["const og = req.headers.origin; return !og ||", "const og = req.headers.origin; return true ||"],
   'no-project-evidence': ["st.steps++; st.tool = toolLine(b); st.done = false; noteTool(st.files, b.input);", "st.steps++; st.tool = toolLine(b); st.done = false;"],
   'lost-no-project':     ["lostAt: x.lostAt, project: x.project || classify(null, { title: x.title, prompt: x.prompt, cwd: x.cwd, home: HOME }) }));", "lostAt: x.lostAt }));"],
   'api-error-ignored':   ["        if (d.isApiErrorMessage) {\n          const h = haltOf(d, m);", "        if (false) {\n          const h = haltOf(d, m);"],
@@ -79,15 +80,32 @@ const MUTANTS = {
   'bad-tier-opens-window': ["      if (!rt.ok) return reply(res, 200, rt);\n", ""],
   'route-not-in-reply':  ["return reply(res, 200, r.ok && rt.tier ? { ...r, route: { tier: rt.tier, model: rt.model, effort: rt.effort, why: rt.why } } : r);", "return reply(res, 200, r);"],
   'route-not-logged':    ["if (rt.tier) console.log(`route ${new Date().toISOString()}", "if (false) console.log(`route ${new Date().toISOString()}"],
+  // 内置预览：第三项是要改坏的文件（不写就是 server.mjs）
+  'preview-dotdirs':     ["if (parts.some((s) => !s || s.startsWith('.') ||", "if (parts.some((s) => !s || s === '..' ||", 'preview.mjs'],
+  'preview-symlink-out': ["    if (!inside(it.root, real)) return null;", "", 'preview.mjs'],
+  'preview-any-type':    ["const type = MIME[path.extname(real).slice(1).toLowerCase()];", "const type = MIME[path.extname(real).slice(1).toLowerCase()] || 'application/octet-stream';", 'preview.mjs'],
+  'preview-deep-home':   ["const shallow = inside(root, home) ||", "const shallow = false ||", 'preview.mjs'],
+  'preview-any-host':    ["if (req.headers.host !== '127.0.0.1:' + bound && req.headers.host !== 'localhost:' + bound) return nope(403);", "", 'preview.mjs'],
+  'preview-no-range':    ["if (m && (m[1] || m[2])) {", "if (false) {", 'preview.mjs'],
+  'preview-any-entry':   ["if (!st.isFile() || !PAGE_EXT.has(", "if (!st.isFile() || !String(", 'preview.mjs'],
+  'preview-new-url':     ["let id = byFile.get(real);", "let id = null;", 'preview.mjs'],
+  'preview-referrer':    ["'referrer-policy': 'no-referrer',", "", 'preview.mjs'],
 };
-for (const [name, [a]] of Object.entries(MUTANTS)) { const n = src.split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 server.mjs 里出现 ${n} 次（应当正好 1 次）`); }
+for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边
 fs.copyFileSync(path.join(HERE, '../suggest.mjs'), path.join(TMP, 'suggest.mjs'));     // 同理 import './suggest.mjs'
 fs.copyFileSync(path.join(HERE, '../limits.mjs'), path.join(TMP, 'limits.mjs'));       // 同理 import './limits.mjs'
 fs.copyFileSync(path.join(HERE, '../accounts.mjs'), path.join(TMP, 'accounts.mjs'));   // 同理 import './accounts.mjs'
 fs.copyFileSync(path.join(HERE, '../route.mjs'), path.join(TMP, 'route.mjs'));         // 同理 import './route.mjs'
-const run = ([name, [a, b]], i) => new Promise((resolve) => {
-  const file = path.join(TMP, name + '.mjs'); fs.writeFileSync(file, src.replace(a, b));
+fs.copyFileSync(path.join(HERE, '../preview.mjs'), path.join(TMP, 'preview.mjs'));     // 同理 import './preview.mjs'
+const run = ([name, [a, b, f = 'server.mjs']], i) => new Promise((resolve) => {
+  let file = path.join(TMP, name + '.mjs');
+  if (f === 'server.mjs') fs.writeFileSync(file, src.replace(a, b));
+  else {                                             // 改坏的是 server.mjs 引用的文件：单独一个文件夹，原样的 server.mjs 旁边放改坏的那份
+    const d = path.join(TMP, name); fs.mkdirSync(d, { recursive: true }); file = path.join(d, 'server.mjs'); fs.writeFileSync(file, src);
+    for (const g of ['projects.mjs', 'suggest.mjs', 'limits.mjs', 'accounts.mjs', 'route.mjs', 'preview.mjs']) fs.copyFileSync(path.join(TMP, g), path.join(d, g));
+    fs.writeFileSync(path.join(d, f), SRC[f].replace(a, b));
+  }
   let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(Number(process.env.M_PORT || 4770) + i) } });
   p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
   p.on('close', (code) => resolve({ name, code, red: out.split('\n').filter((l) => l.startsWith('  FAIL')), ran: /结果：\d+ 过/.test(out), tail: out.trim().split('\n').slice(-2).join(' / ') }));

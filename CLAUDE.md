@@ -13,15 +13,16 @@ docs/ - README 用的图和视频
 
 <config>
 server.mjs - 服务。读会话登记和对话记录，算出每个会话的状态，提供 /api。
-projects.mjs - 分组规则。按会话动过的文件夹和标题认出它属于哪个项目；项目表由 server.mjs 从 config.json 读出来交给 useRules()。server.mjs 引用它，所以上线时八个文件一起拷（server.mjs、ui.html、projects.mjs、suggest.mjs、limits.mjs、statusline-tap.mjs、accounts.mjs、route.mjs）。
+projects.mjs - 分组规则。按会话动过的文件夹和标题认出它属于哪个项目；项目表由 server.mjs 从 config.json 读出来交给 useRules()。server.mjs 引用它，所以上线时九个文件一起拷（server.mjs、ui.html、projects.mjs、suggest.mjs、limits.mjs、statusline-tap.mjs、accounts.mjs、route.mjs、preview.mjs）。
 route.mjs - 新窗口的档位（纯函数 `routeNew()`）：开窗口的一方在 /api/new 里说 `tier`（heavy / standard / light），这里翻成模型和强度；档位表是模型和强度的唯一出处。server.mjs 引用它，见「新窗口的模型和强度」一节。
 suggest.mjs - 输入框上的预判的解析器（纯函数 `parseSuggest()`）。从 tmux 屏幕文本里取灰字建议和「下一步 1/2/3」。server.mjs 引用它，见「输入框上的预判」一节。
 limits.mjs - 顶栏右上角的各订阅周额度。Codex 读 `~/.codex` 的 rollout 里 `token_count.rate_limits`，Claude 读 statusline-tap.mjs 存的取数文件，汇总成 `{ claude: [条目], codex: 条目 | null }`。server.mjs 引用它，见「订阅额度」一节。
 accounts.mjs - 新任务选账号。config.json 的 `accounts` 登记号，token 在钥匙串 `ccboard-account-<id>`；开会话时包一层 zsh 读出 token、设 `CLAUDE_CODE_OAUTH_TOKEN` 和 `CCBOARD_ACCOUNT` 再 exec claude。server.mjs 引用它，见「新任务」里的「选账号」。
 statusline-tap.mjs - 挂成 Claude Code 状态栏命令（settings.json 的 `statusLine`）的取数脚本：从状态栏 JSON 里只取走 `rate_limits` 存成文件，终端里顺手打一行 `5h 6% · 7d 1%`。和 limits.mjs 放在同一个目录（它 import limits.mjs 来定文件名）。
+preview.mjs - 内置预览的只读文件服务（`startPreview()`）。另一个端口，按随机编号只发一个文件夹里白名单类型的文件。server.mjs 引用它，见「内置预览」一节。
 <数据目录>/config.json - 本机设置（不在仓库里）：项目表、哪些文件夹算证据、自动点信任、Codex、自动收工。见下面「config.json」一节；测试用 test/fixture-config.json。
 ui.html - 界面。轮询 /api/state，画卡片。
-build.sh - `./build.sh update` 换界面和服务（server.mjs、ui.html、projects.mjs、suggest.mjs、limits.mjs、statusline-tap.mjs、accounts.mjs、route.mjs）；不带参数是重新编译安装。外壳（app/main.swift）只认 server.mjs 和 ui.html 在不在，不列旁边的文件，所以新增文件不用重新编译。
+build.sh - `./build.sh update` 换界面和服务（server.mjs、ui.html、projects.mjs、suggest.mjs、limits.mjs、statusline-tap.mjs、accounts.mjs、route.mjs、preview.mjs）；不带参数是重新编译安装。外壳（app/main.swift）只认 server.mjs 和 ui.html 在不在，不列旁边的文件，所以新增文件不用重新编译。
 README.md、CONTRIBUTING.md、LICENSE - 对外的英文文档和 MIT 许可。README 里写的每一句都要有代码依据。
 package.json - 只有测试用的 playwright-core；服务和界面本身零依赖。
 .github/workflows/ci.yml - macOS 上跑服务端测试和界面测试。
@@ -104,6 +105,19 @@ Khalil 11/12 18:30：「以后你把这些资料直接把链接给我，我可�
 - 点了交给服务的 `/api/open`，由服务决定（`openAction()`，按符号链接的真身判断）：普通文件夹在访达里打开；网页、图、音视频、PDF、文档、文本用默认程序打开；能执行的（`.app`、`.command`、`.sh`、`.py`…）、带扩展名的文件夹（程序包）、认不出的，只在访达里选中，界面提示一句。路径是模型写的，所以用白名单，不用黑名单。
 - 只接受带口令的请求，`Origin` 不是 `http://127.0.0.1:<端口>` 的拒绝（403）。试验场里只写 `open … dry:<动作> <路径>` 日志，不真打开。
 - `/api/reveal`（只在访达里选中）留着，界面已经不用它了。
+
+## 内置预览（11/15 khalil-6d）
+
+Khalil 11/15：「点击那个 HTML 的时候，我们还要到浏览器里。我想给我们这个总控台做一个内置的预览功能，这样就能更快速，不用点出去了。」
+
+- 正文里 `.html` / `.htm` 结尾的路径点了，界面先调 `POST /api/preview`；服务交给 `preview.mjs` 的 `register()`，回一个网址 `http://127.0.0.1:<主端口+1000>/<32 位随机编号>/<文件名>`。界面用几乎占满窗口的 `<dialog id="preview">` 里的 iframe 打开它。⌘ 点、顶栏「在浏览器打开」照旧走 `/api/open`。服务回 `reason: 'not-page'`（叫 x.html 的文件夹之类）时界面改走 `/api/open`。
+- 为什么另起一个端口：预览页是另一个源。页面里的脚本读不到总控台页面、口令和 localStorage；`/api/*` 要口令，`/api/open`、`/api/preview` 还查 `Origin`（`fromBoard()`），预览端口的 Origin 也算外人。没用 `<iframe sandbox>`：空源里 `localStorage` 一碰就抛错，讲解页、复习包这类页面会整段脚本停掉。
+- 编号就是钥匙。一个编号只开那个 HTML 所在的文件夹（按符号链接的真身）。只发 `MIME` 表里的类型；路径里有空段、`..`、点开头的段（`.git`、`.env`）一律 404；符号链接指到文件夹外面 404；文件夹本身不列目录。页面就在主目录或更上层（`/tmp` 这种顶层）时只发同一层的文件。同一个文件再点，编号不变；最多记 64 个，服务重启后全部作废（界面每次点都重新要）。
+- 响应头：`referrer-policy: no-referrer`（去外网取东西时不带出编号）、`cache-control: no-store`（改了文件点「重新载入」就是新的）。音视频按 `Range` 回 206：WebKit 的 `<video>` / `<audio>` 不回 206 就不播。预览端口查 `Host`（挡 DNS 重绑定），只认 GET / HEAD。
+- 端口：`CCBOARD_PREVIEW_PORT`，默认主端口 + 1000（真实例 5747，测试 5761、改坏版 5770+）。被占就让系统给一个空闲端口，日志里有 `preview … port … busy`。
+- 关掉弹层时 iframe 换成 `about:blank`：页面里的音视频、动画不在背后接着放。
+- 外壳（main.swift）只放行 `127.0.0.1` 的 http 导航，所以预览网址必须写 `127.0.0.1`，不能写 `localhost`（会被交给默认浏览器）。预览页里点外网链接、`target=_blank` 一样交给默认浏览器。
+- 没验到的：真应用窗口（WebKit）里只有我用测试推断的行为，测试跑的是 Chromium；焦点在 iframe 里时 Esc 传不到外面，要点 × 或点页面外面关。页面里嵌外网 iframe（YouTube 之类）时，外壳的导航策略会把它交给默认浏览器，预览里那一块是空的。
 
 ## 放大看、归档（11/13 khalil-96）
 
@@ -306,10 +320,10 @@ node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；
 node test/suggest.test.mjs               # 输入框预判的解析 28 项，不到 1 秒；--mutants 跑 8 个改坏版
 node test/limits.test.mjs                # 订阅额度的解析和状态栏取数脚本 37 项，不到 2 秒；--mutants 跑 16 个改坏版
 node test/route.test.mjs                 # 新窗口的档位 52 项，不到 1 秒；--mutants 跑 13 个改坏版
-node test/state.test.mjs                 # 服务端 136 项，约 200 秒
-node test/mutants.mjs                    # 67 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/state.test.mjs                 # 服务端 145 项，约 200 秒
+node test/mutants.mjs                    # 76 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 149 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 159 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

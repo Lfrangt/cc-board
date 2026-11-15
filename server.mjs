@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * [INPUT]: 依赖 ~/.claude/sessions 的会话登记（进程号、状态）、~/.claude/projects 和 ~/.codex/sessions 的对话记录（jsonl，只读）；
- *          依赖 tmux -L ccboard 和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 ./suggest.mjs 读输入框上的预判；依赖 ./limits.mjs 汇总各订阅的周额度；依赖 ./route.mjs 把 /api/new 里声明的档位 tier 翻成模型和强度；依赖 /usr/bin/open 打开正文里的路径（/api/open）
- * [OUTPUT]: 对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state、turns、send、new、archive、unarchive、delete、ack、answer…）
+ *          依赖 tmux -L ccboard 和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 ./suggest.mjs 读输入框上的预判；依赖 ./limits.mjs 汇总各订阅的周额度；依赖 ./route.mjs 把 /api/new 里声明的档位 tier 翻成模型和强度；依赖 /usr/bin/open 打开正文里的路径（/api/open）；依赖 ./preview.mjs 起内置预览的只读端口
+ * [OUTPUT]: 对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state、turns、send、new、archive、unarchive、delete、ack、answer、open、preview…）；
+ *           另起 preview.mjs 的只读预览端口（默认 4747 + 1000），/api/preview 给正文里的 HTML 发一个预览网址
  * [POS]: 总控台唯一的服务进程，由 app/main.swift 启动和重启，ui.html 只通过 /api 和它说话。
  *        它把每个会话压成四样：你问了什么 / 它在干嘛 / 它交付了什么 / 它为什么停了（alertOf 是「要不要你跟进」的唯一判断处）。
  *        读记录时把每次工具调用交给 noteTool 记证据，每轮用 classify 给会话、启动中、进程退出的卡片都标上 project。
@@ -31,10 +32,12 @@ import { codexLimits, claudeLimits, purgeTaps } from './limits.mjs';            
 import { noteTool, classify, pinnable, useRules } from './projects.mjs';
 import { routeNew } from './route.mjs';                                         // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数
 import { parseAccounts, accountState, wrapLaunch, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
+import { startPreview } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 
 const HOME = os.homedir();
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.CCBOARD_PORT || 4747);
+const PREVIEW_PORT = Number(process.env.CCBOARD_PREVIEW_PORT || PORT + 1000);   // 预览页的端口：另一个源，页面里的脚本碰不到总控台
 const SESS_DIR = path.join(HOME, '.claude/sessions');
 const PROJ_DIR = path.join(HOME, '.claude/projects');
 const DATA = process.env.CCBOARD_DATA || path.join(HOME, 'Library/Application Support/cc-board');
@@ -803,6 +806,13 @@ function openAction(p) {
   if (st.isDirectory()) return ext ? 'reveal' : 'open';
   return OPEN_EXT.has(ext) ? 'open' : 'reveal';
 }
+// 正文里点的路径（file://…、~/…、完整路径）→ 磁盘上的完整路径。/api/open 和 /api/preview 共用。
+function localPath(raw) {
+  let p = String(raw || '').trim();
+  if (/^file:\/\//i.test(p)) { try { p = decodeURIComponent(p.replace(/^file:\/\/(localhost)?/i, '')); } catch { return { error: '路径的编码不对' }; } }
+  p = p.replace(/^~(?=$|\/)/, HOME);
+  return path.isAbsolute(p) ? { p } : { error: '不是完整路径' };
+}
 function findSession(sid) { return sessions.find((s) => s.sid === sid); }
 
 async function waitDelivered(sid, text, since, files = []) {
@@ -1356,6 +1366,8 @@ function fastLoop() {
 
 // ───────────── HTTP ─────────────
 
+// 只接受总控台自己的页面发来的请求；预览页在另一个端口，也算外人。不带 Origin 的（curl、外壳）照旧靠口令
+function fromBoard(req) { const og = req.headers.origin; return !og || og === 'http://127.0.0.1:' + PORT || og === 'http://localhost:' + PORT; }
 function reply(res, code, body, type = 'application/json; charset=utf-8') {
   const data = typeof body === 'string' ? body : JSON.stringify(body);
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
@@ -1459,16 +1471,20 @@ const server = http.createServer(async (req, res) => {
       return reply(res, 200, r.ok && rt.tier ? { ...r, route: { tier: rt.tier, model: rt.model, effort: rt.effort, why: rt.why } } : r);   // 声明了档位才带 route：调用方看得到最后用了什么
     }
     if (u.pathname === '/api/open') {               // 正文里的本机路径被点了（11/12 Khalil：「把资料直接把链接给我，我可以直接点进去」）
-      const og = req.headers.origin; if (og && og !== 'http://127.0.0.1:' + PORT && og !== 'http://localhost:' + PORT) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
-      let p = String(body.path || '').trim();
-      if (/^file:\/\//i.test(p)) { try { p = decodeURIComponent(p.replace(/^file:\/\/(localhost)?/i, '')); } catch { return reply(res, 200, { ok: false, error: '路径的编码不对' }); } }
-      p = p.replace(/^~(?=$|\/)/, HOME);
-      if (!path.isAbsolute(p)) return reply(res, 200, { ok: false, error: '不是完整路径' });
+      if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
+      const { p, error } = localPath(body.path); if (error) return reply(res, 200, { ok: false, error });
       const action = openAction(p);
       if (!action) return reply(res, 200, { ok: false, error: '这个文件不在了：' + p });
       if (SANDBOX) { console.log(`open ${new Date().toISOString()} dry:${action} ${p}`); return reply(res, 200, { ok: true, action, dry: true }); }   // 试验场里只写日志，不真打开
       const r = await run('/usr/bin/open', action === 'open' ? [p] : ['-R', p]);
       return reply(res, 200, { ok: r.ok, action, error: r.err });
+    }
+    if (u.pathname === '/api/preview') {            // 正文里的 HTML 点了：在总控台里看（11/15 Khalil：「点 HTML 还要到浏览器里……做一个内置的预览功能」）
+      if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
+      const { p, error } = localPath(body.path); if (error) return reply(res, 200, { ok: false, error });
+      const r = preview.register(p);
+      if (r.ok) console.log(`preview ${new Date().toISOString()} ${r.dir}/${r.name}`);
+      return reply(res, 200, r.ok ? r : { ok: false, reason: r.error, error: r.error === 'missing' ? '这个文件不在了：' + p : r.error === 'not-ready' ? '预览还没准备好，过一秒再点' : '这个文件不能在这里预览' });   // reason 是 not-page 时界面改走 /api/open
     }
     if (u.pathname === '/api/reveal') {             // 只在访达里选中，不直接打开（路径是模型写的，不能当命令跑）
       let p = String(body.path || '').trim().replace(/^~(?=$|\/)/, HOME);
@@ -1502,6 +1518,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on('error', (e) => { console.error('listen', e.message); process.exit(1); });
+const preview = startPreview({ port: PREVIEW_PORT, home: HOME, log: (m) => console.log(`preview ${new Date().toISOString()} ${m}`) });
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`cc-board ${new Date().toISOString()} http://127.0.0.1:${PORT}/?k=${TOKEN} pid=${process.pid}`);
   for (const [sid, it] of Object.entries(archive.items)) if (it.state === 'archiving') scheduleStop(sid);   // 上次没来得及停的，接着办

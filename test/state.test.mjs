@@ -1,13 +1,13 @@
 /**
  * [INPUT]: 依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
- * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 「归档」自己定删还是留；
+ * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口）/ 「归档」自己定删还是留；
  *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
  *        完全隔离：假的主目录、自己的端口、自己的 tmux 目录，服务因此自认是试验场（不碰 Ghostty、不发系统通知）。收尾只按记下的进程号停。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 // 用法：node test/state.test.mjs [server.mjs 的路径] [--ui]      端口用 T_PORT 改（默认 4761）
-import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os';
+import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
@@ -188,7 +188,7 @@ try {
     // 等服务真的把它挂出来再说「好了」：服务要连着几轮看不到进程才认（约 6 秒），慢机器（CI）上更久。不能让 ui-check 靠固定的等待去赌
     let lostUp = false; for (let i = 0; i < 150 && !lostUp; i++) { await sleep(200); try { lostUp = ((await get('/api/state')).lost || []).length === 1; } catch {} }
     if (!lostUp) { console.log('UI fixture FAILED: 30 秒内「进程退出」的卡片没出现'); throw new Error('ui-fixture-not-ready'); }
-    fs.writeFileSync(path.join(HERE, '.tmp', 'ui-fixture.json'), JSON.stringify({ url: 'http://127.0.0.1:' + PORT + '/?k=' + TOKEN, pid: process.pid, sids: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v.sid])) }));
+    fs.writeFileSync(path.join(HERE, '.tmp', 'ui-fixture.json'), JSON.stringify({ url: 'http://127.0.0.1:' + PORT + '/?k=' + TOKEN, home: FH, pid: process.pid, sids: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v.sid])) }));
     console.log('UI fixture ready pid=' + process.pid);
     await new Promise((resolve) => { process.on('SIGTERM', resolve); process.on('SIGINT', resolve); setTimeout(resolve, Number(process.env.T_UI_SECONDS || 600) * 1000); });
     throw new Error('ui-fixture-done');
@@ -228,6 +228,40 @@ try {
   ok(!o6.ok && !o7.ok && /dry:open .*资料 夹/.test(log()) && !/dry:open .*run\.sh/.test(log()), 'open: 不存在的、不是完整路径的不动；日志里打开的只有该打开的', JSON.stringify([o6, o7]));
   const bad = await fetch('http://127.0.0.1:' + PORT + '/api/open', { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://evil.example' }, body: JSON.stringify({ path: OD }) });
   ok(bad.status === 403, 'open: Origin 不是总控台自己的页面 → 拒绝', String(bad.status));
+
+
+  // 内置预览（/api/preview + 预览端口）：HTML 拿到一个另一个端口上的网址；只发那个文件夹里白名单类型的文件
+  // 路径原样发出去：URL() 会先把 %2E%2E 解成 ..，就测不到服务自己的防护
+  const raw = (url, { method = 'GET', headers = {} } = {}) => new Promise((resolve) => {
+    const u = /^http:\/\/([^/:]+):(\d+)(\/.*)?$/.exec(url) || []; const rq = http.request({ host: u[1], port: u[2], path: u[3] || '/', method, headers }, (rs) => { const b = []; rs.on('data', (c) => b.push(c)); rs.on('end', () => resolve({ code: rs.statusCode, h: rs.headers, body: Buffer.concat(b).toString('utf8') })); });
+    rq.on('error', () => resolve({ code: 0, h: {}, body: '' })); rq.end();
+  });
+  fs.mkdirSync(path.join(OD, 'img'), { recursive: true }); fs.mkdirSync(path.join(OD, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(OD, 'img', 'a.css'), 'h1{}'); fs.writeFileSync(path.join(OD, '.git', 'config.css'), 'x'); fs.writeFileSync(path.join(OD, 'clip.mp4'), Buffer.alloc(3000, 7));
+  fs.writeFileSync(path.join(FH, 'secret.css'), 'secret'); fs.symlinkSync(path.join(FH, 'secret.css'), path.join(OD, 'out.css'));
+  fs.writeFileSync(path.join(FH, 'top.html'), '<p>top</p>'); fs.writeFileSync(path.join(FH, 'top.css'), 'x'); fs.mkdirSync(path.join(FH, 'notes'), { recursive: true }); fs.writeFileSync(path.join(FH, 'notes', 'n.css'), 'x');
+  const pv = async (p) => (await post('/api/preview', { path: p })).body;
+  const v1 = await pv('file://' + encodeURI(path.join(OD, '讲解.html'))), v1b = await pv('~/Desktop/资料 夹/讲解.html');
+  const pu = (r) => new URL(r.url || 'http://x/');
+  ok(v1.ok && pu(v1).hostname === '127.0.0.1' && Number(pu(v1).port) === PORT + 1000 && v1.name === '讲解.html' && v1b.url === v1.url, 'preview: HTML（中文 + 空格的文件夹、file:// 百分号编码）→ 另一个端口上的网址；同一个文件再点网址不变', JSON.stringify([v1, v1b]));
+  const B = (v1.url || '').replace(/\/[^/]*$/, '');
+  const g1 = await raw(v1.url || 'http://127.0.0.1:1/'), g2 = await raw(B + '/img/a.css');
+  ok(g1.code === 200 && /^text\/html/.test(g1.h['content-type'] || '') && g1.body === '<p>x</p>' && g1.h['referrer-policy'] === 'no-referrer' && g2.code === 200 && /^text\/css/.test(g2.h['content-type'] || ''), 'preview: 页面本身和它子文件夹里的 CSS 都能取，类型对，不带 Referer 出去', [g1.code, g1.h['content-type'], g1.h['referrer-policy'], g2.code].join(' '));
+  const deny = await Promise.all(['/.git/config.css', '/run.sh', '/out.css', '/%2E%2E/secret.css', '/..%2Fsecret.css', '/img/', '/img'].map(async (t) => (await raw(B + t)).code));
+  ok(deny.every((c) => c === 404), 'preview: 点开头的文件夹、不在白名单的类型、指到外面的符号链接、..、文件夹本身 → 一律 404', deny.join(','));
+  const r206 = await raw(B + '/clip.mp4', { headers: { range: 'bytes=0-1' } }), rFull = await raw(B + '/clip.mp4');
+  ok(r206.code === 206 && r206.h['content-range'] === 'bytes 0-1/3000' && r206.body.length === 2 && rFull.code === 200 && rFull.h['content-length'] === '3000', 'preview: 视频按段取回 206（WebKit 的 <video> 要这个才播）', r206.code + ' ' + r206.h['content-range'] + ' / ' + rFull.code);
+  const hostBad = await raw(v1.url || 'http://127.0.0.1:1/', { headers: { host: 'evil.example:' + (PORT + 1000) } }), postBad = await raw(v1.url || 'http://127.0.0.1:1/', { method: 'POST' }), idBad = await raw('http://127.0.0.1:' + (PORT + 1000) + '/' + '0'.repeat(32) + '/' + encodeURIComponent('讲解.html'));
+  ok(hostBad.code === 403 && postBad.code === 405 && idBad.code === 404, 'preview: 别的 Host（DNS 重绑定）403、POST 405、编号不对 404', [hostBad.code, postBad.code, idBad.code].join(','));
+  const vTop = await pv('~/top.html'), TB = (vTop.url || '').replace(/\/[^/]*$/, '');
+  const shallow = [(await raw(TB + '/top.css')).code, (await raw(TB + '/notes/n.css')).code];
+  ok(vTop.ok && shallow[0] === 200 && shallow[1] === 404, 'preview: 页面就在主目录里时只发同一层的文件，不往下钻', JSON.stringify(vTop) + ' ' + shallow.join(','));
+  const q1 = await pv(path.join(OD, 'run.sh')), q2 = await pv(OD), q3 = await pv('~/Desktop/没有.html'), q4 = await pv('Desktop/x.html');
+  ok(q1.reason === 'not-page' && q2.reason === 'not-page' && q3.reason === 'missing' && !q4.ok && !q1.url, 'preview: 不是网页的（脚本、文件夹）回 not-page 让界面改走 open；不存在的、不是完整路径的不给网址', JSON.stringify([q1, q2, q3, q4]));
+  const pBad = await fetch('http://127.0.0.1:' + PORT + '/api/preview', { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://127.0.0.1:' + (PORT + 1000) }, body: JSON.stringify({ path: path.join(OD, '讲解.html') }) });
+  const pNoTok = await fetch('http://127.0.0.1:' + PORT + '/api/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: path.join(OD, '讲解.html') }) });
+  ok(pBad.status === 403 && pNoTok.status === 403, 'preview: 预览页自己（另一个端口的 Origin）和不带口令的都调不了 /api/preview', pBad.status + ',' + pNoTok.status);
+  ok(/preview \S+ .*资料 夹\/讲解\.html/.test(log()) && !/preview \S+ .*run\.sh/.test(log()), 'preview: 日志里记下预览了哪个文件，没给网址的不记');
 
   console.log('\n[2] 显示在运行、但一直没有新记录 → 可能卡住了（阈值调成 3 秒）');
   await sleep(4500); st = await get('/api/state');
