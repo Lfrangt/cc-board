@@ -20,9 +20,9 @@
 <title>总控台</title>
 <style>
 /* 设计约定（11/15 改版「墨线」，Khalil 在两个方向里选的。分层的语法和「靠描边不靠阴影」学自 raft-ui 设计系统（MIT），数值是总控台自己的）：
-   - 底分三层：--bg 页面 < --surface 卡片 < --raised 菜单、弹窗。卡片、按钮、徽章、顶栏都用 1.5px 墨线（--ink）划边界，不靠阴影和灰底。
-   - 阴影只有两种：菜单 / 弹窗的软阴影（--shadow-pop），封面最前面那张的墨色硬投影（往右下错开 6px）。
-   - 线：--ink 墨线（1.5px，控件和卡片的边）；--hair 分隔线 < --hair-2 次要控件的边 < --hair-3 获得焦点的输入框。
+   - 底分三层：--bg 页面 < --surface 卡片 < --raised 菜单、弹窗。卡片、按钮、徽章、顶栏都用一圈细墨线（--ink，1px、2 成浓度）划边界，不靠阴影和灰底。
+   - 阴影只有两种：菜单 / 弹窗的软阴影（--shadow-pop），封面最前面那张浮起来的影子（--drop）。
+   - 线：--ink 墨线（--ink-w 粗，控件和卡片的边；主按钮的实心底用 --ink-solid）；--hair 分隔线 < --hair-2 次要控件的边 < --hair-3 获得焦点的输入框。
    - 悬停 / 按下是叠一层墨（--hover / --press），不换底色、不挪位置。
    - 字分三档：--text 内容 > --text-2 次要 > --text-3 注释。人写的字用系统无衬线；机器写的（时间、时长、计数、命令）用等宽（.mt、.num b、kbd）。
    - 颜色只给状态：青 = 交付了 / 在跑，琥珀 = 要你动手，红 = 删掉就回不来；黄（--thumb）只表示「你选中的那一项」。圆角收小：卡 8、封面 10、控件 6、徽章 4；只有点是圆的。
@@ -36,7 +36,11 @@
   --fill: light-dark(#ebeae5, #222224);
   --fill-2: light-dark(#e2e1db, #2b2b2e);
   --thumb: light-dark(#ffd84a, #3a3320);
-  --ink: light-dark(#18181b, #e6e6e9);
+  --ink-solid: light-dark(#18181b, #e6e6e9);    /* 实心墨：主按钮的底 */
+  --ink: light-dark(rgba(24,24,27,.2), rgba(230,230,233,.17));   /* 描边的颜色：墨色 2 成，细而不抢（11/15 Khalil 从浓 / 中 / 淡里挑了淡） */
+  --ink-w: 1px;                                   /* 描边的粗细 */
+  --badge-line: 30%;                              /* 状态徽章描边的浓度（跟着状态色走） */
+  --drop: 0 10px 30px light-dark(rgba(0,0,0,.08), rgba(0,0,0,.45));   /* 封面最前面那张浮起来的影子 */
   --hover: light-dark(rgba(0,0,0,.045), rgba(255,255,255,.055));
   --press: light-dark(rgba(0,0,0,.085), rgba(255,255,255,.1));
   --text: light-dark(#18181b, #ececee);
@@ -76,28 +80,28 @@ button{background:none;border:0;padding:0;cursor:pointer}
 svg{display:block}
 
 /* 顶栏 */
-.bar{position:fixed;inset:0 0 auto 0;height:var(--bar-h);display:flex;align-items:center;gap:12px;padding:0 14px 0 var(--lead);background:var(--bar);border-bottom:1.5px solid var(--ink);z-index:200;user-select:none;-webkit-user-select:none}
+.bar{position:fixed;inset:0 0 auto 0;height:var(--bar-h);display:flex;align-items:center;gap:12px;padding:0 14px 0 var(--lead);background:var(--bar);border-bottom:var(--ink-w) solid var(--ink);z-index:200;user-select:none;-webkit-user-select:none}
 .brand{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
 .brand svg{flex:none;color:var(--text)}
-.seg{display:flex;padding:2px;border-radius:calc(var(--r-ctl) + 2px);background:var(--fill);gap:2px;flex:none;box-shadow:inset 0 0 0 1.5px var(--ink)}
+.seg{display:flex;padding:2px;border-radius:calc(var(--r-ctl) + 2px);background:var(--fill);gap:2px;flex:none;box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
 .seg button{height:26px;padding:0 10px;border-radius:var(--r-ctl);color:var(--text-2);white-space:nowrap;display:flex;align-items:center;gap:6px;transition:background var(--d1) var(--ease),color var(--d1) var(--ease)}
 .seg button:hover:not([aria-pressed="true"]):not(:disabled){color:var(--text);background:var(--hover)}
 .seg button b{font:500 11.5px var(--mono);letter-spacing:0;color:var(--text-3)}
-.seg button[aria-pressed="true"]{background:var(--thumb);color:var(--text);box-shadow:inset 0 0 0 1.5px var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--thumb);color:var(--text);box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
 .seg button.ring b{color:var(--accent);font-weight:600} .seg button.attn b{color:var(--attn);font-weight:600}
 .seg button:disabled{opacity:.42;cursor:default}
 .spacer{flex:1;align-self:stretch;min-width:8px}
 .hint{color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .tbtn{height:28px;padding:0 10px;border-radius:8px;color:var(--text-2);white-space:nowrap;transition:background var(--d1) var(--ease)}
 .tbtn:hover{background:var(--hover);color:var(--text)} .tbtn:active{background:var(--press)}
-.primary{height:28px;padding:0 13px;border-radius:var(--r-ctl);background:var(--ink);color:light-dark(#fff,#111);font-weight:600;white-space:nowrap;box-shadow:inset 0 0 0 1.5px var(--ink);transition:filter var(--d1) var(--ease)}
+.primary{height:28px;padding:0 13px;border-radius:var(--r-ctl);background:var(--ink-solid);color:light-dark(#fff,#111);font-weight:600;white-space:nowrap;box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:filter var(--d1) var(--ease)}
 .primary:hover{filter:brightness(1.08)} .primary:active{filter:brightness(.94)} .primary:disabled{opacity:.42;cursor:default;filter:none}
 .plain{height:28px;padding:0 12px;border-radius:var(--r-ctl);color:var(--text-2);white-space:nowrap} .plain:hover{background:var(--hover);color:var(--text)} .plain:active{background:var(--press)}
-.bordered{height:28px;padding:0 13px;border-radius:var(--r-ctl);box-shadow:inset 0 0 0 1.5px var(--ink);white-space:nowrap;transition:background var(--d1) var(--ease)}
+.bordered{height:28px;padding:0 13px;border-radius:var(--r-ctl);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);white-space:nowrap;transition:background var(--d1) var(--ease)}
 .bordered:hover{background:var(--hover)} .bordered:active{background:var(--press)} .bordered.danger{color:var(--danger)}
 /* 顶栏右上角：各订阅的额度（Codex 一条，Claude 每个号一条）。平时是灰的，不抢眼；任何一个窗口用到 85% 才变琥珀（要你留意）。 */
 .lim{display:flex;align-items:center;gap:6px;flex:none} .lim:empty{display:none}
-.lq{display:flex;align-items:center;gap:7px;height:26px;padding:0 10px;border-radius:var(--r-ctl);background:var(--fill);box-shadow:inset 0 0 0 1.5px var(--hair);color:var(--text-3);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;cursor:default}
+.lq{display:flex;align-items:center;gap:7px;height:26px;padding:0 10px;border-radius:var(--r-ctl);background:var(--fill);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);color:var(--text-3);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;cursor:default}
 .lq .mtr{width:34px;height:4px;border-radius:2px;background:var(--fill-2);overflow:hidden;flex:none}   /* 不叫 .bar：那是顶栏自己的类（position:fixed） */
 .lq .mtr i{display:block;height:100%;border-radius:2px;background:var(--text-3);transition:width var(--d3) var(--ease)}
 .lq .pc{color:var(--text);font-weight:600;min-width:2.5ch;text-align:right}
@@ -115,9 +119,9 @@ body.wall #stage{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:
 @media (max-width:1500px){body.wall #stage{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media (max-width:1080px){body.wall #stage{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:700px){body.wall #stage{grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(340px,auto)}}
-body.wall .card{transition:transform var(--d-move) var(--spring);box-shadow:inset 0 0 0 1.5px var(--ink)}
+body.wall .card{transition:transform var(--d-move) var(--spring);box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
 
-body.wall .pager,body.flow #rows{display:none}
+body.wall .pager,body.flow #rows,body.flow #by{display:none}
 
 /* 视图二：封面（正在跟进的那张在最前面，在跑的退到后面变模糊） */
 body.flow main{overflow:hidden;perspective:1800px}
@@ -131,8 +135,8 @@ body.flow .card.side .chead .ib{opacity:0}
 /* 封面：每张卡片的上半截是它的「封面」——大标题、一句结论、要你做的事。扫一眼就知道是什么、到哪一步了；正文在下面，要细看再看。
    质感靠灰阶、细边和光，不靠颜色（11/12 他否了按会话上色：「没什么质感，很 low」）。颜色只留给状态：青 = 交付了 / 在跑，琥珀 = 要你动手 */
 body.flow main{background:radial-gradient(58% 52% at 50% 40%,light-dark(rgba(0,0,0,.035),rgba(255,255,255,.055)),transparent 72%),var(--bg)}
-body.flow .card{border-radius:var(--r-cover);background:var(--surface);box-shadow:0 0 0 1.5px var(--ink),6px 6px 0 light-dark(rgba(0,0,0,.12),rgba(255,255,255,.06))}
-body.flow .card:not(.side){box-shadow:0 0 0 1.5px var(--ink),6px 6px 0 light-dark(rgba(0,0,0,.12),rgba(255,255,255,.06))}
+body.flow .card{border-radius:var(--r-cover);background:var(--surface);box-shadow:0 0 0 var(--ink-w) var(--ink),var(--drop)}
+body.flow .card:not(.side){box-shadow:0 0 0 var(--ink-w) var(--ink),var(--drop)}
 body.flow .chead{padding:18px 16px 0 26px;min-height:46px}
 body.flow .meta{height:28px;font-size:13.5px;gap:7px} 
 body.flow :is(.s-busy,.bg,.s-review,.s-reply,.s-ask,.alert) .meta{padding:0 12px 0 8px}
@@ -182,7 +186,7 @@ body.wall.cols #stage{grid-template-columns:var(--gtpl);grid-template-rows:minma
 .ghead .gnew:hover,.ghead .gnew:focus-visible{background:var(--hover);color:var(--text)}
 .ghead .gnew + .gfold{margin-left:2px}
 /* 收起的列：一条竖着的窄条，写项目名和张数；有要你动手的亮琥珀点，有交付等你看的亮青点。点整条展开 */
-.gcol.folded{cursor:pointer;border-radius:var(--r-card);background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--hair-2);transition:box-shadow var(--d1) var(--ease)}
+.gcol.folded{cursor:pointer;border-radius:var(--r-card);background:var(--surface);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:box-shadow var(--d1) var(--ease)}
 .gcol.folded:hover{box-shadow:inset 0 0 0 1px var(--hair-3)}
 .gcol.folded .gbody,.gcol.folded .gfold{display:none}
 .gcol.folded .ghead{writing-mode:vertical-rl;height:auto;padding:14px 0;align-items:center;gap:10px;color:var(--text-2)}
@@ -192,7 +196,7 @@ body.wall.cols #stage{grid-template-columns:var(--gtpl);grid-template-rows:minma
 @keyframes gcol-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @media (max-width:700px){body.wall.cols main{overflow:auto} body.wall.cols #stage{grid-template-columns:minmax(0,1fr);grid-template-rows:none;height:auto} .gcol.folded .ghead{writing-mode:horizontal-tb;height:44px;padding:0 14px} .gbody{overflow:visible;grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(340px,auto)}}
 .chead .proj{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-body:not(.grouped) .chead .proj,body.wall .chead .proj{display:none}
+body:not(.grouped) .chead .proj,body.wall:not(.bystatus) .chead .proj{display:none}
 .pager #pos button.pg{width:auto;height:22px;padding:0 4px 0 10px;font-size:11px;color:var(--text-3);white-space:nowrap}
 .pager #pos button.pg:first-child{padding-left:0}
 .pager #pos button.pg::before{display:none}
@@ -209,7 +213,7 @@ body:not(.grouped) .chead .proj,body.wall .chead .proj{display:none}
 @container (max-width:540px){.chead{gap:6px}.chead .grow{min-width:0}.chead .done{padding:0 8px}.chead .go{width:24px;padding:0;justify-content:center}.chead .go>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .grow{flex:1;min-width:8px}
 /* 状态标志在左上角：一个符号 + 字。琥珀色 = 要你动手（等你选 / 停住了 / 待跟进），青色 = 交付了等你审、在跑，灰色 = 处理过 / 空闲 */
-.meta{display:flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 6px;box-shadow:inset 0 0 0 1.5px currentColor;border-radius:var(--r-badge);font-size:12px;font-weight:600;white-space:nowrap;flex:none;color:var(--text-2)}
+.meta{display:flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 6px;box-shadow:inset 0 0 0 var(--ink-w) color-mix(in srgb,currentColor var(--badge-line),transparent);border-radius:var(--r-badge);font-size:12px;font-weight:600;white-space:nowrap;flex:none;color:var(--text-2)}
 .meta .ms{font-style:normal;opacity:.45;margin:0 -2px} .meta .mt{font-weight:500;font-variant-numeric:tabular-nums;opacity:.72}   /* 时间：等宽数字（不用等宽字体：「10 分钟前」里的中文落进等宽字体会被拉开） */ .meta .mr{font-weight:500}
 .s-busy .meta,.bg .meta,.s-review .meta,.s-reply .meta,.s-ask .meta,.alert .meta{padding:0 8px 0 6px}
 .meta::before{content:"";flex:none;width:13px;height:13px;border-radius:50%;box-sizing:border-box;font:700 9px/13px var(--font);text-align:center;color:var(--surface);background:var(--text-3)}
@@ -236,9 +240,9 @@ body.flow .alert .meta::before{width:16px;height:16px;margin:0}
 .head:empty{display:none} .s-handled .head,.s-fyi .head,.s-idle .head{color:var(--text-2)}
 .ask{margin:9px 16px 0;padding:7px 10px;border-radius:var(--r-ctl);font-size:12.5px;line-height:1.5;font-weight:600;color:var(--attn);background:color-mix(in srgb,var(--attn) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--attn) 22%,transparent);word-break:break-word}
 .ask[hidden]{display:none} .ask b{font-weight:700;margin-right:7px}
-.done{height:24px;padding:0 10px;border-radius:7px;font-size:12px;font-weight:600;white-space:nowrap;flex:none;color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:inset 0 0 0 1.5px var(--ink);transition:background var(--d1) var(--ease)}
+.done{height:24px;padding:0 10px;border-radius:7px;font-size:12px;font-weight:600;white-space:nowrap;flex:none;color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:background var(--d1) var(--ease)}
 .done:hover{background:color-mix(in srgb,var(--accent) 18%,transparent)} .done[hidden]{display:none}
-.go{display:flex;align-items:center;gap:5px;height:24px;padding:0 9px 0 7px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none;color:var(--text-2);box-shadow:inset 0 0 0 1.5px var(--ink);transition:background var(--d1) var(--ease),color var(--d1) var(--ease)}
+.go{display:flex;align-items:center;gap:5px;height:24px;padding:0 9px 0 7px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none;color:var(--text-2);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:background var(--d1) var(--ease),color var(--d1) var(--ease)}
 .go:hover{background:var(--hover);color:var(--text)} .go:active{background:var(--press)} body.flow .go{height:30px;padding:0 13px 0 10px;font-size:13.5px;gap:6px;border-radius:var(--r-ctl)} body.flow .card.side .go{visibility:hidden}
 .s-reply .done{color:var(--text-2);background:none} .s-reply .done:hover{background:var(--hover)}
 .why{font-size:13px;font-weight:600;margin:0 0 8px}
@@ -368,6 +372,7 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
   <span class="hint" id="hint" data-drag></span>
   <div class="lim" id="limits" role="group" aria-label="订阅额度"></div>
   <button class="tbtn" id="archBtn">归档</button>
+  <div class="seg" id="by" aria-label="墙上怎么分列"><button data-by="project">按项目</button><button data-by="status">按状态</button></div>
   <div class="seg" id="rows" aria-label="一屏放多少"><button data-rows="2">8 格</button><button data-rows="3">12 格</button></div>
   <button class="primary" id="newBtn" title="⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片">新任务</button>
 </header>
@@ -423,7 +428,7 @@ const EN = {
   '归档：没留下东西的删掉，其余留着、能接回来': 'Archive: deletes it if it left nothing behind, otherwise keeps it resumable', '放大看（双击封面 / ⌘O）': 'Enlarge (double-click the cover / ⌘O)', '双击放大（⌘O）': 'Double-click to enlarge (⌘O)', '还没有归档的会话。': 'No archived sessions yet.', '点卡片右上角的「归档」。': 'Use “Archive” at the top right of a card.', '它在等你决定': 'it is waiting for your decision', '一句话都没说过': 'nothing was ever said', '只聊了几句，没改过文件': 'only a short chat, no files changed',
   '其他': 'Other', '收起这一列': 'Collapse column', '在这一列里新建任务': 'New task in this column', '订阅额度': 'Subscription usage',
   '直接写任务，它就在这个项目里做，做完会站到最前面。留空 = 开一个空会话，等你在卡片里说第一句。': 'Describe the task. It works in this project and comes to the front when done. Leave empty for a blank session.', '展开': 'Expand', '点开': 'Open', '这种文件不直接打开，已在访达里选中': 'Not opened directly — revealed in Finder',
-  '总控台': 'cc-board', '封面': 'Covers', '墙': 'Wall', '归档': 'Archive', '8 格': '8 up', '12 格': '12 up', '新任务': 'New task',
+  '总控台': 'cc-board', '封面': 'Covers', '墙': 'Wall', '归档': 'Archive', '8 格': '8 up', '12 格': '12 up', '按项目': 'By project', '按状态': 'By status', '墙上怎么分列': 'Group the wall', '要你处理': 'Needs you', '新任务': 'New task',
   '全部': 'All', '在做': 'Working', '新交付': 'Delivered', '等你选': 'Needs you', '待跟进': 'Follow up', '空闲': 'Idle', '停住了': 'Stopped', '启动中': 'Starting',
   '你': 'You', '现在': 'Now', '交付': 'Delivered', '上一次交付': 'Last delivery', '还没给它派过活': 'No task yet',
   '填进输入框，改完再发': 'Fill the box, edit, then send', '接着说，回车发送': 'Reply, then hit return', '它在忙，发了会排队': 'Busy. Your message will queue.', '它在等你选，选完才能回话': 'Waiting for your choice first',
@@ -624,7 +629,7 @@ function limitChip(it, now, many) {
   const codex = it.provider === 'codex', ws = it.windows || [];
   const main = ws.find((w) => w.key === 'week') || ws[0];
   const wk = ws.find((w) => w.key === 'week');
-  const tag = it.account ? ' · ' + it.account : many && wk ? ' · ' + new Date(wk.resetsAt).toLocaleString(LANG === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short' }) : '';
+  const tag = it.account ? ' · ' + (it.name || it.account) : many && wk ? ' · ' + new Date(wk.resetsAt).toLocaleString(LANG === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short' }) : '';
   const base = codex ? 'Codex' : 'Claude', name = base + tag;
   const lines = [name + (it.plan ? ' · ' + it.plan : '')];
   for (const w of ws) {
@@ -909,10 +914,17 @@ function layout() {
 const OTHER_P = { key: 'other', name: '其他' };
 let nGroups = 0;
 // 收起的项目（11/12 Khalil：「我不学的时候就可以把它折叠起来」）：记在本机，重开还在。墙上收成一条，封面里不进轮播
+// 墙上怎么分列（11/15 Khalil：「再学 Raft 的看板，加按状态分列」）：按项目（原来的）或按状态。按状态时一列是一种状态，顺序和排位一致
+let groupBy = store('ccb_by') === 'status' ? 'status' : 'project';
+const STATUS_LANES = { act: '要你处理', review: '待审阅', busy: '运行中', calm: '无需处理' };   // 无需处理 = 回给别的窗口的、处理过的、空闲的
+function laneOf(c) {                      // 一张卡在「按状态」里属于哪一列：和 dotOf() 同一套判断；进程退出的算要你处理；启动中的卡自带 v（弹着选择框 = 等你选 → 要你处理）
+  const k = c.x ? 'act' : c.v ? dotOf(c.v) : 'busy';
+  return { key: 's:' + k, name: STATUS_LANES[k] };
+}
 let folds = new Set(store('ccb_fold') || []), foldOn = new Set(), foldList = [], jumpGroup = null;
 function toggleFold(k) { if (folds.has(k)) { folds.delete(k); if (mode === 'flow') jumpGroup = k; } else folds.add(k); store('ccb_fold', [...folds]); paint(last); }
 function setGroups(ids) {
-  const raw = (id) => { const c = cards.get(id), o = c && (c.s || c.x || c.p), p = o && o.project; return p && p.key ? p : OTHER_P; };
+  const raw = (id) => { const c = cards.get(id); if (groupBy === 'status' && mode === 'wall') return laneOf(c); const o = c && (c.s || c.x || c.p), p = o && o.project; return p && p.key ? p : OTHER_P; };
   const n = new Map(); for (const id of ids) { const k = raw(id).key; n.set(k, (n.get(k) || 0) + 1); }
   const fold = new Set([...n].filter(([k, v]) => k.startsWith('dir:') && v < 2).map(([k]) => k));
   // 墙上一个项目一列、一列至少 300px：放不下时，把卡最少的组并进「其他」，免得要横着滚
@@ -1121,7 +1133,7 @@ function paint(st) {
     if (!cur || !keep.has(cur) || !order.includes(cur)) { cur = order[0] || null; curAt = Date.now(); }
     else if (arrived && !first && !engaged() && arrived !== cur) { cur = arrived; curAt = Date.now(); }
   }
-  for (const id of order) { const c = cards.get(id), pj = c.s && $('.proj', c.el); if (pj) { const t = T(c.g.name); if (pj.textContent !== t) pj.textContent = t; } }
+  for (const id of order) { const c = cards.get(id), pj = c.s && $('.proj', c.el); if (pj) { const pr = c.s.project, t = T(groupBy === 'status' && mode === 'wall' ? (pr && pr.key ? pr.name : OTHER_P.name) : c.g.name); if (pj.textContent !== t) pj.textContent = t; } }   // 按状态分列时列名已经是状态，卡上写它属于哪个项目
   layout();
   if (wallBefore) { flipFrom(wallBefore); wallBefore = null; }
   if (focusNew && mode === 'wall') { const hit = st.sessions.find((x) => x.tmux === focusNew); if (hit) { wantFocus = hit.sid; focusNew = null; } }
@@ -1348,6 +1360,7 @@ document.addEventListener('click', (e) => {
   }
   const mb = e.target.closest('[data-mode]'); if (mb) { setMode(mb.dataset.mode); return; }
   const rb = e.target.closest('[data-rows]'); if (rb) setRows(+rb.dataset.rows);
+  const bb = e.target.closest('[data-by]'); if (bb) setBy(bb.dataset.by);
 });
 $('#prev').addEventListener('click', () => step(-1)); $('#next').addEventListener('click', () => step(1));
 document.addEventListener('keydown', (e) => {
@@ -1381,6 +1394,7 @@ $('main').addEventListener('wheel', (e) => {
 }, { passive: false });
 addEventListener('resize', () => layout());
 document.addEventListener('mousedown', (e) => { if (native && e.button === 0 && e.target.closest('[data-drag]') && !e.target.closest('button,a,input,textarea,nav,.seg')) tell({ type: e.detail === 2 ? 'zoom' : 'drag' }); });
+function setBy(k) { groupBy = k === 'status' ? 'status' : 'project'; store('ccb_by', groupBy); document.body.classList.toggle('bystatus', groupBy === 'status'); document.querySelectorAll('#by button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.by === groupBy))); if (last) paint(last); }
 function setRows(n) { rows = n === 3 ? 3 : 2; store('ccb_rows', rows); document.documentElement.style.setProperty('--rows', rows); document.querySelectorAll('#rows button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.rows === rows))); }
 function setMode(m) {
   mode = m === 'wall' ? 'wall' : 'flow'; store('ccb_mode', mode); document.body.className = mode; filter = 'all';
@@ -1389,7 +1403,7 @@ function setMode(m) {
   order = []; first = true; if (last) paint(last);
 }
 window.ccbNew = () => openNew();
-localizeStatic(); setRows(rows); setMode(mode);
+localizeStatic(); setRows(rows); setBy(groupBy); setMode(mode);
 poll();
 </script>
 </body>

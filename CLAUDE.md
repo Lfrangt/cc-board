@@ -180,7 +180,7 @@ Khalil 11/15 11:00 的原话：「给我们总后台加入一个各个账号的 
 - **Codex**：读 `~/.codex/sessions/<年>/<月>/<日>/rollout-*.jsonl` 里最后一条 `token_count` 事件的 `rate_limits`。11/15 实测：`limit_id: codex`、`plan_type: prolite`、只有一个 10080 分钟窗口、`secondary` 是 null。按文件修改时间取最近 8 个文件（续跑的老会话记录在老日期的目录里），每个只读最后 256 KB，没变的文件不重读。只在 config.json 的 `codex` 打开时读和显示（和「交给谁」同一个开关）。这份数据只在 Codex 说话时更新，提示里的「更新于」就是为这个。
 - **Claude Code**：本地没有现成数据（11/15 查过）。对话记录里只在「额度被拒」那条错误上带 `resetsAt`，没有百分比；命令行没有查用量的子命令。Claude Code 只在状态栏命令的 stdin JSON 里给 `rate_limits.five_hour / seven_day`（`used_percentage`、`resets_at` 秒；官方文档写明只有 Pro / Max / Ultra 订阅有，第一次 API 回复之后才出现）。所以挂一个状态栏命令 `statusline-tap.mjs`：只存 `rate_limits` 的两个窗口（不存路径、模型、对话），一个会话一个文件 `<数据目录>/limits/claude-<session_id>.json`（0600），10 秒内同样的数据不重写，终端里顺手打一行 `ben · 5h 6% · 7d 1%`。不读钥匙串，不联网，不用任何登录凭据。取数文件 14 天没动清掉（每 12 小时一次）。
 - 不用的办法：`claude -p … --output-format stream-json` 的 `rate_limit_event` 带 `unifiedWindows.*.utilization`，能拿到数，但每次要发一次模型调用，花的正是要看的额度，还会触发全局 hook（11/15 11:07 我的探针被群聊 hook 记成「Khalil 说的话」，#11449），所以不能当轮询用。`/api/oauth/usage` 要读钥匙串里的登录令牌，不用。
-- 账号怎么分：同一个号所有会话的周窗口截止时间相同，所以没标账号的数据按它分组（到分钟）。会话环境里设了 `CCBOARD_ACCOUNT=<id>`（khalil-bd 做「新任务选账号」时，启动器设它），tap 就把它写进取数文件，条目 `account` 带上，并把同截止时间的无标数据认给它。没有 `account` 又有两个以上 Claude 号时，名字后面写周窗口重置的星期几。账号标记只认 `[\w.@-]{1,40}`，会进文件和界面。
+- 账号怎么分：同一个号所有会话的周窗口截止时间相同，所以没标账号的数据按它分组（到分钟）。会话环境里设了 `CCBOARD_ACCOUNT=<id>`（khalil-bd 做「新任务选账号」时，启动器设它），tap 就把它写进取数文件，条目 `account` 带上，并把同截止时间的无标数据认给它。条目的 `name` 由 server.mjs 按 config.json 的 `accounts` 把 id 换成登记的名字（和新任务的账号下拉同名），没登记的 id 原样写；顶栏写 `name`。没有 `account` 又有两个以上 Claude 号时，名字后面写周窗口重置的星期几。默认登录开的窗口不带 `CCBOARD_ACCOUNT`，要靠同一个号有一个选账号开的窗口说过话，才按周截止时间认领到名字。账号标记只认 `[\w.@-]{1,40}`，会进文件和界面。
 - 窗口过了 `resets_at` 就丢（Claude Code 自己的状态栏也这样）。Codex 的窗口过了，条目留着、窗口空，胶囊显示 `—`；Claude 没有任何数据时显示灰色的「Claude —」，提示里写怎么接入。
 - 窄屏：≤ 1180 px 去掉进度条和账号后缀，≤ 1000 px 整条隐藏（顶栏在 900 px 时放不下，「新任务」会被挤出视口，11/15 实测）。进度条的类叫 `.mtr`，不要叫 `.bar`：`.bar` 是顶栏自己的类（`position:fixed`），11/15 起初起了这个名字，进度条被钉到屏幕顶上，ui-check 有断言守着。
 - 状态栏挂载（要改 `~/.claude/settings.json`，所有窗口立刻生效）：`"statusLine": {"type": "command", "command": "node \"$HOME/Library/Application Support/cc-board/app/statusline-tap.mjs\""}`。11/15 在隔离的 tmux 里对照试过：挂了以后输入框下方多一行，底下的 `bypass permissions on` 还在，上下两条边框没变，所以 suggest.mjs 认输入框不受影响。官方文档写明自定义状态栏会去掉 `esc to interrupt` 这类键盘提示，这一点没有在忙的会话里试过。
@@ -291,15 +291,24 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 
 ## 样式（11/15 改版「墨线」，khalil-5d）
 
-Khalil 11/15：「我们这个就特别潦草，就跟手搓的一样……他（Raft）的 UI 真的不错，你能不能去学习一下」。做了两个方向的对照（灰阶精修 / 墨线），他选了墨线。
+Khalil 11/15：「我们这个就特别潦草，就跟手搓的一样……他（Raft）的 UI 真的不错，你能不能去学习一下」。做了两个方向的对照（灰阶精修 / 墨线），他选了墨线；12:38 上线 1.5px 实心墨线后他说「有点太过了……弄得淡一点」，又做了浓 / 中 / 淡三档对照，他选了淡。
 
 - 学的是 Raft 设计系统 raft-ui 的规则（`@botiverse/raft-ui`，MIT；公开文档 raft-design.botiverse.build/foundations/*.md），不是 Raft 应用的代码（那是 FSL-1.1，不能抄）。没有引入任何依赖，数值是我们自己的。
-- 墨线：卡片、按钮、徽章、分段控件、顶栏底边都用 1.5px 的 `--ink` 划边界，不靠阴影和灰底。描边一律写成 `box-shadow: inset 0 0 0 1.5px`，不用 `border`：不占布局，卡宽和卡头的容器查询（540 px）不受影响。
+- 墨线：卡片、按钮、徽章、分段控件、顶栏底边都用一圈 `--ink` 划边界，不靠阴影和灰底。浓淡全在 token 里：`--ink`（线的颜色，现在是墨色 2 成：浅色 rgba(24,24,27,.2)、深色 rgba(230,230,233,.17)）、`--ink-w`（粗细，1px）、`--badge-line`（徽章描边跟着状态色走的浓度，30%）、`--drop`（封面最前面那张的影子）、`--ink-solid`（主按钮的实心底）。要再调浓淡只改这几个数。描边一律写成 `box-shadow: inset 0 0 0 var(--ink-w) var(--ink)`，不用 `border`：不占布局，卡宽和卡头的容器查询（540 px）不受影响。
 - token 都在 `:root`：底分三层 `--bg`（米白纸面）< `--surface` < `--raised`（`--field` 是输入框）；线 `--ink` 加三档 `--hair` < `--hair-2` < `--hair-3`；悬停 / 按下叠一层墨 `--hover` / `--press`，不换底色；字分三档 `--text` > `--text-2` > `--text-3`。圆角 `--r-card` 8、`--r-cover` 10、`--r-ctl` 6、`--r-badge` 4。`--thumb`（黄）只给「你选中的那一项」（视图、筛选、格数）。
-- 阴影只有两种：菜单 / 弹窗的软阴影 `--shadow-pop`；封面最前面那张的墨色硬投影（右下错开 6px）。提示条是中性深灰 `--hud`。
+- 阴影只有两种：菜单 / 弹窗的软阴影 `--shadow-pop`；封面最前面那张浮起来的影子 `--drop`。提示条是中性深灰 `--hud`。
 - 状态徽章 `setMeta()`：「待审阅 · 8 分钟前」拆成 `.mw` 状态词、`.ms` 分隔点、后半句；后半句是时间（`IS_TIME`）用等宽数字 `.mt`，是原因（额度用完）用 `.mr`。textContent 和原句一字不差，测试和读屏照旧。封面的光晕照抄 innerHTML。
 - 等宽字体只给纯机器字：计数、列头、`.tick`、`.tag`、kbd、代码。中文时间不用等宽字体（「10 分钟前」的中文落进等宽字体会被拉开），只用 tabular-nums。
 - 新加的界面零件照这套写：颜色、线、圆角只引用 token，不写新的颜色值。
+
+## 按状态分列（11/15 khalil-5d）
+
+Khalil 11/15：「再学 Raft 的看板，加按状态分列」。Raft 的任务看板按 Todo / In progress / In review 分列。
+
+- 墙上顶栏多一个「按项目 | 按状态」开关（`#by`，只在墙上显示），记在本机 localStorage 的 `ccb_by`。默认按项目，和以前一样。
+- 不另写一套布局：按项目分列的整套机制（`setGroups()` 分组、`lanes()` 分横向格子、列头、收起、换列动画）原样复用，只换「这张卡属于哪一组」这一问。`setGroups()` 里的 `raw()` 在 `groupBy === 'status'` 且在墙上时返回 `laneOf()`，组的 key 是 `s:act` / `s:review` / `s:busy` / `s:calm`，不和项目 key 撞，收起的状态照样记在 `ccb_fold`。
+- 四列：要你处理（等你选、停住了、待跟进、进程退出）→ 待审阅 → 运行中（含后台在跑、启动中）→ 无需处理（回给别的窗口的、处理过的、空闲的）。判法和底下那排点的 `dotOf()` 同一套，所以列的先后就是排位。启动中的卡自带 `v`，弹着选择框的算要你处理。
+- 按状态时列名已经说了状态，卡左上角的 `.proj` 改写它属于哪个项目（按项目时墙上不写，列头已经写了）。封面不受影响，照旧按项目。
 
 ## 上线
 

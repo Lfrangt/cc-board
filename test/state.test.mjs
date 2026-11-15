@@ -451,7 +451,13 @@ try {
   ok(Array.isArray(lm.claude) && lm.claude.length === 2 && lm.claude.map((x) => x.account).join() === 'amy,ben', 'Claude：两个号各一条，按账号排', JSON.stringify(lm.claude));
   const wk = (x) => ((x && x.windows) || []).find((w) => w.key === 'week');
   ok(lm.claude && wk(lm.claude[0]) && wk(lm.claude[0]).used === 91 && wk(lm.claude[1]) && wk(lm.claude[1]).used === 1, 'Claude：amy 周 91%，ben 周 1%', JSON.stringify((lm.claude || []).map(wk)));
-  ok(!('session' in (lm.claude[0] || {})) && Object.keys(lm.claude[0] || {}).sort().join() === 'account,at,id,plan,provider,windows', 'Claude 条目的字段是固定的：只有账号、时间、窗口，没有会话号和路径', JSON.stringify(Object.keys(lm.claude[0] || {})));
+  ok(!('session' in (lm.claude[0] || {})) && Object.keys(lm.claude[0] || {}).sort().join() === 'account,at,id,name,plan,provider,windows', 'Claude 条目的字段是固定的：只有账号、名字、时间、窗口，没有会话号和路径', JSON.stringify(Object.keys(lm.claude[0] || {})));
+  ok(lm.claude[0] && lm.claude[0].name === 'amy', '没在 config 登记的号：名字就是 id', JSON.stringify(lm.claude[0]));
+  limTap('cccc3333-0003', 'good', 3, 40, 3.5);                                    // 选账号开的窗口（config 里 good = 旧号）说了一句话
+  let good = null; for (let i = 0; i < 20 && !good; i++) { await sleep(300); good = ((await get('/api/state')).limits.claude || []).find((x) => x.account === 'good'); }
+  ok(good && good.name === '旧号', '登记过的号：顶栏的名字取 config 的 name，和新任务的账号下拉一样（旧号）', JSON.stringify(good));
+  fs.rmSync(path.join(DATA0, 'limits', 'claude-cccc3333-0003.json'));             // 还原：后面的断言和界面测试要的是两个号
+  for (let i = 0; i < 20 && ((await get('/api/state')).limits.claude || []).length !== 2; i++) await sleep(300);
   const wrote = Date.now(); limTap('bbbb2222-0002', 'ben', 7, 55, 1.9);          // 会话又说了一句话：取数文件更新了
   let ben = null; for (let i = 0; i < 20 && !(ben && wk(ben).used === 55); i++) { await sleep(300); ben = ((await get('/api/state')).limits.claude || []).find((x) => x.account === 'ben'); }
   ok(ben && wk(ben).used === 55, '取数文件更新后，下一轮读到新的（ben 55%，' + (Date.now() - wrote) + ' ms 内）', JSON.stringify(ben));

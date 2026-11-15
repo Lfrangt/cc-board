@@ -11,7 +11,7 @@
  *        digest() 从每次交付里取一句结论和要你做的事，分「待跟进 / 待审阅」；它自己写了【待跟进】/【待审阅】/【在跑】那一行就以它为准。
  *        换了端口、数据目录或主目录就自认是试验场：不碰 Ghostty、不发系统通知。
  *        suggestLoop 每 2.5 秒读一遍空闲 tmux 会话的屏幕（capture-pane -e，只读），交给 suggest.mjs 取灰字建议和「下一步 1/2/3」，挂在 /api/state 的 suggest 字段上；它们不进对话记录。
- *        limitsLoop 每 30 秒让 limits.mjs 汇总一遍各订阅的周额度（Codex 读它的记录，只在 codex 打开时；Claude 读状态栏取数脚本存在 <数据目录>/limits 的文件），挂在 /api/state 的 limits 字段上，顶栏右上角显示。
+ *        limitsLoop 每 30 秒让 limits.mjs 汇总一遍各订阅的周额度（Codex 读它的记录，只在 codex 打开时；Claude 读状态栏取数脚本存在 <数据目录>/limits 的文件），挂在 /api/state 的 limits 字段上，顶栏右上角显示；Claude 条目带上 config.json accounts 里登记的名字（name），和新任务的账号下拉同名。
  *        /api/new 先过 route.mjs：开窗口的一方（比如总指挥窗口）声明档位 heavy / standard / light，服务翻成 --model / --effort 再交给 newSession，写错的档位拦下、不开窗口；不声明档位就沿用 settings.json 的默认（界面「新任务 → 默认」走这条）。声明了档位的，应答带 route，日志记一行 route。
  *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex、autoTidy 三个开关默认关。
  *        autoTidy 打开时，watchTidy() 把「已经交付、歇着、没人在等、没人再理」的会话交给 archiveSession 自动收工（tidyDue 定哪些，tidyVerdict 定删还是留）；
@@ -1354,9 +1354,11 @@ async function suggestLoop() {
   setTimeout(suggestLoop, SUGGEST_MS);
 }
 // 各订阅的周额度。Codex 只在 config.json 的 codex 打开时读（和「交给谁」同一个开关）；Claude 永远读，没人取数就是空数组。
+// 顶栏写号的名字，和「新任务」的账号下拉同一个来源：config.json 的 accounts。没登记的 id 原样写；没标号的条目 name 是 null
+const limitName = (id) => (id ? (CONFIG.accounts.find((a) => a.id === id) || { name: id }).name : null);
 let LIMITS = { claude: [], codex: null };
 function limitsLoop() {
-  try { const now = Date.now(); LIMITS = { claude: claudeLimits(LIMITS_DIR, now), codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null }; } catch (e) { console.error('limits', e); }
+  try { const now = Date.now(); LIMITS = { claude: claudeLimits(LIMITS_DIR, now).map((e) => ({ ...e, name: limitName(e.account) })), codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null }; } catch (e) { console.error('limits', e); }
   setTimeout(limitsLoop, LIMITS_MS);
 }
 function fastLoop() {

@@ -107,6 +107,26 @@ try {
   await page.evaluate(() => document.querySelector('.gcol.folded').click()); await sleep(900);
   const fo3 = await page.evaluate(() => ({ folded: document.querySelectorAll('.gcol.folded').length, saved: localStorage.getItem('ccb_fold') }));
   ok(fo3.folded === 0 && !/fretflow/.test(fo3.saved || ''), '墙：点竖条展开', JSON.stringify(fo3));
+  // 按状态分列（11/15 Khalil：「再学 Raft 的看板，加按状态分列」）：一列一种状态，顺序 = 排位；卡上改写项目名；记在本机，重开还在
+  const lanesOf = () => page.evaluate(() => [...document.querySelectorAll('#stage > .gcol')].map((col) => ({
+    head: (col.querySelector('.ghead').firstChild || {}).textContent || '',
+    cards: [...col.querySelectorAll('.card:not([hidden])')].map((c) => ({ cls: c.className, proj: getComputedStyle(c.querySelector('.chead .proj') || c).display === 'none' ? '' : ((c.querySelector('.chead .proj') || {}).textContent || ''), title: (c.querySelector('.title') || {}).textContent })) })));
+  await page.click('#by [data-by="status"]'); await sleep(900);
+  const ln = await lanesOf(); const heads = ln.map((x) => x.head.trim());
+  const ORDER = ['要你处理', '待审阅', '运行中', '无需处理'], rank = heads.map((h) => ORDER.indexOf(h));
+  ok(heads.length >= 3 && rank.every((r, i) => r >= 0 && (i === 0 || r > rank[i - 1])) && heads[0] === '要你处理' && heads.includes('待审阅'), '按状态：一列一种状态，顺序是 要你处理 → 待审阅 → 运行中 → 无需处理', JSON.stringify(heads));
+  const fits = { '要你处理': (c) => /\balert\b|s-reply|s-ask/.test(c), '待审阅': (c) => /s-review/.test(c), '运行中': (c) => /s-busy|\bbg\b/.test(c) && !/\balert\b/.test(c), '无需处理': (c) => !/\balert\b|s-reply|s-ask|s-review|s-busy|\bbg\b/.test(c) };
+  const wrong = ln.flatMap((x) => x.cards.filter((c) => fits[x.head.trim()] && !fits[x.head.trim()](c.cls)).map((c) => x.head + '/' + c.title + ':' + c.cls));
+  ok(wrong.length === 0 && ln.every((x) => x.cards.length > 0), '按状态：每张卡都在它状态的那一列', JSON.stringify(wrong.slice(0, 4)));
+  const pf = ln.flatMap((x) => x.cards).find((c) => c.title === 'w-projF');
+  ok(pf && pf.proj === 'FretFlow' && !ln.flatMap((x) => x.cards).some((c) => ORDER.includes(c.proj)), '按状态：卡上写它属于哪个项目（不是列名）', JSON.stringify(pf));
+  await page.reload(); await page.waitForSelector('.card'); await sleep(1200);
+  // store() 存的是 JSON（"status" 带引号），读出来先解析再比
+  const kept = await page.evaluate(() => ({ by: JSON.parse(localStorage.getItem('ccb_by') || 'null'), pressed: document.querySelector('#by [data-by="status"]').getAttribute('aria-pressed'), head: (document.querySelector('#stage > .gcol .ghead').firstChild || {}).textContent }));
+  ok(kept.by === 'status' && kept.pressed === 'true' && /要你处理/.test(kept.head || ''), '按状态：重开总控台还是按状态', JSON.stringify(kept));
+  await page.click('#by [data-by="project"]'); await sleep(900);
+  const back = await lanesOf();
+  ok(back.some((x) => /FretFlow/.test(x.head)) && !back.some((x) => ORDER.includes(x.head.trim())) && back.flatMap((x) => x.cards).every((c) => c.proj === ''), '切回按项目：列是项目，卡上不写项目名', JSON.stringify(back.map((x) => x.head)));
   // 点开、点正文都不算处理过；只有「审完了 / 先放着」或回它话才算（Khalil 11/12：看了不等于处理了）
   const nReview0 = Object.values(s.cards).filter((v) => /s-review/.test(v.cls)).length;
   await page.click(`.card[data-sid="${FX.sids.done}"] .body`); await sleep(400); s = await cardsOf(page);
