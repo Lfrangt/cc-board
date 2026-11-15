@@ -454,10 +454,10 @@ try {
   const pend7c = (st.pending || []).find((x) => x.name === n1.body.name);
   ok(trustNow() === null && pend7c && pend7c.dialog && pend7c.dialog.options[0] === 'Use this API key', '不是信任框：一个键都不按，卡片上照旧给他选', JSON.stringify(pend7c && pend7c.dialog));
   try { fs.unlinkSync(trustFile); } catch {}
-  n1 = await post('/api/new', { prompt: 'TRUSTME 在别的文件夹', cwd: CWD, provider: 'claude' });
-  await sleep(6000); st = await get('/api/state');
-  const pend7e = (st.pending || []).find((x) => x.name === n1.body.name);
-  ok(trustNow() === null && pend7e && pend7e.dialog && pend7e.dialog.options[1] === 'Yes, I trust this folder', '开在主目录以外的文件夹：信任框不替他点，留在卡片上', JSON.stringify(pend7e && pend7e.dialog));
+  n1 = await post('/api/new', { prompt: 'TRUSTME 在别的文件夹', cwd: CWD, provider: 'claude' });   // Agent 开窗口都带 cwd：11/15 起开在哪个文件夹都替他点
+  let tr7e = null; for (let i = 0; i < 40 && !tr7e; i++) { await sleep(250); tr7e = trustNow(); }
+  ok(CWD !== FH && tr7e ==='Yes, I trust this folder', '开在主目录以外的文件夹：照样点「Yes, I trust this folder」', String(tr7e));
+  ok(new RegExp('trust .* ' + n1.body.name + ' yes').test(log()), '服务日志里记的是这个窗口', log().split('\n').filter((l) => l.startsWith('trust')).join(' | '));
 
   console.log('\n[7f] 顶栏的订阅额度：/api/state 的 limits（Codex 从假主目录的 rollout 读，Claude 从取数文件读）');
   st = await get('/api/state'); const lm = st.limits || {};

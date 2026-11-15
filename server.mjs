@@ -7,7 +7,7 @@
  * [POS]: 总控台唯一的服务进程，由 app/main.swift 启动和重启，ui.html 只通过 /api 和它说话。
  *        它把每个会话压成四样：你问了什么 / 它在干嘛 / 它交付了什么 / 它为什么停了（alertOf 是「要不要你跟进」的唯一判断处）。
  *        读记录时把每次工具调用交给 noteTool 记证据，每轮用 classify 给会话、启动中、进程退出的卡片都标上 project。
- *        在某一列列头开的新任务，tmux 名 → 那一列记在 pins.json，classify 拿它当提示分；开工前的「信任这个文件夹」由 autoTrust 替他点（config 打开、开在主目录时）。
+ *        在某一列列头开的新任务，tmux 名 → 那一列记在 pins.json，classify 拿它当提示分；开工前的「信任这个文件夹」由 autoTrust 替他点（config 打开就点，开在哪个文件夹都一样）。
  *        digest() 从每次交付里取一句结论和要你做的事，分「待跟进 / 待审阅」；它自己写了【待跟进】/【待审阅】/【在跑】那一行就以它为准。
  *        换了端口、数据目录或主目录就自认是试验场：不碰 Ghostty、不发系统通知。
  *        归档的会话由 purgeSessionTmp 清它在 /tmp/claude-<uid> 下的临时目录：删掉的当场清，留着的归档满 3 天清。
@@ -1293,6 +1293,9 @@ function pinNote(p) {          // 换掉 FOLDER_NOTE：项目他已经指了，�
 // ───────────── 开工前的「信任这个文件夹」：替他点 ─────────────
 // Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这个多余，直接帮我点了呀」。
 // 主目录的信任 Claude Code 不存（~/.claude.json 里主目录一直是 false），所以每开一个都问，默认光标还停在「No, exit」。
+// 11/15 Khalil：「为什么让 Agent 去新建一个窗口的时候，它还是要让我去按 Trust this folder……你可以自动的 Trust」。
+// Agent 开窗口走 /api/new，几乎都带一个项目或沙盒文件夹的 cwd；11/13 那版只在主目录点，这些一个都没点到。
+// 调这个接口的是他自己的 Agent，它本来就能在他的机器上跑任意命令，信任框拦不住它；所以不再看文件夹，config 打开就点。
 // 只替总控台自己刚开的会话点，只认「Yes, I trust this folder」这一项；屏幕上是别的选择框就停手，照旧交给他在卡片上选。
 const TRUST_OPT = /^yes,? i trust this folder$/i;
 const TRUST_WAIT = Number(process.env.CCBOARD_TRUST_MS || 60000);    // 机器忙时 Claude Code 起得慢，多等一会儿
@@ -1357,7 +1360,7 @@ async function newSession(prompt, cwd, opt = {}) {
   if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}`);
   if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
   if (provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: shown, sid: null, rollout: null, model, effort }; saveAgents(); }
-  else if (CONFIG.autoTrust && sameDir(dir, HOME)) autoTrust(name).catch(() => {});   // config 里打开、而且开在主目录才替他点；不等它，卡片先出来
+  else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // config 里打开就替他点，开在哪个文件夹都一样；不等它，卡片先出来
   return { ok: true, name, project: pin };
 }
 

@@ -266,7 +266,8 @@ Khalil 11/13 的原话：「在每一个主题下面再放一个新任务，在�
 Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这个多余，直接帮我点了呀」。
 
 - 主目录的信任 Claude Code 不存（`~/.claude.json` 里主目录的 `hasTrustDialogAccepted` 一直是 false），所以总控台开的每个会话都先弹「Accessing workspace … ❯ No, exit / Yes, I trust this folder」，默认光标停在 No。
-- 只在 config.json 的 `autoTrust` 是 true、而且会话开在主目录时才替他点（仓库默认关；关着时信任框和别的选择框一样留在「启动中」卡片上）。开在别的文件夹（接口给了 cwd）一律不点：那可能是别人的仓库，信任框正是为它设的。
+- 只在 config.json 的 `autoTrust` 是 true 时才替他点（仓库默认关；关着时信任框和别的选择框一样留在「启动中」卡片上）。开在哪个文件夹都点（11/15 改，见下）。
+- 11/15 Khalil：「为什么让 Agent 去新建一个窗口的时候，它还是要让我去按 Trust this folder……你可以自动的 Trust」。11/13 那版只在会话开在主目录时点，理由是「别的文件夹可能是别人的仓库」。但 Agent 开窗口走 `/api/new`，几乎都带一个项目或沙盒文件夹的 `cwd`，所以 Agent 开的窗口一个都没点到；当天 14:27 一个开在 `fretflow-sandbox/ui-declutter-ios` 的窗口有 `route` 行、没有 `trust` 行。调 `/api/new` 的是他自己的 Agent，它本来就能在他的机器上跑任意命令，信任框对它不是防线，所以去掉「必须是主目录」这一条。留着的守卫只有一个：选项原文必须正好是 `Yes, I trust this folder`。
 - `newSession` 开完 Claude 会话后不等待地跑 `autoTrust(name)`：每 0.4 秒看一次屏幕，最多 60 秒（`CCBOARD_TRUST_MS`）。看到选择框、而且有一项的原文正好是 `Yes, I trust this folder`，就交给 `answerDialog()`（每挪一格都重读屏幕、核对那一项的原文，光标到位才回车）；服务日志记 `trust <时间> <tmux名> yes`。
 - 屏幕上是别的选择框就停手，照旧在「启动中」卡片上给他选。到了输入框（`bypass permissions on`、`? for shortcuts`）就停。Codex 不走这条（它的主目录已在 `~/.codex/config.toml` 里信任过）。
 
@@ -283,7 +284,7 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 | `projects` | `[{ key, name, dir, word }]`。key 小写字母开头、不能是 other；dir、word 是正则的字符串，不分大小写 | `[]`（没登记的 `~/Projects` 文件夹照样按文件夹名自成一组） |
 | `neutral` | 正则的字符串：哪些文件夹根不算证据 | `^Projects/shared$` |
 | `roots` | 哪些上级文件夹下面的一层算证据，相对主目录写（长的优先，如 `Projects/shared` 和 `Projects` 一起列）。iCloud 云盘根写 `com~apple~CloudDocs`，记成 `iCloud/<名>` | `["Projects", "Desktop"]`（主目录下） |
-| `autoTrust` | 总控台在主目录开的 Claude 会话，替他点「Yes, I trust this folder」 | `false` |
+| `autoTrust` | 总控台开的 Claude 会话（开在哪个文件夹都算），替他点「Yes, I trust this folder」 | `false` |
 | `codex` | Codex 会话：新任务里的「交给谁」、开 Codex 会话、读以前起的 Codex 会话和记录 | `false` |
 | `accounts` | `[{ id, name }]`：新任务能选的 Claude 号。id 是字母数字开头、40 个字符以内的 `[\w.-]`，不能重复；token 不写在这里，在钥匙串 | `[]`（不显示「账号」） |
 | `autoTidy` | 自动收工：已经交付、歇着、没人在等、没人再理的会话，自动「归档」（见上面「自动收工」） | `false` |
@@ -331,7 +332,7 @@ node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；
 node test/suggest.test.mjs               # 输入框预判的解析 28 项，不到 1 秒；--mutants 跑 8 个改坏版
 node test/limits.test.mjs                # 订阅额度的解析和状态栏取数脚本 37 项，不到 2 秒；--mutants 跑 16 个改坏版
 node test/route.test.mjs                 # 新窗口的档位 52 项，不到 1 秒；--mutants 跑 13 个改坏版
-node test/state.test.mjs                 # 服务端 151 项，约 200 秒
+node test/state.test.mjs                 # 服务端 152 项，约 200 秒
 node test/mutants.mjs                    # 83 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
 python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 166 项
