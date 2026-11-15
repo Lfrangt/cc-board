@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * [INPUT]: 依赖 ~/.claude/sessions 的会话登记（进程号、状态）、~/.claude/projects 和 ~/.codex/sessions 的对话记录（jsonl，只读）；
- *          依赖 tmux -L ccboard 和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 ./suggest.mjs 读输入框上的预判；依赖 /usr/bin/open 打开正文里的路径（/api/open）
+ *          依赖 tmux -L ccboard 和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 ./suggest.mjs 读输入框上的预判；依赖 ./limits.mjs 汇总各订阅的周额度；依赖 ./route.mjs 把 /api/new 里声明的档位 tier 翻成模型和强度；依赖 /usr/bin/open 打开正文里的路径（/api/open）
  * [OUTPUT]: 对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state、turns、send、new、archive、unarchive、delete、ack、answer…）
  * [POS]: 总控台唯一的服务进程，由 app/main.swift 启动和重启，ui.html 只通过 /api 和它说话。
  *        它把每个会话压成四样：你问了什么 / 它在干嘛 / 它交付了什么 / 它为什么停了（alertOf 是「要不要你跟进」的唯一判断处）。
@@ -10,6 +10,8 @@
  *        digest() 从每次交付里取一句结论和要你做的事，分「待跟进 / 待审阅」；它自己写了【待跟进】/【待审阅】/【在跑】那一行就以它为准。
  *        换了端口、数据目录或主目录就自认是试验场：不碰 Ghostty、不发系统通知。
  *        suggestLoop 每 2.5 秒读一遍空闲 tmux 会话的屏幕（capture-pane -e，只读），交给 suggest.mjs 取灰字建议和「下一步 1/2/3」，挂在 /api/state 的 suggest 字段上；它们不进对话记录。
+ *        limitsLoop 每 30 秒让 limits.mjs 汇总一遍各订阅的周额度（Codex 读它的记录，只在 codex 打开时；Claude 读状态栏取数脚本存在 <数据目录>/limits 的文件），挂在 /api/state 的 limits 字段上，顶栏右上角显示。
+ *        /api/new 先过 route.mjs：开窗口的一方（比如总指挥窗口）声明档位 heavy / standard / light，服务翻成 --model / --effort 再交给 newSession，写错的档位拦下、不开窗口；不声明档位就沿用 settings.json 的默认（界面「新任务 → 默认」走这条）。声明了档位的，应答带 route，日志记一行 route。
  *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex、autoTidy 三个开关默认关。
  *        autoTidy 打开时，watchTidy() 把「已经交付、歇着、没人在等、没人再理」的会话交给 archiveSession 自动收工（tidyDue 定哪些，tidyVerdict 定删还是留）；
  *        「你点过审完了」由界面经 /api/processed 告诉它（map 新增 / clear 撤销），只存在内存里，界面每次载入时重发一遍。
@@ -25,7 +27,10 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseSuggest } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
-import { noteTool, classify, pinnable, useRules } from './projects.mjs';     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
+import { codexLimits, claudeLimits, purgeTaps } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件）
+import { noteTool, classify, pinnable, useRules } from './projects.mjs';
+import { routeNew } from './route.mjs';                                         // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数
+import { parseAccounts, accountState, wrapLaunch, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
 
 const HOME = os.homedir();
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -38,6 +43,8 @@ const TOKEN_FILE = path.join(DATA, '.token');
 const ARCHIVE_FILE = path.join(DATA, 'archive.json');
 const DELETED_DIR = path.join(DATA, 'deleted');
 const UPLOAD_DIR = path.join(DATA, 'uploads');          // 粘贴 / 拖进来的附件存这里，30 天后清
+const LIMITS_DIR = path.join(DATA, 'limits');           // statusline-tap.mjs 在各个 Claude 会话里取走的额度，一个会话一个文件
+const LIMITS_MS = Number(process.env.CCBOARD_LIMITS_MS) || 30000;   // 额度半分钟读一遍：它按「周」算，不用比这更勤
 const GRACE = 8000;                      // 归档后这么久才真的停进程，期间可以撤销
 const KEEP_DELETED_DAYS = 30;
 const TMUX = ['-L', 'ccboard'];          // 自己单独一个 tmux 服务，不碰用户原有的 tmux 会话
@@ -55,18 +62,19 @@ const TIDY_REVIEW_MS = Number(process.env.CCBOARD_TIDY_REVIEW_MS) || 24 * 360000
 
 // ───────────── config.json：项目表、自动点信任、Codex ─────────────
 // 数据目录里一个文件，启动时读一次（./build.sh update 会重启服务）。没有或读不了就用默认值，记一行日志，不崩。
-// 键：projects [{key, name, dir, word}]、neutral、roots（交给 projects.mjs 的 useRules）；autoTrust、codex、autoTidy（true / false，默认都是 false）
+// 键：projects [{key, name, dir, word}]、neutral、roots（交给 projects.mjs 的 useRules）；autoTrust、codex、autoTidy（true / false，默认都是 false）；accounts [{id, name}]（accounts.mjs）
 const CONFIG_FILE = path.join(DATA, 'config.json');
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false };
+  const def = { autoTrust: false, codex: false, autoTidy: false, accounts: [] };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
     if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('不是一个 JSON 对象');
     for (const k of ['autoTrust', 'codex', 'autoTidy']) if (k in c && typeof c[k] !== 'boolean') throw new Error(k + ' 要是 true 或 false');
+    const accounts = parseAccounts(c.accounts);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}`);
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true };
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，accounts=${accounts.length}`);
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, accounts };
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -1203,13 +1211,17 @@ async function findCodex() {
   const p = r.out.split('\n').map((x) => x.trim()).filter((x) => x.startsWith('/')).pop();
   codexBin = p && fs.existsSync(p) ? p : null;
 }
+// 账号表和「当前登录的是谁」放在内存里，每 30 秒刷新一次：providers() 每次轮询都要调，不能每次都读钥匙串和 170 KB 的 ~/.claude.json
+let acctList = [], loginNow = null;
+async function refreshAccounts() { acctList = await accountState(CONFIG.accounts, run); loginNow = acctList.length ? loginLabel(HOME) : null; }
 function providers() {
   let cm = null, ce = null, xm = null, xe = null;
   try { const j = JSON.parse(fs.readFileSync(path.join(HOME, '.claude/settings.json'), 'utf8')); cm = j.model || null; ce = j.effortLevel || null; } catch {}
   try { const t = fs.readFileSync(path.join(CODEX_HOME, 'config.toml'), 'utf8');
     xm = (t.match(/^model\s*=\s*"([^"]+)"/m) || [])[1] || null; xe = (t.match(/^model_reasoning_effort\s*=\s*"([^"]+)"/m) || [])[1] || null; } catch {}
   return {
-    claude: { label: 'Claude Code', ok: true, models: ['fable', 'opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultModel: cm, defaultEffort: ce },
+    claude: { label: 'Claude Code', ok: true, models: ['fable', 'opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultModel: cm, defaultEffort: ce,
+      accounts: acctList, login: acctList.length ? loginNow : null },
     ...(CONFIG.codex ? { codex: { label: 'Codex', ok: !!codexBin, models: xm ? [xm] : [], efforts: ['low', 'medium', 'high', 'xhigh'], defaultModel: xm, defaultEffort: xe } } : {}),
   };
 }
@@ -1268,6 +1280,12 @@ async function newSession(prompt, cwd, opt = {}) {
   const provider = opt.provider === 'codex' ? 'codex' : 'claude';
   const model = String(opt.model || '').trim(), effort = String(opt.effort || '').trim();
   if ((model && !SAFE_ARG.test(model)) || (effort && !SAFE_ARG.test(effort))) return { ok: false, error: '模型或强度的写法不对' };
+  let acct = null;                                    // 选了账号：只认 config 里登记过、钥匙串里有 token 的
+  if (opt.account && provider === 'claude') {
+    acct = acctList.find((a) => a.id === String(opt.account));
+    if (!acct) return { ok: false, error: '没有这个账号：' + String(opt.account).slice(0, 40) };
+    if (!acct.ready) return { ok: false, error: '钥匙串里还没有「' + acct.name + '」的 token' };
+  }
   const files = await cleanFiles(opt.files);
   let text = (prompt || '').trim();
   if (files.length) text = (text ? text + '\n\n' : '') + '附件（先看这些文件再开始）：\n' + files.join('\n');
@@ -1279,13 +1297,16 @@ async function newSession(prompt, cwd, opt = {}) {
   if (provider === 'codex') {
     if (!codexBin) return { ok: false, error: '这台机器上没找到 codex 命令' };
     args.push(codexBin); if (model) args.push('-m', model); if (effort) args.push('-c', 'model_reasoning_effort="' + effort + '"');
+    if (text) args.push(text);
   } else {
-    args.push(await findClaude()); if (model) args.push('--model', model); if (effort) args.push('--effort', effort);
+    const cl = [await findClaude()]; if (model) cl.push('--model', model); if (effort) cl.push('--effort', effort);
+    if (text) cl.push(text);
+    args.push(...wrapLaunch(acct, cl));                // 没选账号原样不变；选了就在外面包一层读钥匙串的 zsh
   }
-  if (text) args.push(text);
   const r = await tmux(args);
   if (!r.ok) return { ok: false, error: 'tmux：' + r.err };
   launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });
+  if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}`);
   if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
   if (provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: shown, sid: null, rollout: null, model, effort }; saveAgents(); }
   else if (CONFIG.autoTrust && sameDir(dir, HOME)) autoTrust(name).catch(() => {});   // config 里打开、而且开在主目录才替他点；不等它，卡片先出来
@@ -1321,6 +1342,12 @@ async function slowLoop() {
 async function suggestLoop() {
   try { await refreshSuggest(); } catch {}
   setTimeout(suggestLoop, SUGGEST_MS);
+}
+// 各订阅的周额度。Codex 只在 config.json 的 codex 打开时读（和「交给谁」同一个开关）；Claude 永远读，没人取数就是空数组。
+let LIMITS = { claude: [], codex: null };
+function limitsLoop() {
+  try { const now = Date.now(); LIMITS = { claude: claudeLimits(LIMITS_DIR, now), codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null }; } catch (e) { console.error('limits', e); }
+  setTimeout(limitsLoop, LIMITS_MS);
 }
 function fastLoop() {
   try { scanSessions(); } catch (e) { console.error('scan', e); }
@@ -1362,7 +1389,7 @@ const server = http.createServer(async (req, res) => {
       const lost = Object.values(archive.items).filter((x) => x.lost && x.state === 'archived')
         .map((x) => ({ sid: x.sid, provider: x.provider, title: x.title, cwd: x.cwd, prompt: x.prompt, lostAt: x.lostAt, project: x.project || classify(null, { title: x.title, prompt: x.prompt, cwd: x.cwd, home: HOME }) }));
       const out = { now: Date.now(), sessions: sessions.map(withSuggest), others: otherCount, ghostty: ghosttyOk, pending: pending.filter((x) => !live.has(x.name)).map((x) => ({ ...x, project: classify(null, { prompt: x.prompt, cwd: x.cwd, home: HOME, pin: pinOf(x.name) }) })), home: HOME, notices, providers: providers(),
-        archived: Object.values(archive.items).filter((x) => x.state !== 'restoring').length, lost, stallMs: STALL_MS, sandbox: SANDBOX };
+        archived: Object.values(archive.items).filter((x) => x.state !== 'restoring').length, lost, stallMs: STALL_MS, sandbox: SANDBOX, limits: LIMITS };
       notices = [];
       return reply(res, 200, out);
     }
@@ -1423,9 +1450,13 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/api/unarchive') return reply(res, 200, await unarchive(String(body.sid || '')));
     if (u.pathname === '/api/delete') return reply(res, 200, await deleteSession(String(body.sid || '')));
     if (u.pathname === '/api/new') {
-      const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: body.provider, model: body.model, effort: body.effort, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null });
-      if (r.ok) { await refreshPanes(); }
-      return reply(res, 200, r);
+      // 开窗口的一方（比如总指挥窗口）可以只说档位 tier（heavy / standard / light），由 route.mjs 翻成模型和强度；不说档位就和以前一样。
+      // 档位写错在这里直接拦下，不开窗口：悄悄退回默认，调用方会以为已经省了钱。账号（account）是另一维，和档位互不影响。
+      const rt = routeNew({ provider: body.provider, model: body.model, effort: body.effort, tier: body.tier });
+      if (!rt.ok) return reply(res, 200, rt);
+      const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null });
+      if (r.ok) { await refreshPanes(); if (rt.tier) console.log(`route ${new Date().toISOString()} ${r.name} ${rt.tier} ${body.provider === 'codex' ? 'codex' : 'claude'} ${rt.model || '-'} ${rt.effort}`); }
+      return reply(res, 200, r.ok && rt.tier ? { ...r, route: { tier: rt.tier, model: rt.model, effort: rt.effort, why: rt.why } } : r);   // 声明了档位才带 route：调用方看得到最后用了什么
     }
     if (u.pathname === '/api/open') {               // 正文里的本机路径被点了（11/12 Khalil：「把资料直接把链接给我，我可以直接点进去」）
       const og = req.headers.origin; if (og && og !== 'http://127.0.0.1:' + PORT && og !== 'http://localhost:' + PORT) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
@@ -1474,7 +1505,8 @@ server.on('error', (e) => { console.error('listen', e.message); process.exit(1);
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`cc-board ${new Date().toISOString()} http://127.0.0.1:${PORT}/?k=${TOKEN} pid=${process.pid}`);
   for (const [sid, it] of Object.entries(archive.items)) if (it.state === 'archiving') scheduleStop(sid);   // 上次没来得及停的，接着办
-  purgeDeleted(); purgeUploads(); setInterval(() => { purgeDeleted(); purgeUploads(); }, 12 * 3600 * 1000);
+  purgeDeleted(); purgeUploads(); purgeTaps(LIMITS_DIR); setInterval(() => { purgeDeleted(); purgeUploads(); purgeTaps(LIMITS_DIR); }, 12 * 3600 * 1000);
   if (CONFIG.codex) findCodex();
-  fastLoop(); slowLoop(); suggestLoop();
+  refreshAccounts(); setInterval(refreshAccounts, 30000);
+  fastLoop(); slowLoop(); suggestLoop(); limitsLoop();
 });

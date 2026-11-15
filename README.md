@@ -33,6 +33,7 @@ cc-board never runs an agent loop and never replaces your CLI.
 - **What it delivered**: a one-line conclusion and the single thing it wants from you. *Needs follow-up* (it wants a decision) is separate from *ready to review* (here is a result) and *no action needed*.
 - **Start and tidy up from the board**: new tasks (⌘N, or the "+ New task" in a project column), image and file attachments, zoom a card (⌘O or double-click), archive (empty sessions are deleted, the rest are kept with a note, undo for 8 seconds).
 - **Next-step suggestions in the reply box**: for sessions in cc-board's own tmux, the ghost-text suggestion Claude Code shows in its prompt, and the numbered next steps a next-steps plugin draws above it, are read off the terminal screen (read-only) and shown on the card. Press Tab in the empty box to take the suggestion, or click a step (or press 1–3 on the card you are looking at) to drop it into the box as a draft. Nothing is sent until you press Return. Step 1 uses the full suggestion; steps 2 and 3 use their short label, because that is all the screen shows.
+- **Subscription usage in the top bar**: one grey pill per subscription showing its weekly limit, for example `Claude · ben 1%` and `Codex 34%`. A pill turns amber once any of its windows reaches 85%. Hover for each window's usage, when it resets and how old the number is. Codex's numbers come from the rate limits Codex writes into its own session logs (only when the `codex` option is on). Claude Code only reports usage to a status-line command, so a Claude pill stays empty (`—`) until you set that up, see [Usage in the top bar](#usage-in-the-top-bar-optional).
 - English and Chinese UI; it follows the system language, or add `?lang=en` to the URL.
 
 | Card says | Evidence in the transcript |
@@ -59,7 +60,7 @@ open ~/Applications/总控台.app
 
 The app bundle is still called 总控台 ("main console" in Chinese); an English name is an open question. Node is looked up at `~/.local/node/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. On first launch macOS asks whether the app may control Ghostty. Every rebuild changes the ad-hoc signature, so it asks again.
 
-After you pull changes, `./build.sh update` swaps in the new `ui.html`, `server.mjs`, `projects.mjs` and `suggest.mjs` and restarts the service. No recompile, no new permission prompt.
+After you pull changes, `./build.sh update` swaps in the new `ui.html`, `server.mjs`, `projects.mjs`, `suggest.mjs`, `limits.mjs`, `statusline-tap.mjs` and `accounts.mjs` and restarts the service. No recompile, no new permission prompt.
 
 Want a look without building anything?
 
@@ -79,8 +80,32 @@ One optional file: `config.json` in the data directory (`~/Library/Application S
 | `roots` | `["Projects", "Desktop"]` | Parent folders, relative to your home, whose direct subfolders count as evidence of a project. Longest match wins; list `Projects/shared` next to `Projects` if you want both. |
 | `autoTrust` | `false` | For Claude sessions cc-board itself starts in your home directory, answer Claude Code's one-time "trust this folder" prompt for you, only when the option reads exactly `Yes, I trust this folder`. Sessions in any other folder are never answered for you. Off means the dialog stays on the card and you choose. |
 | `codex` | `false` | Experimental: also list and start Codex CLI sessions. Everything else in this README is about Claude Code. |
+| `accounts` | `[]` | Extra Claude subscriptions a new task can run on: `{ "id", "name" }`. `id` is letters, digits, `_ . -`, up to 40 characters. Each one needs a long-lived token from `claude setup-token`, stored in your Keychain under the service `ccboard-account-<id>` (see below). Listed accounts appear as an **Account** menu in the new-task dialog; **Default** is whoever Claude Code is signed in as. |
+
+### Running a task on another Claude subscription
+
+Claude Code keeps one sign-in per machine, shared by every session. To start one session on a different subscription, cc-board sets `CLAUDE_CODE_OAUTH_TOKEN` (and `CCBOARD_ACCOUNT=<id>`, which labels its usage pill) for that session only. Settings, memory and transcripts stay shared. The token never appears in `config.json`, a command line or the service log: the session's own shell reads it from the Keychain just before it starts `claude`.
+
+```bash
+claude setup-token                      # sign in with the other account in the browser; it prints a token
+security add-generic-password -U -a "$USER" -s ccboard-account-<id> -w    # paste the token at the prompt
+```
+
+Then add `{ "id": "<id>", "name": "<label>" }` to `accounts` and run `./build.sh update`. An account whose Keychain item is missing is shown greyed out. cc-board only checks that the item exists; a revoked or expired token shows up in the session itself.
+
+## Usage in the top bar (optional)
+
+Claude Code does not write its 5-hour and weekly usage anywhere on disk. It only hands them to a status-line command, and only for claude.ai Pro, Max and Ultra subscriptions, after the session's first reply. `statusline-tap.mjs` is that command: it keeps just the two rate-limit windows (percentage and reset time, no paths, models or conversation), one small file per session under `<data directory>/limits/`, and prints one line such as `5h 6% · 7d 1%` under the prompt. It reads no credentials and makes no network calls. Add it to `~/.claude/settings.json`:
+
+```json
+{ "statusLine": { "type": "command", "command": "node \"$HOME/Library/Application Support/cc-board/app/statusline-tap.mjs\"" } }
+```
+
+Pills appear after any session replies. If you run several Claude accounts, set `CCBOARD_ACCOUNT=<short name>` in the environment a session is started with and its pill is labelled with that name; without it, accounts are told apart by their weekly reset time. A window that has passed its reset time is dropped rather than shown stale.
 
 ## Known limits
+
+- **Usage numbers are as fresh as the last session that spoke.** Claude's come from status-line updates, Codex's from its last turn; the hover text says how old they are.
 
 - **Follow-up detection is Chinese-first.** The reliable signal is a last line the agent writes itself: `【待跟进】…` (needs you), `【待审阅】…` (ready to review), `【进展】…` (progress). Without it, cc-board guesses from the text; the guesses are tuned for Chinese and cover only a few English phrasings ("please confirm", "your call"). English status tags are the first thing we want to add.
 - **Replying into a session you started in a terminal tab works for Ghostty only.** Sessions started from cc-board work without it.
@@ -93,6 +118,7 @@ One optional file: `config.json` in the data directory (`~/Library/Application S
 ```sh
 npm install                       # only for the UI tests (playwright-core)
 node test/projects.test.mjs       # project-grouping rules, under a second
+node test/limits.test.mjs         # usage-limit parsing and the status-line tap, under a second
 node test/state.test.mjs          # the server, in a throwaway fake $HOME, about 90 s
 node test/mutants.mjs             # deliberately broken servers; each must turn the suite red, about 7 min
 node test/state.test.mjs --ui &   # then:
@@ -106,6 +132,9 @@ server.mjs     the service: reads sessions, works out each card's state, serves 
 ui.html        the whole interface, one file
 projects.mjs   project grouping (pure functions)
 suggest.mjs    reads Claude Code's ghost-text suggestion and next-step options off the tmux screen (pure function)
+limits.mjs     weekly usage per subscription: Codex's session logs, plus the files the status-line tap wrote
+statusline-tap.mjs   the status-line command that saves Claude Code's rate limits for limits.mjs
+accounts.mjs   which Claude subscription a new task runs on (token read from the Keychain)
 app/           the native shell (Swift, WKWebView)
 test/          isolated tests
 CLAUDE.md      long-form design notes in Chinese: each rule, why it is that way, and the feedback behind it

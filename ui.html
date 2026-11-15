@@ -77,6 +77,16 @@ svg{display:block}
 .plain{height:28px;padding:0 12px;border-radius:var(--r-pill);color:var(--text-2);white-space:nowrap} .plain:hover{background:var(--fill);color:var(--text)}
 .bordered{height:28px;padding:0 13px;border-radius:var(--r-pill);border:1px solid var(--hair-2);white-space:nowrap;transition:background var(--d1) var(--ease)}
 .bordered:hover{background:var(--fill)} .bordered.danger{color:var(--danger)}
+/* 顶栏右上角：各订阅的额度（Codex 一条，Claude 每个号一条）。平时是灰的，不抢眼；任何一个窗口用到 85% 才变琥珀（要你留意）。 */
+.lim{display:flex;align-items:center;gap:6px;flex:none} .lim:empty{display:none}
+.lq{display:flex;align-items:center;gap:7px;height:26px;padding:0 10px;border-radius:var(--r-pill);background:var(--fill);color:var(--text-3);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;cursor:default}
+.lq .mtr{width:34px;height:4px;border-radius:2px;background:var(--fill-2);overflow:hidden;flex:none}   /* 不叫 .bar：那是顶栏自己的类（position:fixed） */
+.lq .mtr i{display:block;height:100%;border-radius:2px;background:var(--text-3);transition:width var(--d3) var(--ease)}
+.lq .pc{color:var(--text);font-weight:600;min-width:2.5ch;text-align:right}
+.lq.warn .mtr i{background:var(--attn)} .lq.warn .pc{color:var(--attn)}
+.lq.none .pc{color:var(--text-3);font-weight:500}
+@media (max-width:1180px){.lq .mtr,.lq .tg{display:none}}   /* 窗口窄：先去掉进度条和账号后缀 */
+@media (max-width:1000px){.lim{display:none}}               /* 再窄顶栏本来就满了，整条让位给按钮 */
 
 main{position:absolute;inset:var(--bar-h) 0 0 0}
 .blank{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-3);text-align:center;pointer-events:none}
@@ -318,7 +328,7 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
 .arow .t b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .arow .t span{display:block;color:var(--text-2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .arow .w{color:var(--text-3);font-size:12px;white-space:nowrap}
-@media (max-width:700px){.hint,.brand{display:none} .bar{gap:8px;padding-left:10px;padding-right:10px} .seg button{padding:0 8px} :root{--cw:calc(100vw - 28px)} .arow{flex-wrap:wrap}.arow .t{flex-basis:100%}}
+@media (max-width:700px){.hint,.brand,.lim{display:none} .bar{gap:8px;padding-left:10px;padding-right:10px} .seg button{padding:0 8px} :root{--cw:calc(100vw - 28px)} .arow{flex-wrap:wrap}.arow .t{flex-basis:100%}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important} dialog,dialog[open]{transform:none} .card{transition-property:opacity,filter!important} .halo{transition-property:opacity!important}}
 </style>
 </head>
@@ -329,6 +339,7 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
   <nav class="seg" id="filters" aria-label="筛选"></nav>
   <div class="spacer" data-drag></div>
   <span class="hint" id="hint" data-drag></span>
+  <div class="lim" id="limits" role="group" aria-label="订阅额度"></div>
   <button class="tbtn" id="archBtn">归档</button>
   <div class="seg" id="rows" aria-label="一屏放多少"><button data-rows="2">8 格</button><button data-rows="3">12 格</button></div>
   <button class="primary" id="newBtn" title="⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片">新任务</button>
@@ -350,6 +361,7 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
       <div class="field" id="nProvField"><span class="lab">交给谁</span><div class="seg" id="nProv" style="height:34px;align-items:stretch"></div></div>
       <div class="field grow"><label for="nModel">模型</label><select id="nModel"></select></div>
       <div class="field"><label for="nEffort">强度</label><select id="nEffort"></select></div>
+      <div class="field" id="nAcctField"><label for="nAcct">账号</label><select id="nAcct"></select></div>
     </div>
   </div>
   <div class="dfoot"><button class="plain" id="nClip" title="加图片或文件，也可以直接粘贴或拖进来">加附件</button><span class="grow" id="nMsg">⌘ 回车开工</span><button class="plain" data-close>取消</button><button class="primary" id="nGo">开工</button></div>
@@ -381,7 +393,7 @@ const LANG = (() => { const q = new URLSearchParams(location.search).get('lang')
 const EN = {
   '放大看：只看你说的和它交付的（⌘O）': 'Enlarge: only your prompts and its deliveries (⌘O)', '⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片': '⌘N new task · ⌘T blank session · ⌘O enlarge card', '把鼠标移到要放大的卡片上，再按 ⌘O': 'Point at a card, then press ⌘O',
   '归档：没留下东西的删掉，其余留着、能接回来': 'Archive: deletes it if it left nothing behind, otherwise keeps it resumable', '放大看（双击封面 / ⌘O）': 'Enlarge (double-click the cover / ⌘O)', '双击放大（⌘O）': 'Double-click to enlarge (⌘O)', '还没有归档的会话。': 'No archived sessions yet.', '点卡片右上角的「归档」。': 'Use “Archive” at the top right of a card.', '它在等你决定': 'it is waiting for your decision', '一句话都没说过': 'nothing was ever said', '只聊了几句，没改过文件': 'only a short chat, no files changed',
-  '其他': 'Other', '收起这一列': 'Collapse column', '在这一列里新建任务': 'New task in this column',
+  '其他': 'Other', '收起这一列': 'Collapse column', '在这一列里新建任务': 'New task in this column', '订阅额度': 'Subscription usage',
   '直接写任务，它就在这个项目里做，做完会站到最前面。留空 = 开一个空会话，等你在卡片里说第一句。': 'Describe the task. It works in this project and comes to the front when done. Leave empty for a blank session.', '展开': 'Expand', '点开': 'Open', '这种文件不直接打开，已在访达里选中': 'Not opened directly — revealed in Finder',
   '总控台': 'cc-board', '封面': 'Covers', '墙': 'Wall', '归档': 'Archive', '8 格': '8 up', '12 格': '12 up', '新任务': 'New task',
   '全部': 'All', '在做': 'Working', '新交付': 'Delivered', '等你选': 'Needs you', '待跟进': 'Follow up', '空闲': 'Idle', '停住了': 'Stopped', '启动中': 'Starting',
@@ -389,7 +401,7 @@ const EN = {
   '填进输入框，改完再发': 'Fill the box, edit, then send', '接着说，回车发送': 'Reply, then hit return', '它在忙，发了会排队': 'Busy. Your message will queue.', '它在等你选，选完才能回话': 'Waiting for your choice first',
   '没对上它的终端标签，从菜单去终端里回': 'No matching terminal tab. Reply in the terminal.', '思考中': 'Thinking',
   '去终端': 'Open in terminal', '删除…': 'Delete…', '删除': 'Delete', '恢复': 'Restore', '恢复中': 'Restoring', '对话': 'Transcript', '取消': 'Cancel', '开工': 'Start',
-  '要它做什么': 'What should it do?', '交给谁': 'Run with', '模型': 'Model', '强度': 'Effort', '默认': 'Default', '⌘ 回车开工': '⌘ Return to start',
+  '要它做什么': 'What should it do?', '交给谁': 'Run with', '模型': 'Model', '强度': 'Effort', '账号': 'Account', '默认': 'Default', '⌘ 回车开工': '⌘ Return to start',
   '关闭': 'Close', '看对话': 'Transcript', '更多': 'More', '发送': 'Send', '回它一句': 'Reply', '上一张': 'Previous', '下一张': 'Next', '撤销': 'Undo', '筛选': 'Filter', '视图': 'View', '一屏放多少': 'Density',
   '发送中…': 'Sending…', '已送达': 'Sent', '发出去了，但没在它的记录里看到，去终端确认一下': 'Sent, but not confirmed in its transcript. Check the terminal.', '没发出去': 'Not sent',
   '它停下来等你选': 'It stopped to ask you', '去终端回答': 'Answer in terminal', '开工了，还没有阶段性说明。': 'Started. No progress note yet.',
@@ -429,7 +441,7 @@ const RULES = [
   [/^交付 · (.+) · 中间 (\d+) 步没显示$/, 'Delivered · $1 · $2 steps hidden'],
   [/^(交付|上一次交付) · (.+?)( · 后台任务还在跑)?$/, (m, a, b, c) => EN[a] + ' · ' + b + (c ? ' · background task still running' : '')],
   [/^这一轮还没有交付，已经做了 (\d+) 步$/, 'No delivery in this turn yet · $1 steps so far'],
-  [/^你 · (.+)$/, 'You · $1'], [/^默认（(.+)）$/, 'Default ($1)'], [/^归档 (\d+)$/, 'Archive $1'],
+  [/^你 · (.+)$/, 'You · $1'], [/^默认（当前登录 (.+)）$/, 'Default (signed in: $1)'], [/^(.+)（钥匙串里还没有 token）$/, '$1 (no token in Keychain yet)'], [/^默认（(.+)）$/, 'Default ($1)'], [/^归档 (\d+)$/, 'Archive $1'],
   [/^自动收工：留了 (\d+) 个，删了 (\d+) 个（(.*)）$/, 'Auto-tidied: kept $1, deleted $2 ($3)'],
   [/^已归档「(.*)」：(.*)，能接回来$/, 'Archived “$1”: $2 — can be resumed'],[/^删了「(.*)」：(.*)（对话在暂存处放 30 天）$/, 'Deleted “$1”: $2 (transcript kept 30 days)'],
   [/^点「归档」：没留下东西的直接删（对话在暂存处放 (\d+) 天），其余停掉会话、对话留着，能恢复。$/, 'Archive: sessions that left nothing behind are deleted (transcript kept $1 days); the rest are stopped and kept, and can be restored.'],
@@ -553,6 +565,51 @@ function when(t, now, pill) {            // pill：卡片右上角的药丸里�
 function dur(t, now) { if (!t) return ''; const s = Math.max(0, (now - (typeof t === 'number' ? t : Date.parse(t))) / 1000); const u = LANG === 'en' ? [' s', ' min', ' h'] : [' 秒', ' 分钟', ' 小时']; return s < 60 ? Math.round(s) + u[0] : s < 3600 ? Math.round(s / 60) + u[1] : (s / 3600).toFixed(1) + u[2]; }
 const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const ms = (t) => (t ? Date.parse(t) || 0 : 0);
+
+// ── 顶栏右上角：各订阅的额度 ──
+// 数据在 /api/state 的 limits（服务端 limits.mjs 汇总）：codex 一条或 null（config 没开 codex 就是 null）；claude 是数组，每个号一条，没人取数就是空。
+// 芯片上显示周额度（只有 5 小时窗口时显示那个）；鼠标停上去看每个窗口的已用、重置时间、数据多久前的。
+const WARN_AT = 85;
+const LIMIT_NAME = { five_hour: ['5 小时额度', '5-hour limit'], week: ['周额度', 'Weekly limit'], other: ['额度', 'Limit'] };
+function leftText(t, now) {
+  const m = Math.max(0, Math.round((t - now) / 60000)), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+  if (LANG === 'en') return 'in ' + (d ? d + ' d ' + h + ' h' : h ? h + ' h ' + (m % 60) + ' min' : m + ' min');
+  return (d ? d + ' 天 ' + h + ' 小时' : h ? h + ' 小时 ' + (m % 60) + ' 分钟' : m + ' 分钟') + '后';
+}
+function resetAt(w) {          // 5 小时窗口当天就重置，只写钟点；周窗口带上星期几
+  if (w.key === 'five_hour') return hm(w.resetsAt);
+  return new Date(w.resetsAt).toLocaleString(LANG === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+function limitChip(it, now, many) {
+  const codex = it.provider === 'codex', ws = it.windows || [];
+  const main = ws.find((w) => w.key === 'week') || ws[0];
+  const wk = ws.find((w) => w.key === 'week');
+  const tag = it.account ? ' · ' + it.account : many && wk ? ' · ' + new Date(wk.resetsAt).toLocaleString(LANG === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short' }) : '';
+  const base = codex ? 'Codex' : 'Claude', name = base + tag;
+  const lines = [name + (it.plan ? ' · ' + it.plan : '')];
+  for (const w of ws) {
+    const label = LIMIT_NAME[w.key][LANG === 'en' ? 1 : 0], u = Math.round(w.used);
+    lines.push(LANG === 'en' ? label + ' used: ' + u + '%  ·  resets ' + resetAt(w) + ' (' + leftText(w.resetsAt, now) + ')' : label + '已用 ' + u + '%  ·  ' + resetAt(w) + ' 重置（' + leftText(w.resetsAt, now) + '）');
+  }
+  if (!ws.length) lines.push(LANG === 'en'
+    ? (codex ? "Codex's usage window has rolled over. It updates after the next Codex turn." : 'No Claude usage data yet. Add statusline-tap.mjs as the Claude Code status line (see README); it shows up after any session replies.')
+    : (codex ? 'Codex 的额度窗口已过期，下次用 Codex 之后更新。' : '还没收到 Claude 的额度数据。把 statusline-tap.mjs 挂成 Claude Code 的状态栏（见 README），任一窗口回话之后就会出现。'));
+  if (it.at) lines.push((LANG === 'en' ? 'Updated ' : '更新于 ') + when(it.at, now));
+  const tip = lines.join('\n');
+  const warn = ws.some((w) => w.used >= WARN_AT);
+  const pc = main ? (main.key === 'five_hour' && !wk ? '5h ' : '') + Math.min(100, Math.round(main.used)) + '%' : '—';
+  return '<span class="lq' + (warn ? ' warn' : '') + (main ? '' : ' none') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="' + esc(it.id) + '" tabindex="0"><span>' + base + (tag ? '<span class="tg">' + esc(tag) + '</span>' : '') + '</span>'
+    + (main ? '<span class="mtr" aria-hidden="true"><i style="width:' + Math.min(100, main.used).toFixed(1) + '%"></i></span>' : '') + '<span class="pc">' + pc + '</span></span>';
+}
+function paintLimits(st) {
+  const el = $('#limits'), lm = st.limits; if (!el) return;
+  const claude = lm && lm.claude && lm.claude.length ? lm.claude : [{ id: 'claude:none', provider: 'claude', windows: [] }];
+  const items = lm ? [...claude, ...(lm.codex ? [lm.codex] : [])] : [];
+  const key = JSON.stringify(items) + '|' + LANG + '|' + Math.floor(st.now / 60000);      // 提示里有「几天几小时后」，每分钟重画一次；其余时候数据没变就不动 DOM
+  if (el.dataset.k === key) return; el.dataset.k = key;
+  const many = claude.length > 1;
+  el.innerHTML = items.map((it) => limitChip(it, st.now, it.provider === 'claude' && many)).join('');
+}
 
 // ── 一个会话现在算什么状态；排在第几档 ──
 // 交付分两种：待跟进 = 它在等你下指令；待审阅 = 交付了，等你看。分法看服务端的 digest（它自己写了【待跟进】/【待审阅】就照它的，没写就按正文猜）。
@@ -912,6 +969,7 @@ const cardTitle = (c) => (c.s ? c.s.title : c.x ? c.x.title : c.p ? T('新任务
 let prevHot = new Set();                   // 上一次画的时候「停住了要你跟进」的那些，用来发现新停住的
 function paint(st) {
   if (!st) return; last = st; HOME = st.home || HOME;
+  paintLimits(st);
   // 墙上的旧位置要在这一轮改任何东西（筛选藏卡、换内容）之前量，不然量到的已经是新位置，什么都动不起来
   const pre = mode === 'wall' && !first && !calm.matches ? new Map([...cards].filter(([, c]) => c.el.isConnected && !c.el.hidden && c.el.offsetParent).map(([id, c]) => [id, c.el.getBoundingClientRect()])) : null;
   const stage = $('#stage'); const list = []; let nBusy = 0, nReply = 0, nReview = 0, nAsk = 0, nStop = 0, shown = 0; const hot = new Map();
@@ -1162,7 +1220,7 @@ async function openDetail(sid, title) {
 }
 
 // ── 新任务：交给谁、用哪个模型、多大强度 ──
-let pick = store('ccb_new') || { provider: 'claude', model: {}, effort: {} };
+let pick = store('ccb_new') || { provider: 'claude', model: {}, effort: {} };   // pick.account：选的账号 id，'' = 默认（钥匙串当前登录的那个号）
 function fillNew() {
   const P = (last && last.providers) || { claude: { label: 'Claude Code', ok: true, models: [], efforts: [] } };
   if (!P[pick.provider] || !P[pick.provider].ok) pick.provider = 'claude';
@@ -1176,9 +1234,14 @@ function fillNew() {
   $('#nModel').value = mNow;
   $('#nEffort').innerHTML = L('<option value="">默认' + (p.defaultEffort ? '（' + esc(p.defaultEffort) + '）' : '') + '</option>' + (p.efforts || []).map((e) => '<option value="' + esc(e) + '">' + esc(e) + '</option>').join(''));
   $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
+  // 账号：config.json 里登记了 accounts 才出现。默认 = 当前登录的号；钥匙串里还没有 token 的号列出来但不能选
+  const A = p.accounts || [];
+  $('#nAcctField').style.display = A.length ? '' : 'none';
+  $('#nAcct').innerHTML = L('<option value="">默认' + (p.login ? '（当前登录 ' + esc(p.login) + '）' : '') + '</option>' + A.map((a) => '<option value="' + esc(a.id) + '"' + (a.ready ? '' : ' disabled') + '>' + esc(a.name) + (a.ready ? '' : '（钥匙串里还没有 token）') + '</option>').join(''));
+  $('#nAcct').value = A.some((a) => a.ready && a.id === pick.account) ? pick.account : '';
 }
 $('#nProv').addEventListener('click', (e) => { const b = e.target.closest('[data-prov]'); if (!b || b.disabled) return; keepPick(); pick.provider = b.dataset.prov; fillNew(); });
-function keepPick() { pick.model = pick.model || {}; pick.effort = pick.effort || {}; pick.model[pick.provider] = $('#nModel').value.trim(); pick.effort[pick.provider] = $('#nEffort').value; store('ccb_new', pick); }
+function keepPick() { pick.model = pick.model || {}; pick.effort = pick.effort || {}; pick.model[pick.provider] = $('#nModel').value.trim(); pick.effort[pick.provider] = $('#nEffort').value; pick.account = $('#nAcct').value; store('ccb_new', pick); }
 // 在哪一列的列头点的「新任务」：{key, name}，跟着任务交给服务，新卡落进那一列。右上角、⌘N 和「其他」那一列开的是 null（它自己找项目）
 let newIn = null;
 const NEW_TIP = '直接写任务，它在后台做，做完会站到最前面。放在哪个文件夹它自己定。留空 = 开一个空会话，等你在卡片里说第一句。';
@@ -1191,7 +1254,7 @@ function openNew(proj) {
 async function goNew() {
   const prompt = $('#nPrompt').value.trim(), cwd = '~';      // 不问放哪个文件夹：都开在主目录，服务会让它自己找项目文件夹
   keepPick(); $('#nGo').disabled = true; let r; const nFiles = newHold.atts.length;
-  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '' }); }
+  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '', account: pick.provider === 'claude' ? pick.account || '' : '' }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   $('#nGo').disabled = false;
   if (r.ok) { $('#nPrompt').value = ''; newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }
@@ -1200,7 +1263,7 @@ async function goNew() {
 let focusNew = null, wantFocus = null, pickNext = null;
 async function openBlank() {
   const P = (last && last.providers) || {}; const pv = P[pick.provider] && P[pick.provider].ok ? pick.provider : 'claude';
-  let r; try { r = await api('/api/new', { prompt: '', cwd: '~', provider: pv, model: (pick.model || {})[pv] || '', effort: (pick.effort || {})[pv] || '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
+  let r; try { r = await api('/api/new', { prompt: '', cwd: '~', provider: pv, model: (pick.model || {})[pv] || '', effort: (pick.effort || {})[pv] || '', account: pv === 'claude' ? pick.account || '' : '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
   if (r.ok) { focusNew = r.name; toast('新会话启动中'); refresh(); } else toast(r.error || '没开起来');
 }
 window.ccbBlank = openBlank;

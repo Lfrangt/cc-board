@@ -14,6 +14,7 @@ const FX = JSON.parse(fs.readFileSync(path.join(HERE, '.tmp', 'ui-fixture.json')
 const OUT = path.resolve(process.argv[2] || path.join(HERE, '.tmp', 'shots')); fs.mkdirSync(OUT, { recursive: true });
 let pass = 0, fail = 0;
 const ok = (cond, name, extra = '') => { if (cond) { pass++; console.log('  ok   ' + name); } else { fail++; console.log('  FAIL ' + name + (extra ? '  → ' + extra : '')); } };
+const same = (got, want, name, extra = '') => ok(JSON.stringify(got) === JSON.stringify(want), name, extra || JSON.stringify(got));
 
 const browser = await launch();
 async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900 }) {      // 无头浏览器的系统语言是英文，中文界面要明说
@@ -246,14 +247,17 @@ try {
     const m = await pg.evaluate(() => { const el = document.querySelector('#nModel'); return { tag: el.tagName, value: el.value, opts: [...el.options].map((o) => o.value + '=' + o.textContent) }; });
     if (saved === 'fable') {
       const dlg = await pg.evaluate(() => ({ cwd: !!document.querySelector('#nCwd'), labels: [...document.querySelectorAll('#newDlg label, #newDlg .lab')].map((x) => x.textContent).join('|'), ph: document.querySelector('#nPrompt').placeholder }));
-      ok(!dlg.cwd && dlg.labels === '要它做什么|交给谁|模型|强度' && /放在哪个文件夹它自己定/.test(dlg.ph), '新任务：不再问放哪个文件夹，提示里写明它自己定', JSON.stringify(dlg));
+      ok(!dlg.cwd && dlg.labels === '要它做什么|交给谁|模型|强度|账号' && /放在哪个文件夹它自己定/.test(dlg.ph), '新任务：不再问放哪个文件夹，提示里写明它自己定', JSON.stringify(dlg));
       ok(m.tag === 'SELECT' && m.value === 'fable' && m.opts.join('|') === '=默认|fable=Fable|opus=Opus|sonnet=Sonnet|haiku=Haiku', '新任务：模型是下拉菜单，记着 fable 时四个模型都列着', JSON.stringify(m));
       await pg.screenshot({ path: path.join(OUT, 'new-task.png') });
-      await pg.selectOption('#nModel', 'opus'); await pg.fill('#nPrompt', '测试'); await pg.click('#nGo'); await sleep(600);
+      const ac = await pg.evaluate(() => [...document.querySelector('#nAcct').options].map((o) => o.value + '=' + o.textContent + (o.disabled ? '(灰)' : '')));
+      ok(ac.join('|') === '=默认|good=旧号|none=还没存 token 的号（钥匙串里还没有 token）(灰)', '新任务：账号下拉列出 config 里的号，钥匙串里没有 token 的灰着不能选', JSON.stringify(ac));
+      await pg.selectOption('#nModel', 'opus'); await pg.selectOption('#nAcct', 'good'); await pg.fill('#nPrompt', '测试'); await pg.click('#nGo'); await sleep(600);
+      ok(sent && sent.account === 'good', '新任务：选了「旧号」，发给服务的 account 是 good', JSON.stringify(sent));
       ok(sent && sent.model === 'opus' && sent.provider === 'claude' && sent.effort === 'max' && sent.prompt === '测试', '新任务：选 Opus 再开工，发给服务的就是 opus', JSON.stringify(sent));
       ok(sent && sent.cwd === '~', '新任务：不带你选的文件夹，一律开在主目录', JSON.stringify(sent));
       const keptPick = await pg.evaluate(() => JSON.parse(localStorage.getItem('ccb_new')));
-      ok(keptPick.model.claude === 'opus', '新任务：下次打开还记着 Opus', JSON.stringify(keptPick));
+      ok(keptPick.model.claude === 'opus' && keptPick.account === 'good', '新任务：下次打开还记着 Opus 和选的号', JSON.stringify(keptPick));
     } else {
       ok(m.value === saved && m.opts.includes(saved + '=' + saved) && m.opts.length === 6, '新任务：以前存的完整模型名还在列表里，没被丢掉', JSON.stringify(m));
     }
@@ -390,6 +394,36 @@ try {
       return { n: rows.length, over: rows.filter((r) => r.over > 0).length, narrow: rows.filter((r) => r.textW <= 20).length }; });
     ok(f.n > 0 && f.over === 0 && f.narrow === 0, lang + ' 封面：' + f.n + ' 张带「去终端」的卡都照旧带字，卡头放得下', JSON.stringify(f));
     await c5.close();
+  }
+  // ── 顶栏右上角的订阅额度（夹具：Claude amy 周 91% / ben 周 1%，Codex 周 34%）──
+  console.log('\n[顶栏 · 订阅额度]');
+  const readLimits = (page) => page.evaluate(() => {
+    const bar = document.querySelector('header.bar'), lim = document.querySelector('#limits'), nb = document.querySelector('#newBtn');
+    const vis = (e) => !!e && e.offsetWidth > 0;
+    const chips = [...lim.querySelectorAll('.lq')].map((c) => { const m = c.querySelector('.mtr'), r = c.getBoundingClientRect(); return { text: c.textContent, warn: c.classList.contains('warn'), tip: c.title, aria: c.getAttribute('aria-label') || '', meter: vis(m), meterPos: m ? getComputedStyle(m).position : '', tag: vis(c.querySelector('.tg')), inBar: r.top >= 0 && r.bottom <= bar.clientHeight, tab: c.tabIndex };
+    });
+    return { shown: vis(lim), chips, over: bar.scrollWidth > bar.clientWidth, newIn: nb.getBoundingClientRect().right <= innerWidth };
+  });
+  for (const [lang, w] of [['zh', 1520], ['en', 1520], ['zh', 1100], ['zh', 960]]) {
+    const { ctx, page, errs } = await open({ mode: 'flow', lang, w }); const r = await readLimits(page); const tag = lang + ' ' + w + ' px';
+    const names = r.chips.map((c) => c.text);
+    if (w >= 1500) {
+      same(names, ['Claude · amy91%', 'Claude · ben1%', 'Codex34%'], tag + '：三条额度，两个 Claude 号带账号、Codex 一条（周额度的百分数）', JSON.stringify(names));
+      ok(r.chips.length === 3 && r.chips[0].warn && !r.chips[1].warn && !r.chips[2].warn, tag + '：只有用到 91% 的那条是琥珀色（≥ 85%），1% 和 34% 是灰的', JSON.stringify(r.chips.map((c) => c.warn)));
+      ok(r.chips.length === 3 && r.chips.every((c) => c.meter && c.tag === (c.text.includes('·')) && c.inBar && c.tab === 0), tag + '：进度条和账号后缀都在、胶囊整个在顶栏里、能用 Tab 聚焦', JSON.stringify(r.chips.map((c) => [c.meter, c.tag, c.inBar, c.tab])));
+      ok(r.chips.length === 3 && r.chips.every((c) => c.meterPos !== 'fixed'), tag + '：进度条不吃顶栏 .bar 的 position:fixed（同名的类曾把它钉到屏幕顶上）', JSON.stringify(r.chips.map((c) => c.meterPos)));
+      const t0 = r.chips[0] ? r.chips[0].tip : '';
+      ok(lang === 'zh' ? /周额度已用 91%.*重置（.*后）/.test(t0) && /5 小时额度已用 100%/.test(t0) && /更新于 /.test(t0) : /Weekly limit used: 91%.*resets .*\(in .*\)/.test(t0) && /5-hour limit used: 100%/.test(t0) && /Updated /.test(t0), tag + '：提示里有每个窗口的已用、重置时间和还剩多久、数据多久前的', JSON.stringify(t0));
+      ok(r.chips[2] && /prolite/.test(r.chips[2].tip), tag + '：Codex 的提示里带套餐名', JSON.stringify(r.chips[2] && r.chips[2].tip));
+      if (lang === 'en') ok(!r.chips.some((c) => /[一-鿿]/.test(c.text + c.tip + c.aria)), 'en 1520 px：额度条的文字、提示、读屏标签里没有漏翻的中文', JSON.stringify(r.chips.map((c) => c.tip)));
+    } else if (w === 1100) {
+      ok(r.shown && r.chips.length === 3 && r.chips.every((c) => !c.meter && !c.tag), tag + '：窗口窄了先去掉进度条和账号后缀，三条还在', JSON.stringify(r.chips.map((c) => [c.text, c.meter, c.tag])));
+    } else {
+      ok(!r.shown, tag + '：再窄（≤ 1000 px）整条让位给按钮', JSON.stringify(r.shown));
+    }
+    ok(!r.over && r.newIn && errs.length === 0, tag + '：顶栏不溢出、「新任务」在视口里、页面没报错', JSON.stringify({ over: r.over, newIn: r.newIn, errs }));
+    if (lang === 'zh' && w === 1520) await page.screenshot({ path: path.join(OUT, 'topbar-limits.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } });
+    await ctx.close();
   }
 } finally { await browser.close(); }
 console.log(`\n界面结果：${pass} 过，${fail} 没过；截图在 ${OUT}`);

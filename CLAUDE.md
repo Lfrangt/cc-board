@@ -4,7 +4,7 @@ Node 22（无依赖）+ 单文件 HTML + Swift / WKWebView 外壳 + tmux + Ghost
 
 <directory>
 app/ - 原生外壳（main.swift + Info.plist + 图标）
-test/ - 隔离测试（4 个脚本：分组规则、服务端、改坏对照、界面；假主目录 + 自己的端口）
+test/ - 隔离测试（7 个脚本：分组规则、输入框预判、订阅额度、新窗口档位、服务端、改坏对照、界面；假主目录 + 自己的端口）
 build/ - 编译产物（build.sh 生成，可删）
 publish/ - 本机的发帖素材（不进仓库）
 docs/ - README 用的图和视频
@@ -13,11 +13,15 @@ docs/ - README 用的图和视频
 
 <config>
 server.mjs - 服务。读会话登记和对话记录，算出每个会话的状态，提供 /api。
-projects.mjs - 分组规则。按会话动过的文件夹和标题认出它属于哪个项目；项目表由 server.mjs 从 config.json 读出来交给 useRules()。server.mjs 引用它，所以上线时四个文件一起拷（server.mjs、ui.html、projects.mjs、suggest.mjs）。
+projects.mjs - 分组规则。按会话动过的文件夹和标题认出它属于哪个项目；项目表由 server.mjs 从 config.json 读出来交给 useRules()。server.mjs 引用它，所以上线时八个文件一起拷（server.mjs、ui.html、projects.mjs、suggest.mjs、limits.mjs、statusline-tap.mjs、accounts.mjs、route.mjs）。
+route.mjs - 新窗口的档位（纯函数 `routeNew()`）：开窗口的一方在 /api/new 里说 `tier`（heavy / standard / light），这里翻成模型和强度；档位表是模型和强度的唯一出处。server.mjs 引用它，见「新窗口的模型和强度」一节。
 suggest.mjs - 输入框上的预判的解析器（纯函数 `parseSuggest()`）。从 tmux 屏幕文本里取灰字建议和「下一步 1/2/3」。server.mjs 引用它，见「输入框上的预判」一节。
+limits.mjs - 顶栏右上角的各订阅周额度。Codex 读 `~/.codex` 的 rollout 里 `token_count.rate_limits`，Claude 读 statusline-tap.mjs 存的取数文件，汇总成 `{ claude: [条目], codex: 条目 | null }`。server.mjs 引用它，见「订阅额度」一节。
+accounts.mjs - 新任务选账号。config.json 的 `accounts` 登记号，token 在钥匙串 `ccboard-account-<id>`；开会话时包一层 zsh 读出 token、设 `CLAUDE_CODE_OAUTH_TOKEN` 和 `CCBOARD_ACCOUNT` 再 exec claude。server.mjs 引用它，见「新任务」里的「选账号」。
+statusline-tap.mjs - 挂成 Claude Code 状态栏命令（settings.json 的 `statusLine`）的取数脚本：从状态栏 JSON 里只取走 `rate_limits` 存成文件，终端里顺手打一行 `5h 6% · 7d 1%`。和 limits.mjs 放在同一个目录（它 import limits.mjs 来定文件名）。
 <数据目录>/config.json - 本机设置（不在仓库里）：项目表、哪些文件夹算证据、自动点信任、Codex、自动收工。见下面「config.json」一节；测试用 test/fixture-config.json。
 ui.html - 界面。轮询 /api/state，画卡片。
-build.sh - `./build.sh update` 换界面和服务（server.mjs、ui.html、projects.mjs、suggest.mjs）；不带参数是重新编译安装。
+build.sh - `./build.sh update` 换界面和服务（server.mjs、ui.html、projects.mjs、suggest.mjs、limits.mjs、statusline-tap.mjs、accounts.mjs、route.mjs）；不带参数是重新编译安装。外壳（app/main.swift）只认 server.mjs 和 ui.html 在不在，不列旁边的文件，所以新增文件不用重新编译。
 README.md、CONTRIBUTING.md、LICENSE - 对外的英文文档和 MIT 许可。README 里写的每一句都要有代码依据。
 package.json - 只有测试用的 playwright-core；服务和界面本身零依赖。
 .github/workflows/ci.yml - macOS 上跑服务端测试和界面测试。
@@ -153,6 +157,22 @@ Khalil 11/13 16:10 的原话：「有一些 Tab 我打完我就懒得关……�
 - 没做的：收之前不问；归档列表里还没有「自动」标记（`/api/archive` 已返回 `auto`）。没验过：长期不关的协调窗口被 fyi 线收掉以后，别的窗口发给它的消息收不到，要先从「归档」接回来。11/13 Ghostty 被误退出后接回的窗口，名字全变了（khalil-46 变成 khalil-6c），所以靠窗口名找人本来就不稳。
 - 11/13 16:3x 预览结果：本机 21 个窗口，一个都不会收（刚接回来，都在 2 小时内动过）。这只证明没有误收；「该收的会收」靠测试。
 
+## 订阅额度（11/15 khalil-ee）
+
+Khalil 11/15 11:00 的原话：「给我们总后台加入一个各个账号的 Token 使用情况，放在右上角……Codex 的订阅，还有 Claude Code 的订阅，这个 weekly limit 放在右上角提醒我」。当天他的 Claude 旧号周额度用完，又买了一个新的 $200 号（命令行钥匙串 10:43 起登的是新号），两个号轮着用，所以要一眼看到各自还剩多少。
+
+- 顶栏「归档」左边一排灰色胶囊：`Claude · amy 91%`、`Claude · ben 1%`、`Codex 34%`。胶囊上是周额度的已用百分比（只有 5 小时窗口时前面写 `5h`）；鼠标停上去看每个窗口的已用、几点重置、还剩多久、数据多久前的。任何一个窗口 ≥ 85%（`WARN_AT`）胶囊变琥珀。灰、琥珀两档，不加别的颜色：颜色只给状态。
+- 数据在 `/api/state` 的 `limits`：`{ claude: [条目], codex: 条目 | null }`，条目是 `{ id, provider, account, plan, at, windows: [{ key: five_hour | week | other, used, resetsAt(毫秒) }] }`。`limitsLoop()` 每 30 秒（`CCBOARD_LIMITS_MS`）让 limits.mjs 读一遍。汇总全在 limits.mjs，界面只收结果。
+- **Codex**：读 `~/.codex/sessions/<年>/<月>/<日>/rollout-*.jsonl` 里最后一条 `token_count` 事件的 `rate_limits`。11/15 实测：`limit_id: codex`、`plan_type: prolite`、只有一个 10080 分钟窗口、`secondary` 是 null。按文件修改时间取最近 8 个文件（续跑的老会话记录在老日期的目录里），每个只读最后 256 KB，没变的文件不重读。只在 config.json 的 `codex` 打开时读和显示（和「交给谁」同一个开关）。这份数据只在 Codex 说话时更新，提示里的「更新于」就是为这个。
+- **Claude Code**：本地没有现成数据（11/15 查过）。对话记录里只在「额度被拒」那条错误上带 `resetsAt`，没有百分比；命令行没有查用量的子命令。Claude Code 只在状态栏命令的 stdin JSON 里给 `rate_limits.five_hour / seven_day`（`used_percentage`、`resets_at` 秒；官方文档写明只有 Pro / Max / Ultra 订阅有，第一次 API 回复之后才出现）。所以挂一个状态栏命令 `statusline-tap.mjs`：只存 `rate_limits` 的两个窗口（不存路径、模型、对话），一个会话一个文件 `<数据目录>/limits/claude-<session_id>.json`（0600），10 秒内同样的数据不重写，终端里顺手打一行 `ben · 5h 6% · 7d 1%`。不读钥匙串，不联网，不用任何登录凭据。取数文件 14 天没动清掉（每 12 小时一次）。
+- 不用的办法：`claude -p … --output-format stream-json` 的 `rate_limit_event` 带 `unifiedWindows.*.utilization`，能拿到数，但每次要发一次模型调用，花的正是要看的额度，还会触发全局 hook（11/15 11:07 我的探针被群聊 hook 记成「Khalil 说的话」，#11449），所以不能当轮询用。`/api/oauth/usage` 要读钥匙串里的登录令牌，不用。
+- 账号怎么分：同一个号所有会话的周窗口截止时间相同，所以没标账号的数据按它分组（到分钟）。会话环境里设了 `CCBOARD_ACCOUNT=<id>`（khalil-bd 做「新任务选账号」时，启动器设它），tap 就把它写进取数文件，条目 `account` 带上，并把同截止时间的无标数据认给它。没有 `account` 又有两个以上 Claude 号时，名字后面写周窗口重置的星期几。账号标记只认 `[\w.@-]{1,40}`，会进文件和界面。
+- 窗口过了 `resets_at` 就丢（Claude Code 自己的状态栏也这样）。Codex 的窗口过了，条目留着、窗口空，胶囊显示 `—`；Claude 没有任何数据时显示灰色的「Claude —」，提示里写怎么接入。
+- 窄屏：≤ 1180 px 去掉进度条和账号后缀，≤ 1000 px 整条隐藏（顶栏在 900 px 时放不下，「新任务」会被挤出视口，11/15 实测）。进度条的类叫 `.mtr`，不要叫 `.bar`：`.bar` 是顶栏自己的类（`position:fixed`），11/15 起初起了这个名字，进度条被钉到屏幕顶上，ui-check 有断言守着。
+- 状态栏挂载（要改 `~/.claude/settings.json`，所有窗口立刻生效）：`"statusLine": {"type": "command", "command": "node \"$HOME/Library/Application Support/cc-board/app/statusline-tap.mjs\""}`。11/15 在隔离的 tmux 里对照试过：挂了以后输入框下方多一行，底下的 `bypass permissions on` 还在，上下两条边框没变，所以 suggest.mjs 认输入框不受影响。官方文档写明自定义状态栏会去掉 `esc to interrupt` 这类键盘提示，这一点没有在忙的会话里试过。
+- 测试：limits.test.mjs 37 项（含端到端跑一遍 tap 脚本）；state.test.mjs 的 [7f] 5 项和 [8] 1 项；ui-check.mjs 的「顶栏 · 订阅额度」19 项；mutants.mjs 两个（`limits-codex-ungated`、`limits-not-in-state`）。界面几条断言的改坏对照是手动跑的，在工程目录的拷贝里改 ui.html 后跑 `--ui` + ui-check：进度条改回 `.bar`、琥珀线去掉、英文「Updated」不翻、两条窄屏规则各去掉，每个都变红。
+- 没做的：Claude 的套餐名拿不到（状态栏 JSON 不带），`plan` 一直是 null；没有显示「这个窗口现在挂在哪个账号」；没拿两个真实 Claude 号同时在线验过（只用夹具）；Codex 要等它自己说话才更新。
+
 ## 提醒走三条路
 
 1. 卡片：右上角的药丸，排到最前面（只在「等你选」之后）。
@@ -165,6 +185,56 @@ Khalil 11/13 16:10 的原话：「有一些 Tab 我打完我就懒得关……�
 - 会话一律开在主目录。他所有窗口都开在这里：共用的记忆（`~/.claude/projects/-Users-khalil/memory/`）和规矩只有在这里才读得到，新会话靠它们才找得对项目。
 - 服务在任务后面附一段 `FOLDER_NOTE`（包在 `<system-reminder>` 里）：自己找对应的项目文件夹，全新的东西在 `~/Projects` 下新建，不要问。`cleanPrompt()` 会滤掉它，卡片上只显示他说的话。空会话和接口上明确给了文件夹的不附。
 - 模型是下拉菜单（默认 / Fable / Opus / Sonnet / Haiku）。不要改回带输入建议的输入框：里面有字时建议只剩匹配项，他会以为只有一个模型。
+
+### 新窗口的模型和强度：开窗口的一方只说档位（11/15 khalil-73 [c3e3d5]）
+
+Khalil 11/15 11:37 的原话：「我的总指挥用的是 Fable，如果它新开一个窗口也是默认 Fable，那就很亏……我希望它可以自动调节所用的模型。还有 effort」。
+
+- 现状（先查清再动手）：总指挥窗口开窗口走 `POST /api/new`，模型和强度是它**每次手写的一对值**。11/15 它开的三条线是界面 opus/high、识谱 fable/high、图片转谱 opus/high，没有共用的标准，也没有兜底。不传 `model` 时窗口用 `~/.claude/settings.json` 的默认（opus + xhigh），**不是 Fable**。「默认 Fable」真会发生的地方是子 agent 和 workflow：它们默认继承父窗口的模型（11/10 三个 workflow 各继承 Fable + max，约 480 万 token）。
+- 11/14 00:00 起本机的实测（`usage_by_model` 那类脚本，加权单位，分不出各模型在额度里的折算）：Opus 73.7%、Sonnet 19.2%、Fable 6.7%。最大头是两个纯 Opus 窗口，各约 20%。所以模型只是一个杠杆，另一个是上下文大小（每走一步重读一遍）。
+- 做法：`route.mjs` 的 `routeNew()` 是唯一决策点。调用方在 `/api/new` 里加 `tier`，服务翻成 `--model` / `--effort`。档位表在 `route.mjs` 顶上，换模型只改那一张表：
+
+| tier | Claude Code | Codex | 用在 |
+|---|---|---|---|
+| `heavy` | fable + high | high | 设计判断、算法难点、没有现成答案的调查、审修复本身 |
+| `standard` | opus + high | medium | 写代码、改界面、补测试、合入补丁、验收别人的交付、接手一条线 |
+| `light` | sonnet + medium | low | 读文件做汇总、盘点状态、照写死的步骤跑一遍并报结果、改文案 |
+
+- 规则：
+  - 显式给的 `model` / `effort` 压过档位，没给的那一半才用档位的（`tier: light, effort: xhigh` → sonnet + xhigh）。
+  - 不声明 `tier` = 和以前一样：没传的不带参数，沿用 settings.json。界面「新任务 → 默认」走这条。
+  - 写错的 `tier`（含 `__proto__`、`constructor` 这类原型上的名字、非字符串）直接报错，不开窗口：悄悄退回默认，调用方会以为已经省了钱。
+  - 档位不给 xhigh / max。最贵的两档要调用方显式传 `effort`。
+  - Codex 的档位只管强度，模型留给它自己的 `config.toml`。
+  - 账号（`account`，见「选账号」）是另一维，和档位互不影响，一起传也行；`routeNew()` 不看账号。
+  - 声明了档位的，应答多一个 `route: { tier, model, effort, why }`，服务日志记一行 `route <时间> <窗口> <档位> <谁> <模型> <强度>`。
+- 不做的：
+  - 不从任务文字里猜档位。「设计」在「界面设计」里天天出现，猜错一次就把 Fable 开给机械活。升档要调用方声明，调用方是 LLM，它知道这活是什么。
+  - 不做 config.json 的覆盖（没有第二个使用者；档位表就在 `route.mjs` 顶上）。
+  - 不改界面「新任务」的下拉：11/15 `ui.html` 在 khalil-5d 做改版。要在界面上加「档位」，等它落地后再做。
+- 调用示例（口令在数据目录的 `.token`，头名 `x-ccboard`）：
+
+```bash
+TOKEN=$(cat ~/Library/Application\ Support/cc-board/.token)
+/usr/bin/curl -s -X POST http://127.0.0.1:4747/api/new -H "x-ccboard: $TOKEN" -H 'content-type: application/json' \
+  -d '{"prompt":"…","cwd":"~","provider":"claude","tier":"light","project":{"key":"fretflow","name":"FretFlow"}}'
+```
+
+- 测试：`route.test.mjs` 52 项和它自己的 13 个改坏版；`state.test.mjs` 的 [7g] 9 项（假 claude 记下收到的 argv，断言 `--model` / `--effort`）；`mutants.mjs` 里 4 个接线改坏版（11/15 在并入选账号之前的拷贝上各抓到 1 次，并入之后只重跑了基线 136 项和它们原文的校验）。没验的：Codex 档位只测了翻译，没真开 Codex 会话；总指挥还没真用过。
+- 子 agent（Agent 工具、Workflow）不经过这里，服务管不到。对应办法：开子 agent 时按同一张表传 `model`（`heavy` = fable、`standard` = opus、`light` = sonnet）。Agent 工具的 `effort` 参数写着「只在用户或 CLAUDE.md 明说时才设」，所以这条规矩要写进 CLAUDE.md 才算授权。`CLAUDE_CODE_SUBAGENT_MODEL` 环境变量能给所有子 agent 定一个固定默认（11/15 在 claude 二进制里搜到这个变量名，没试过效果，没设）；它不分任务，不替代档位。
+
+### 选账号（11/15 khalil-bd）
+
+Khalil 11/15：旧号周额度用完、买了新号以后，「你把总后台恢复一下，现在是加入可以选账号的功能」。
+
+- Claude Code 的登录全机只有一份（钥匙串的 `Claude Code-credentials`），所有窗口共用；会话起来时读一次，之后不再读。所以 10:43 换登录以后，新开的都是新号，之前开着的老窗口还是旧号。
+- 换号只换登录：给这一个会话设 `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token` 生成的长期 token）。11/15 实测：设了以后 `claude auth status` 的 `authMethod` 是 `oauth_token`，`configDirectory` 照旧是 `~/.claude`，钥匙串的修改时间不变。不用另开 `CLAUDE_CONFIG_DIR`：那会把记忆、对话记录也拆成两份。
+- token 只在钥匙串里（service `ccboard-account-<id>`）。tmux 起的是 `/bin/zsh -fc <脚本> ccboard <security 路径> <service> <id> claude …`，脚本在会话里读钥匙串、设好两个变量再 `exec`；token 不进命令行参数、config.json、服务日志和 /api/state（`state.test.mjs` [7a] 断言后三样）。读不到就在屏幕上说原因，2 分钟后退出。
+- 服务每 30 秒用 `security find-generic-password -s <service>`（不带 `-w`，不取值、不弹窗）看每个号在钥匙串里有没有 token，结果放在 `providers.claude.accounts` 的 `ready`；`login` 是 `~/.claude.json` 邮箱的前 3 个字符，界面写成「默认（当前登录 ben…）」。
+- `/api/new` 的 `account`：空 = 默认，不包这一层；没登记的号、没有 token 的号直接报错，不开。Codex 忽略它。恢复（`unarchive`）照旧用默认号。
+- `CCBOARD_ACCOUNT` 是顶栏额度条按号分组用的名字（statusline-tap.mjs），所以 id 也要满足它的 `[\w.@-]{1,40}`。
+- 加一个号：`claude setup-token`（浏览器里登那个号）→ `security add-generic-password -U -a "$USER" -s ccboard-account-<id> -w`（在提示里贴 token）→ config.json 的 `accounts` 加一项 → `./build.sh update`。
+- 测试用 `CCBOARD_SECURITY` 换成假的 security，真钥匙串碰不到。
 
 ### 列头的「＋ 新任务」（11/13 khalil-73）
 
@@ -199,6 +269,7 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 | `roots` | 哪些上级文件夹下面的一层算证据，相对主目录写（长的优先，如 `Projects/shared` 和 `Projects` 一起列）。iCloud 云盘根写 `com~apple~CloudDocs`，记成 `iCloud/<名>` | `["Projects", "Desktop"]`（主目录下） |
 | `autoTrust` | 总控台在主目录开的 Claude 会话，替他点「Yes, I trust this folder」 | `false` |
 | `codex` | Codex 会话：新任务里的「交给谁」、开 Codex 会话、读以前起的 Codex 会话和记录 | `false` |
+| `accounts` | `[{ id, name }]`：新任务能选的 Claude 号。id 是字母数字开头、40 个字符以内的 `[\w.-]`，不能重复；token 不写在这里，在钥匙串 | `[]`（不显示「账号」） |
 | `autoTidy` | 自动收工：已经交付、歇着、没人在等、没人再理的会话，自动「归档」（见上面「自动收工」） | `false` |
 
 - `codex` 关着时：服务的 `providers` 只报 Claude Code，界面不显示「交给谁」；`/api/new` 和恢复都拒绝 Codex；`agents.json` 里以前起的 Codex 会话不上墙、它们的窗格也不当成「启动中」。代码都留着，打开就和以前一样。
@@ -221,10 +292,12 @@ Khalil 11/13：「新建的时候还要点一下那个 Trust……我感觉这�
 ```bash
 node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；--mutants 跑 6 个改坏版
 node test/suggest.test.mjs               # 输入框预判的解析 28 项，不到 1 秒；--mutants 跑 8 个改坏版
-node test/state.test.mjs                 # 服务端 113 项，约 200 秒
-node test/mutants.mjs                    # 58 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/limits.test.mjs                # 订阅额度的解析和状态栏取数脚本 37 项，不到 2 秒；--mutants 跑 16 个改坏版
+node test/route.test.mjs                 # 新窗口的档位 52 项，不到 1 秒；--mutants 跑 13 个改坏版
+node test/state.test.mjs                 # 服务端 136 项，约 200 秒
+node test/mutants.mjs                    # 67 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 128 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 149 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

@@ -123,11 +123,13 @@ process.stdin.on('data', (b) => { const k = b.toString();
   else if (k === '\\r') { fs.writeFileSync(process.env.T_ARGV + '.trust', opts[cur]); process.stdout.write('\\x1b[2J\\x1b[H  \\u23f5\\u23f5 bypass permissions on\\n'); } });
 setTimeout(() => process.exit(0), 25000);
 `);
-fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\ncase "$*" in *TRUSTME*|*OTHERDIALOG*) exec "' + NODE + '" "' + path.join(BIN, 'dialog.mjs') + '" "$@";; esac\n/bin/pwd > "$T_ARGV.cwd"\n: > "$T_ARGV"\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV"; done\n/bin/sleep 25\n', { mode: 0o755 });
+fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\ncase "$*" in *TRUSTME*|*OTHERDIALOG*) exec "' + NODE + '" "' + path.join(BIN, 'dialog.mjs') + '" "$@";; esac\n/bin/pwd > "$T_ARGV.cwd"\nprintf "%s|%s" "$CLAUDE_CODE_OAUTH_TOKEN" "$CCBOARD_ACCOUNT" > "$T_ARGV.env"\n: > "$T_ARGV"\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV"; done\n/bin/sleep 25\n', { mode: 0o755 });
+// 假的 security：钥匙串里只有 ccboard-account-good（token 是 tok-good）。服务和会话里那层 zsh 都经 CCBOARD_SECURITY 用它，真钥匙串碰不到
+fs.writeFileSync(path.join(BIN, 'security'), '#!/bin/sh\nsvc=; w=0\nwhile [ $# -gt 0 ]; do case "$1" in -s) svc="$2"; shift;; -w) w=1;; esac; shift; done\n[ "$svc" = ccboard-account-good ] || exit 44\n[ $w = 1 ] && echo tok-good\nexit 0\n', { mode: 0o755 });
 const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((x) => fs.existsSync(x));
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
-const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV };
+const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_LIMITS_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV, CCBOARD_SECURITY: path.join(BIN, 'security') };
 // 被杀（SIGTERM / Ctrl-C）时 finally 不跑：这里做同样的收尾，不然这次测试的 tmux 服务、假会话进程和两个临时目录会一直留着（11/13 一次被杀的改坏对照留下 4 个 tmux 和 138 个进程）。
 // kill-server 带的是这次测试自己的 TMUX_TMPDIR（env），碰不到真总控台的 -L ccboard。--keep 是故意留着，不管
 let cleaned = false;
@@ -141,7 +143,18 @@ if (!KEEP) for (const [sig, code] of [['SIGTERM', 143], ['SIGINT', 130]]) proces
 delete env.CCBOARD_DATA; delete env.CCBOARD_READONLY;
 // ── config.json：示例项目表（test/fixture-config.json），两个开关都打开。最后一段 [8] 换成写坏的 config 重启，看默认值 ──
 const DATA0 = path.join(FH, 'Library/Application Support/cc-board'); fs.mkdirSync(DATA0, { recursive: true });
-fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true, autoTidy: !process.argv.includes('--ui') }));   // --ui：界面测试点「审完了」，不能让服务把卡收走
+fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true, autoTidy: !process.argv.includes('--ui'), accounts: [{ id: 'good', name: '旧号' }, { id: 'none', name: '还没存 token 的号' }] }));   // --ui：界面测试点「审完了」，不能让服务把卡收走
+// ── 顶栏额度夹具（--ui 场景里也放：界面测试要看到芯片）──
+// Codex：今天目录里一个只有额度的 rollout（不是会话，不登记进 agents.json，所以不会多出卡）；Claude：状态栏取数脚本存的两个号，amy 用到 91%、ben 用到 1%。
+const LIM_NOW = Date.now(), LIM_SEC = (ms) => Math.round(ms / 1000);
+const limTap = (s, account, five, week, days) => fs.writeFileSync(path.join(DATA0, 'limits', `claude-${s}.json`), JSON.stringify({ v: 1, at: Date.now(), session: s, account, rate_limits: { five_hour: { used_percentage: five, resets_at: LIM_SEC(LIM_NOW + 3600000) }, seven_day: { used_percentage: week, resets_at: LIM_SEC(LIM_NOW + days * 86400000) } } }));
+{
+  const d = new Date(LIM_NOW), two = (n) => String(n).padStart(2, '0');
+  const dir = path.join(FH, '.codex/sessions', String(d.getFullYear()), two(d.getMonth() + 1), two(d.getDate())); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rollout-limits.jsonl'), JSON.stringify({ timestamp: new Date(LIM_NOW - 120000).toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: { limit_id: 'codex', primary: { used_percent: 34, window_minutes: 10080, resets_at: LIM_SEC(LIM_NOW + 2.5 * 86400000) }, secondary: null, plan_type: 'prolite' } } }) + '\n');
+  fs.mkdirSync(path.join(DATA0, 'limits'), { recursive: true });
+  limTap('aaaa1111-0001', 'amy', 100, 91, 2); limTap('bbbb2222-0002', 'ben', 6, 1, 1.9);
+}
 // ── 一个总控台起过的 Codex 会话：登记在 agents.json，tmux 里有它的窗格，记录是最小的两行（--ui 场景里不放：界面测试按卡数断言）──
 const CDX = 'ccb-cdx001';
 if (!process.argv.includes('--ui') && TMUX_BIN) {
@@ -329,6 +342,40 @@ try {
   clearArgv(); n1 = await post('/api/new', { prompt: '', cwd: '~', provider: 'claude' }); got = await readArgv();
   ok(got && got.args.length === 0, '空会话：什么都不附', JSON.stringify(got));
 
+  console.log('\n[7a] 新任务选账号：config 里登记的号列在新任务里；选了就从钥匙串读 token 设进会话，没选原样');
+  const readEnv = async () => { for (let i = 0; i < 40; i++) { await sleep(150); try { return fs.readFileSync(ARGV + '.env', 'utf8'); } catch {} } return null; };
+  const clearEnv = () => { try { fs.unlinkSync(ARGV + '.env'); } catch {} };
+  const acc = ((st.providers || {}).claude || {}).accounts || [];
+  ok(acc.length === 2 && acc[0].id === 'good' && acc[0].ready === true && acc[1].id === 'none' && acc[1].ready === false, '账号表：钥匙串里有 token 的能选，没有的标出来', JSON.stringify(acc));
+  ok(!JSON.stringify(st).includes('tok-good'), '/api/state 里没有 token 本身');
+  clearArgv(); clearEnv(); n1 = await post('/api/new', { prompt: '用旧号做', cwd: CWD, provider: 'claude', model: 'opus', account: 'good' }); got = await readArgv(); let envNow = await readEnv();
+  ok(n1.body.ok && envNow === 'tok-good|good', '选了号：会话里 CLAUDE_CODE_OAUTH_TOKEN 是钥匙串里那个，CCBOARD_ACCOUNT 是号的 id', JSON.stringify(n1.body) + ' ' + envNow);
+  ok(got && got.args.join(' ') === '--model opus 用旧号做', '选了号：claude 收到的参数和没选时一样', JSON.stringify(got && got.args));
+  ok(!fs.readFileSync(path.join(ROOT, 'server.out'), 'utf8').includes('tok-good'), '服务日志里没有 token 本身');
+  clearArgv(); clearEnv(); n1 = await post('/api/new', { prompt: '默认号做', cwd: CWD, provider: 'claude' }); got = await readArgv(); envNow = await readEnv();
+  ok(n1.body.ok && envNow === '|', '没选号：不设 token，用钥匙串里当前登录的号', envNow);
+  n1 = await post('/api/new', { prompt: 'x', cwd: CWD, provider: 'claude', account: 'none' });
+  ok(!n1.body.ok && /token/.test(n1.body.error), '钥匙串里没有 token 的号：不开，说清原因', JSON.stringify(n1.body));
+  n1 = await post('/api/new', { prompt: 'x', cwd: CWD, provider: 'claude', account: 'nobody' });
+  ok(!n1.body.ok && /没有这个账号/.test(n1.body.error), '没登记过的号：不开', JSON.stringify(n1.body));
+
+  console.log('\n[7g] 开窗口的一方只说档位 tier：服务翻成模型和强度；写错的档位不开窗口（档位表的断言在 route.test.mjs）');
+  clearArgv(); n1 = await post('/api/new', { prompt: '汇总一下', cwd: '~', provider: 'claude', tier: 'light' }); got = await readArgv();
+  ok(n1.body.ok && got && got.args.slice(0, 4).join(' ') === '--model sonnet --effort medium', 'light 档：带着 --model sonnet --effort medium 启动', JSON.stringify(n1.body) + ' ' + JSON.stringify(got && got.args.slice(0, 4)));
+  ok(n1.body.route && n1.body.route.tier === 'light' && n1.body.route.model === 'sonnet' && n1.body.route.effort === 'medium' && typeof n1.body.route.why === 'string', '应答里带 route（档位、模型、强度、为什么），调用方看得到最后用了什么', JSON.stringify(n1.body));
+  clearArgv(); n1 = await post('/api/new', { prompt: '定个方案', cwd: '~', provider: 'claude', tier: 'heavy' }); got = await readArgv();
+  ok(got && got.args.slice(0, 4).join(' ') === '--model fable --effort high', 'heavy 档：fable + high', JSON.stringify(got && got.args.slice(0, 4)));
+  clearArgv(); n1 = await post('/api/new', { prompt: '写个功能', cwd: '~', provider: 'claude', tier: 'standard' }); got = await readArgv();
+  ok(got && got.args.slice(0, 4).join(' ') === '--model opus --effort high', 'standard 档：opus + high', JSON.stringify(got && got.args.slice(0, 4)));
+  clearArgv(); n1 = await post('/api/new', { prompt: '汇总一下', cwd: '~', provider: 'claude', tier: 'light', effort: 'xhigh' }); got = await readArgv();
+  ok(got && got.args.slice(0, 4).join(' ') === '--model sonnet --effort xhigh', '显式给的强度压过档位，模型还是档位的', JSON.stringify(got && got.args.slice(0, 4)));
+  clearArgv(); n1 = await post('/api/new', { prompt: '不认识的档位', cwd: '~', provider: 'claude', tier: 'xl' }); await sleep(1500);
+  ok(n1.body.ok === false && /档位只能是/.test(n1.body.error || '') && !fs.existsSync(ARGV), '不认识的档位：报错，窗口没开（假 claude 没被启动）', JSON.stringify(n1.body));
+  clearArgv(); n1 = await post('/api/new', { prompt: '原型上的名字', cwd: '~', provider: 'claude', tier: '__proto__' }); await sleep(1500);
+  ok(n1.body.ok === false && !fs.existsSync(ARGV), '档位写成 __proto__ 也拦下，窗口没开', JSON.stringify(n1.body));
+  ok(/\nroute \S+ ccb-\w+ light claude sonnet medium\n/.test('\n' + log()) && /\nroute \S+ ccb-\w+ heavy claude fable high\n/.test('\n' + log()), '服务日志每开一个声明了档位的窗口记一行 route <时间> <窗口> <档位> <谁> <模型> <强度>');
+  ok(!/\nroute \S+ \S+ xl /.test('\n' + log()), '被拦下的档位不记 route');
+
   console.log('\n[7b] 在某一列的列头开新任务：任务说明换成「属于这个项目」，新卡落进那一列，记住是哪一列');
   const pinsFile = path.join(DATA, 'pins.json'), pinsNow = () => { try { return JSON.parse(fs.readFileSync(pinsFile, 'utf8')); } catch { return {}; } };
   clearArgv(); n1 = await post('/api/new', { prompt: '列里开的任务', cwd: '~', provider: 'claude', project: { key: 'fretflow', name: '随便写的名字' } }); got = await readArgv();
@@ -362,6 +409,19 @@ try {
   await sleep(6000); st = await get('/api/state');
   const pend7e = (st.pending || []).find((x) => x.name === n1.body.name);
   ok(trustNow() === null && pend7e && pend7e.dialog && pend7e.dialog.options[1] === 'Yes, I trust this folder', '开在主目录以外的文件夹：信任框不替他点，留在卡片上', JSON.stringify(pend7e && pend7e.dialog));
+
+  console.log('\n[7f] 顶栏的订阅额度：/api/state 的 limits（Codex 从假主目录的 rollout 读，Claude 从取数文件读）');
+  st = await get('/api/state'); const lm = st.limits || {};
+  const cw = lm.codex && lm.codex.windows && lm.codex.windows[0];
+  ok(!!lm.codex && lm.codex.provider === 'codex' && lm.codex.plan === 'prolite' && lm.codex.windows.length === 1 && cw.key === 'week' && cw.used === 34 && cw.resetsAt > Date.now(), 'Codex：周额度 34%，套餐 prolite，截止时间在将来', JSON.stringify(lm.codex));
+  ok(Array.isArray(lm.claude) && lm.claude.length === 2 && lm.claude.map((x) => x.account).join() === 'amy,ben', 'Claude：两个号各一条，按账号排', JSON.stringify(lm.claude));
+  const wk = (x) => ((x && x.windows) || []).find((w) => w.key === 'week');
+  ok(lm.claude && wk(lm.claude[0]) && wk(lm.claude[0]).used === 91 && wk(lm.claude[1]) && wk(lm.claude[1]).used === 1, 'Claude：amy 周 91%，ben 周 1%', JSON.stringify((lm.claude || []).map(wk)));
+  ok(!('session' in (lm.claude[0] || {})) && Object.keys(lm.claude[0] || {}).sort().join() === 'account,at,id,plan,provider,windows', 'Claude 条目的字段是固定的：只有账号、时间、窗口，没有会话号和路径', JSON.stringify(Object.keys(lm.claude[0] || {})));
+  const wrote = Date.now(); limTap('bbbb2222-0002', 'ben', 7, 55, 1.9);          // 会话又说了一句话：取数文件更新了
+  let ben = null; for (let i = 0; i < 20 && !(ben && wk(ben).used === 55); i++) { await sleep(300); ben = ((await get('/api/state')).limits.claude || []).find((x) => x.account === 'ben'); }
+  ok(ben && wk(ben).used === 55, '取数文件更新后，下一轮读到新的（ben 55%，' + (Date.now() - wrote) + ' ms 内）', JSON.stringify(ben));
+  limTap('bbbb2222-0002', 'ben', 6, 1, 1.9);                                       // 还原：界面测试要的是 1%
 
   console.log('\n[7d] config 里 codex 打开：总控台起过的 Codex 会话照常上墙，「交给谁」里有 Codex');
   st = await get('/api/state');
@@ -429,6 +489,7 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 90000);
   ok(st.providers && !st.providers.codex && !st.sessions.some((x) => x.provider === 'codex') && !(st.pending || []).some((x) => x.name === CDX), 'codex 关着：「交给谁」里没有 Codex；Codex 会话不上墙，也不当成「启动中」', JSON.stringify({ prov: Object.keys(st.providers || {}), codex: st.sessions.filter((x) => x.provider === 'codex').length, pend: (st.pending || []).map((x) => x.name) }));
   n1 = await post('/api/new', { prompt: '用 Codex 做', cwd: '~', provider: 'codex', model: 'bad model!' });
   ok(!n1.body.ok && /Codex 没有打开/.test(n1.body.error || ''), 'codex 关着：接口拒绝开 Codex 会话（在核对模型名之前）', JSON.stringify(n1.body));
+  ok(st.limits && st.limits.codex === null && st.limits.claude.length === 2, 'codex 关着：顶栏没有 Codex 额度（rollout 还在磁盘上也不读）；Claude 的照常', JSON.stringify(st.limits && { codex: st.limits.codex, claude: (st.limits.claude || []).length }));
   const pj8 = (n) => ((by(st, n) || {}).project || {});
   ok(pj8('projC').key === 'other' && /^dir:fretflow/.test(pj8('projF').key || ''), '默认项目表是空的：登记过的组名不再出现，碰过的文件夹自成一组', JSON.stringify([pj8('projC'), pj8('projF')]));
   try { fs.unlinkSync(trustFile); } catch {}

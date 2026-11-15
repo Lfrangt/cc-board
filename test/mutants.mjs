@@ -44,7 +44,12 @@ const MUTANTS = {
   'codex-new-off':       ["  if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };\n  const provider", "  const provider"],
   'codex-listed-off':    ["...(CONFIG.codex ? { codex:", "...(true ? { codex:"],
   'codex-pane-pending':  ["    if (agents[pane.name] && !CONFIG.codex) continue;", ""],
-  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true };", "    return def;"],
+  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, accounts };", "    return def;"],
+  'limits-codex-ungated': ['codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null', 'codex: codexLimits(CODEX_HOME, now)'],
+  'limits-not-in-state': ['sandbox: SANDBOX, limits: LIMITS };', 'sandbox: SANDBOX };'],
+  'account-not-wrapped': ['    args.push(...wrapLaunch(acct, cl));', '    args.push(...cl);'],
+  'account-skip-ready':  ["    if (!acct.ready) return { ok: false, error: '钥匙串里还没有「' + acct.name + '」的 token' };\n", ''],
+  'account-any-id':      ["    if (!acct) return { ok: false, error: '没有这个账号：' + String(opt.account).slice(0, 40) };", "    if (!acct) acct = { id: String(opt.account), name: String(opt.account), ready: true };"],
   'bad-config-crashes':  ["  } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }", "  } catch (e) { throw e; }"],
   'trust-any-dialog':    ["    const i = d.options.findIndex((o) => TRUST_OPT.test(o));", "    const i = d.options.length - 1;"],
   'no-flagged':          ["  const flagged = m.stop_reason === 'refusal' || /safeguards flagged/i.test(text);", "  const flagged = false;"],
@@ -55,8 +60,8 @@ const MUTANTS = {
   'suggest-plain-screen': ["['capture-pane', '-p', '-e', '-t', s.tmux]", "['capture-pane', '-p', '-t', s.tmux]"],
   'suggest-stale-kept':  ["  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);", ""],
   // 自动收工（autoTidy）：每一道守卫、每一条线、两个开关，各有一个改坏版
-  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false };", "  const def = { autoTrust: false, codex: false, autoTidy: true };"],
-  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false };"],
+  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, accounts: [] };", "  const def = { autoTrust: false, codex: false, autoTidy: true, accounts: [] };"],
+  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, accounts };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, accounts };"],
   'auto-ignores-focus':  ["  if (now - uiFocusAt < 6000) return;", ""],
   'auto-acts-in-readonly': ["      if (READONLY) { const k = s.sid + '@' + s.resultAt;", "      if (false) { const k = s.sid + '@' + s.resultAt;"],
   'auto-stale-mark':     ["if (need === 'review' && p && p.at === String(s.resultAt) &&", "if (need === 'review' && p && true &&"],
@@ -69,13 +74,21 @@ const MUTANTS = {
   'auto-processed-replaces': ["      const okSid = (x) => typeof x === 'string'", "      processed.clear();\n      const okSid = (x) => typeof x === 'string'"],
   'auto-clear-ignored':  ["if (okSid(sid)) processed.delete(sid);", "if (okSid(sid)) void 0;"],
   'auto-no-prune':       ["  for (const k of processed.keys()) if (!live.has(k)) processed.delete(k);", ""],
+  // 新窗口的档位（route.mjs 接进 /api/new）：档位表本身的改坏对照在 route.test.mjs --mutants，这里只改坏服务的接线
+  'route-not-wired':     ["{ provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, files: body.files,", "{ provider: body.provider, model: body.model, effort: body.effort, account: body.account, files: body.files,"],
+  'bad-tier-opens-window': ["      if (!rt.ok) return reply(res, 200, rt);\n", ""],
+  'route-not-in-reply':  ["return reply(res, 200, r.ok && rt.tier ? { ...r, route: { tier: rt.tier, model: rt.model, effort: rt.effort, why: rt.why } } : r);", "return reply(res, 200, r);"],
+  'route-not-logged':    ["if (rt.tier) console.log(`route ${new Date().toISOString()}", "if (false) console.log(`route ${new Date().toISOString()}"],
 };
 for (const [name, [a]] of Object.entries(MUTANTS)) { const n = src.split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 server.mjs 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边
 fs.copyFileSync(path.join(HERE, '../suggest.mjs'), path.join(TMP, 'suggest.mjs'));     // 同理 import './suggest.mjs'
+fs.copyFileSync(path.join(HERE, '../limits.mjs'), path.join(TMP, 'limits.mjs'));       // 同理 import './limits.mjs'
+fs.copyFileSync(path.join(HERE, '../accounts.mjs'), path.join(TMP, 'accounts.mjs'));   // 同理 import './accounts.mjs'
+fs.copyFileSync(path.join(HERE, '../route.mjs'), path.join(TMP, 'route.mjs'));         // 同理 import './route.mjs'
 const run = ([name, [a, b]], i) => new Promise((resolve) => {
   const file = path.join(TMP, name + '.mjs'); fs.writeFileSync(file, src.replace(a, b));
-  let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(4770 + i) } });
+  let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(Number(process.env.M_PORT || 4770) + i) } });
   p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
   p.on('close', (code) => resolve({ name, code, red: out.split('\n').filter((l) => l.startsWith('  FAIL')), ran: /结果：\d+ 过/.test(out), tail: out.trim().split('\n').slice(-2).join(' / ') }));
 });
