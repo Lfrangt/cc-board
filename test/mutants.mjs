@@ -90,6 +90,12 @@ const MUTANTS = {
   'preview-any-entry':   ["if (!st.isFile() || !PAGE_EXT.has(", "if (!st.isFile() || !String(", 'preview.mjs'],
   'preview-new-url':     ["let id = byFile.get(real);", "let id = null;", 'preview.mjs'],
   'preview-referrer':    ["'referrer-policy': 'no-referrer',", "", 'preview.mjs'],
+  // 会话的临时目录：删掉的当场清、留着的满线才清、还在跑的不碰（服务刚起时 allSessions 还是空的，靠读会话登记）
+  'tmp-drop-kept':       ["  saveArchive(); tracks.delete(sid); codexTracks.delete(sid); scanSessions();\n  purgeSessionTmp(sid);", "  saveArchive(); tracks.delete(sid); codexTracks.delete(sid); scanSessions();"],
+  'tmp-keep-now':        ["Date.now() - (it.archivedAt || 0) > KEEP_TMP_MS", "Date.now() - (it.archivedAt || 0) > 0"],
+  'tmp-no-sweep':        ["if (it.state === 'archived' && Date.now()", "if (false && it.state === 'archived' && Date.now()"],
+  'tmp-live-guard':      ["if (!SID_RE.test(sid || '') || sidAlive(sid)) return 0;", "if (!SID_RE.test(sid || '')) return 0;"],
+  'tmp-registry-guard':  ["  for (const f of regs) {", "  for (const f of []) {"],
 };
 for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边

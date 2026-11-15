@@ -130,6 +130,12 @@ const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmu
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
 const env = { ...process.env, HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_LIMITS_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV, CCBOARD_SECURITY: path.join(BIN, 'security') };
+// ── 会话的临时目录（CCBOARD_CLAUDE_TMP）：tidyChat 在两个工作目录编码下各一份（删掉时两份都清），tidyWork / done / 一个两小时前归档的旧会话各一份，再放一个名字不是会话号的目录 ──
+const CTMP = path.join(ROOT, 'claude-tmp'); env.CCBOARD_CLAUDE_TMP = CTMP;
+const OLD_SID = 'oldarch0-0000-4000-8000-000000000001';
+const TMPF = { chatA: path.join(CTMP, '-work', S.tidyChat.sid), chatB: path.join(CTMP, '-other', S.tidyChat.sid), work: path.join(CTMP, '-work', S.tidyWork.sid), live: path.join(CTMP, '-work', S.done.sid), old: path.join(CTMP, '-work', OLD_SID), notes: path.join(CTMP, '-work', 'notes') };
+for (const d of Object.values(TMPF)) { fs.mkdirSync(path.join(d, 'scratchpad'), { recursive: true }); fs.writeFileSync(path.join(d, 'scratchpad', 'x.txt'), 'x'); }
+const tmpHas = () => Object.fromEntries(Object.entries(TMPF).map(([k, d]) => [k, fs.existsSync(d)]));
 // 被杀（SIGTERM / Ctrl-C）时 finally 不跑：这里做同样的收尾，不然这次测试的 tmux 服务、假会话进程和两个临时目录会一直留着（11/13 一次被杀的改坏对照留下 4 个 tmux 和 138 个进程）。
 // kill-server 带的是这次测试自己的 TMUX_TMPDIR（env），碰不到真总控台的 -L ccboard。--keep 是故意留着，不管
 let cleaned = false;
@@ -308,6 +314,8 @@ try {
   const tw = arc.items.find((x) => x.sid === S.tidyWork.sid), ta = arc.items.find((x) => x.sid === S.tidyAsk.sid);
   ok(tw && tw.state === 'archived' && tw.note && tw.note.head === '样式改好了。' && fs.existsSync(S.tidyWork.file) && ta && ta.note && /你选 A 还是 B/.test(ta.note.ask || ''), 'archive: 留着的：停掉、对话还在原处，记下了最后那句结论和要你做的事', JSON.stringify([tw, ta]));
   ok(by(st, 'tidyUndo') && fs.existsSync(S.tidyUndo.file), 'archive: 8 秒内撤销的照旧在墙上，没被删', String(!!by(st, 'tidyUndo')));
+  const t4 = tmpHas(), tl4 = log().split('\n').filter((x) => x.startsWith('tmp '));
+  ok(!t4.chatA && !t4.chatB && t4.work && t4.live && t4.old && t4.notes && tl4.length === 1 && tl4[0].includes(S.tidyChat.sid.slice(0, 8)) && / 2 个/.test(tl4[0]), 'tmp: 删掉的会话当场清掉它在每个工作目录下的临时目录（两份）；留着的还没到线不清；别的会话、名字不是会话号的目录不碰；日志恰好一行', JSON.stringify({ t4, tl4 }));
 
   console.log('\n[4c] 自动收工（autoTidy）：结束了的窗口自己收掉，没结束的一个都不碰');
   st = await get('/api/state'); const arc2 = await get('/api/archive'); const ai = (n) => arc2.items.find((x) => x.sid === S[n].sid);
@@ -521,11 +529,18 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 90000);
   mk('atOff', 'idle', aged(3 * H, [R.peer('khalil-f2', '验收过了'), R.tool('Edit'), R.result(), R.final('已合入。')]), { statusAgo: 3 * H, claude: true });      // fyi 超线 3 小时：autoTidy 默认关，就一动不动
   fs.writeFileSync(path.join(DATA, 'config.json'), '{ 写坏了');
   const log2File = path.join(ROOT, 'server2.out'); const out2 = fs.openSync(log2File, 'w');
+  // 留着的归档：线调成 1 小时。旧会话两小时前归档 → 清；tidyWork 几分钟前归档 → 不清；done 登记成两小时前归档、进程却还在跑 → 不清
+  env.CCBOARD_KEEP_TMP_MS = String(H);
+  const arcFile = path.join(DATA, 'archive.json'), arcJ = JSON.parse(fs.readFileSync(arcFile, 'utf8'));
+  for (const [sid, title] of [[OLD_SID, '两小时前归档的'], [S.done.sid, '归档了却又在跑的']]) arcJ.items[sid] = { sid, title, cwd: CWD, state: 'archived', archivedAt: Date.now() - 2 * H };
+  fs.writeFileSync(arcFile, JSON.stringify(arcJ));
   const srv2 = spawn(NODE, [SERVER], { env, stdio: ['ignore', out2, out2] }); kids.push(srv2.pid);
   let up = false; for (let i = 0; i < 50 && !up; i++) { await sleep(200); try { up = (await (await fetch('http://127.0.0.1:' + PORT + '/health')).json()).ok === true; } catch {} }
   const cfgLines = () => fs.readFileSync(log2File, 'utf8').split('\n').filter((l) => l.startsWith('config '));
   ok(up && cfgLines().length === 1 && /读不了/.test(cfgLines()[0]), '写坏的 config：服务照常起来，日志里只有一行说明', cfgLines().join(' | '));
   await sleep(3000); st = await get('/api/state');
+  const t8 = tmpHas(), tl8 = fs.readFileSync(log2File, 'utf8').split('\n').filter((x) => x.startsWith('tmp '));
+  ok(!t8.old && t8.work && t8.live && t8.notes && tl8.length === 1 && tl8[0].includes(OLD_SID.slice(0, 8)), 'tmp: 留着的归档满了线（这里 1 小时）才清；没满线的、归档了却又在跑的、名字不是会话号的都不碰；日志恰好一行', JSON.stringify({ t8, tl8 }));
   ok(st.providers && !st.providers.codex && !st.sessions.some((x) => x.provider === 'codex') && !(st.pending || []).some((x) => x.name === CDX), 'codex 关着：「交给谁」里没有 Codex；Codex 会话不上墙，也不当成「启动中」', JSON.stringify({ prov: Object.keys(st.providers || {}), codex: st.sessions.filter((x) => x.provider === 'codex').length, pend: (st.pending || []).map((x) => x.name) }));
   n1 = await post('/api/new', { prompt: '用 Codex 做', cwd: '~', provider: 'codex', model: 'bad model!' });
   ok(!n1.body.ok && /Codex 没有打开/.test(n1.body.error || ''), 'codex 关着：接口拒绝开 Codex 会话（在核对模型名之前）', JSON.stringify(n1.body));

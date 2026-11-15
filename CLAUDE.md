@@ -159,7 +159,7 @@ Khalil 11/13 16:10 的原话：「有一些 Tab 我打完我就懒得关……�
 | 线 | 条件 | 常量（环境变量覆盖） |
 |---|---|---|
 | fast | 待审阅，他点过「审完了」，之后它再安静 10 分钟 | `TIDY_FAST_MS`（`CCBOARD_TIDY_FAST_MS`） |
-| fyi | 无需处理的交付（回给别的窗口的、过程汇报），48 小时没人理 | `TIDY_FYI_MS` |
+| fyi | 无需处理的交付（回给别的窗口的、过程汇报），24 小时没人理 | `TIDY_FYI_MS` |
 | review | 待审阅，一直没点「审完了」，24 小时 | `TIDY_REVIEW_MS` |
 
   「安静」从交付时间、最后一条对话记录、登记里的状态时间三者里最晚的那个算起。
@@ -167,7 +167,8 @@ Khalil 11/13 16:10 的原话：「有一些 Tab 我打完我就懒得关……�
 - 他正看着总控台时不收（`uiFocusAt` 6 秒内）：卡片不在他眼前消失，等他离开再收。收了以后界面弹一条「自动收工：留了 N 个，删了 M 个（…）」，日志写 `tidy <时间> keep|drop|fail <会话 id 前 8 位> <线> <理由>`。
 - 「审完了」是界面的 `ccb_done`（localStorage）。界面用 `syncDone()` 告诉 `POST /api/processed`：点的时候发 `map`（新增），撤销的时候发 `clear`，页面第一次轮询成功之后把 `ccb_done` 全发一遍。服务只增不整份替换：原生窗口和浏览器页同时开着，后开的空页面不会清掉别人的标记。服务只存内存（`processed`），每次扫描清掉已经不在墙上的会话。服务重启而页面没重载时，fast 线暂时不认人，fyi 和 review 两条线不受影响。服务只认「那一次交付」的标记：记的时间和会话现在的 `resultAt` 对不上就不算。
 - 只读预览（`CCBOARD_READONLY=1`）只在日志里写 `tidy … dry …`，不归档、不停进程。上线前先这样预览一遍，看它会收哪几个。
-- fyi 线最长（48 小时）的原因：11/13 拿真实会话预览，墙上 21 个窗口里 8 个是 fyi，全是 FretFlow 的总设计师、总调度、界面线、识谱线、音色这类长期项目的负责窗口。它们大多在回别的窗口，交付总被归成 fyi。12 小时的线会让他睡一觉就收掉这些协调窗口。
+- fyi 线的长度：11/13 拿真实会话预览，墙上 21 个窗口里 8 个是 fyi，全是 FretFlow 的总设计师、总调度、界面线、识谱线、音色这类长期项目的负责窗口。它们大多在回别的窗口，交付总被归成 fyi。12 小时的线会让他睡一觉就收掉这些协调窗口，所以当时定 48 小时。11/15 Khalil 问「过期的窗口自动处理实现了没有」：两天前的 5 个 fyi 窗口（43–44.5 小时）还挂在墙上，11 次自动收工全走快线（要他点「审完了」）。改成 24 小时：仍跨过一整夜；被收的协调窗口是「留着」，能从「归档」接回来。
+- 临时目录（11/15 khalil-2b）：Claude Code 给每个会话一个 `/tmp/claude-<uid>/<工作目录编码>/<会话号>/`（scratchpad、后台命令输出、贴进来的图）。会话归档后没人管它，11/15 已归档的 23 个会话共 2.5 GB。`purgeSessionTmp(sid)` 清它：删掉的会话（`dropArchived`、归档列表里手动「删除」的 `deleteSession`）当场清；留着的归档满 `KEEP_TMP_MS`（3 天，`CCBOARD_KEEP_TMP_MS`）由 `purgeDeleted()` 清（启动时一次、之后每 12 小时）。三道闸：名字是会话号（`SID_RE`：只有字母、数字、- 和 _，拼不出上一层）；`sidAlive()` 说进程还在就不碰（服务刚起时 `allSessions` 还是空的，所以直接读会话登记）；真目录才删，链接不跟。别的窗口放在 `/tmp/claude-<uid>/` 根下的沙盒和 worktree 名字不是会话号，碰不到。日志写 `tmp <时间> <会话 id 前 8 位> 清掉临时目录 N 个`。试验场默认指向假主目录里的 `.claude-tmp`，测试用 `CCBOARD_CLAUDE_TMP`。不清的：没经过归档就关掉的会话（他在终端里 /exit 的）；会话自己用 nohup 起的后台进程。
 - 没做的：收之前不问；归档列表里还没有「自动」标记（`/api/archive` 已返回 `auto`）。没验过：长期不关的协调窗口被 fyi 线收掉以后，别的窗口发给它的消息收不到，要先从「归档」接回来。11/13 Ghostty 被误退出后接回的窗口，名字全变了（khalil-46 变成 khalil-6c），所以靠窗口名找人本来就不稳。
 - 11/13 16:3x 预览结果：本机 21 个窗口，一个都不会收（刚接回来，都在 2 小时内动过）。这只证明没有误收；「该收的会收」靠测试。
 
@@ -330,7 +331,7 @@ node test/suggest.test.mjs               # 输入框预判的解析 28 项，不
 node test/limits.test.mjs                # 订阅额度的解析和状态栏取数脚本 37 项，不到 2 秒；--mutants 跑 16 个改坏版
 node test/route.test.mjs                 # 新窗口的档位 52 项，不到 1 秒；--mutants 跑 13 个改坏版
 node test/state.test.mjs                 # 服务端 145 项，约 200 秒
-node test/mutants.mjs                    # 76 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/mutants.mjs                    # 81 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
 python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 159 项
 ```

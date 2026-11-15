@@ -10,6 +10,7 @@
  *        在某一列列头开的新任务，tmux 名 → 那一列记在 pins.json，classify 拿它当提示分；开工前的「信任这个文件夹」由 autoTrust 替他点（config 打开、开在主目录时）。
  *        digest() 从每次交付里取一句结论和要你做的事，分「待跟进 / 待审阅」；它自己写了【待跟进】/【待审阅】/【在跑】那一行就以它为准。
  *        换了端口、数据目录或主目录就自认是试验场：不碰 Ghostty、不发系统通知。
+ *        归档的会话由 purgeSessionTmp 清它在 /tmp/claude-<uid> 下的临时目录：删掉的当场清，留着的归档满 3 天清。
  *        suggestLoop 每 2.5 秒读一遍空闲 tmux 会话的屏幕（capture-pane -e，只读），交给 suggest.mjs 取灰字建议和「下一步 1/2/3」，挂在 /api/state 的 suggest 字段上；它们不进对话记录。
  *        limitsLoop 每 30 秒让 limits.mjs 汇总一遍各订阅的周额度（Codex 读它的记录，只在 codex 打开时；Claude 读状态栏取数脚本存在 <数据目录>/limits 的文件），挂在 /api/state 的 limits 字段上，顶栏右上角显示；Claude 条目带上 config.json accounts 里登记的名字（name），和新任务的账号下拉同名。
  *        /api/new 先过 route.mjs：开窗口的一方（比如总指挥窗口）声明档位 heavy / standard / light，服务翻成 --model / --effort 再交给 newSession，写错的档位拦下、不开窗口；不声明档位就沿用 settings.json 的默认（界面「新任务 → 默认」走这条）。声明了档位的，应答带 route，日志记一行 route。
@@ -60,8 +61,13 @@ const SANDBOX = HOME !== REAL_HOME || PORT !== 4747 || path.resolve(DATA) !== pa
 const READONLY = process.env.CCBOARD_READONLY === '1';                 // 只读：所有会改东西的接口一律拒绝（拿真实会话预览时用）
 // 自动收工的三条线（autoTidy 打开时）。Khalil 11/13 16:10：「有些 Tab 我打完就懒得关……自动分析当前窗口结束了没」。
 const TIDY_FAST_MS = Number(process.env.CCBOARD_TIDY_FAST_MS) || 10 * 60000;          // 你点了「审完了」之后，它再安静这么久
-const TIDY_FYI_MS = Number(process.env.CCBOARD_TIDY_FYI_MS) || 48 * 3600000;          // 无需处理的交付（回给别的窗口的、过程汇报），没人再理它这么久。线定得最长：长期项目的负责窗口大多在回别的窗口，交付总是 fyi，睡一觉不该被收（11/13 拿真实会话预览：8 个 fyi 全是这类）
+const TIDY_FYI_MS = Number(process.env.CCBOARD_TIDY_FYI_MS) || 24 * 3600000;          // 无需处理的交付（回给别的窗口的、过程汇报），没人再理它这么久。长期项目的负责窗口大多在回别的窗口，交付总是 fyi：线要跨过一整夜（11/13 定 48 小时；11/15 Khalil 嫌两天前的窗口还挂着，改成 24 小时）
 const TIDY_REVIEW_MS = Number(process.env.CCBOARD_TIDY_REVIEW_MS) || 24 * 3600000;    // 待审阅的交付，一直没点「审完了」这么久
+// 会话的临时目录：Claude Code 给每个会话一个 <CLAUDE_TMP>/<工作目录编码>/<会话号>/（scratchpad、后台命令的输出、贴进来的图）。
+// 归档后它没人管，一个会话能留几百 MB（11/15 已归档的 23 个共 2.5 GB）。删掉的会话当场清；留着的归档这么久以后清，期间接回来还能用。
+// 试验场默认指向假主目录里：测试忘了设也碰不到真的 /tmp。
+const CLAUDE_TMP = process.env.CCBOARD_CLAUDE_TMP || (SANDBOX ? path.join(HOME, '.claude-tmp') : '/tmp/claude-' + process.getuid());
+const KEEP_TMP_MS = Number(process.env.CCBOARD_KEEP_TMP_MS) || 3 * 86400000;
 
 // ───────────── config.json：项目表、自动点信任、Codex ─────────────
 // 数据目录里一个文件，启动时读一次（./build.sh update 会重启服务）。没有或读不了就用默认值，记一行日志，不崩。
@@ -1110,6 +1116,7 @@ async function deleteSession(sid) {
     try { if (fs.statSync(side).isDirectory()) fs.renameSync(side, base + '.d'); } catch {}
   }
   delete archive.items[sid]; saveArchive(); tracks.delete(sid); scanSessions();
+  purgeSessionTmp(sid);
   return { ok: true, moved };
 }
 
@@ -1129,6 +1136,7 @@ function dropArchived(sid, it) {
   archive.dropped.unshift({ sid, title: it.title, prompt: it.prompt, why: it.why, note: it.note, at: Date.now(), moved });
   archive.dropped = archive.dropped.slice(0, 200);
   saveArchive(); tracks.delete(sid); codexTracks.delete(sid); scanSessions();
+  purgeSessionTmp(sid);
 }
 function purgeDeleted() {
   try {
@@ -1137,6 +1145,36 @@ function purgeDeleted() {
       if (ts && Date.now() - ts > KEEP_DELETED_DAYS * 86400000) fs.rmSync(path.join(DELETED_DIR, f), { recursive: true, force: true });
     }
   } catch {}
+  for (const it of Object.values(archive.items)) {          // 留着的：归档满 KEEP_TMP_MS 再清临时目录（还在归档中 / 正在接回的不碰）
+    if (it.state === 'archived' && Date.now() - (it.archivedAt || 0) > KEEP_TMP_MS) purgeSessionTmp(it.sid);
+  }
+}
+
+// ───────────── 会话的临时目录 ─────────────
+// 只删 <CLAUDE_TMP>/<任一工作目录编码>/<会话号> 这一层。三道闸：名字是完整的会话号（挡路径穿越），
+// 进程已经不在（接回来又在跑的不碰），是真目录（链接不跟）。别的窗口放在 CLAUDE_TMP 下的沙盒、worktree 名字不是会话号，碰不到。
+const SID_RE = /^[\w-]{8,80}$/;   // 会话号只有字母、数字、- 和 _：没有 / 和 .，拼不出上一层
+function purgeSessionTmp(sid) {
+  if (!SID_RE.test(sid || '') || sidAlive(sid)) return 0;
+  let dirs = [];
+  try { dirs = fs.readdirSync(CLAUDE_TMP, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return 0; }
+  let n = 0;
+  for (const d of dirs) {
+    const p = path.join(CLAUDE_TMP, d.name, sid);
+    try { if (!fs.lstatSync(p).isDirectory()) continue; } catch { continue; }
+    try { fs.rmSync(p, { recursive: true, force: true }); n++; } catch {}
+  }
+  if (n) console.log(`tmp ${new Date().toISOString()} ${sid.slice(0, 8)} 清掉临时目录 ${n} 个`);
+  return n;
+}
+function sidAlive(sid) {           // 不只看 allSessions：服务刚起时它还是空的（启动那次 purgeDeleted 在第一轮扫描之前），直接读会话登记
+  if (allSessions.some((x) => x.sid === sid && alive(x.pid))) return true;
+  let regs = []; try { regs = fs.readdirSync(SESS_DIR).filter((f) => /^\d+\.json$/.test(f)); } catch {}
+  for (const f of regs) {
+    if (!alive(Number(f.slice(0, -5)))) continue;
+    try { if (JSON.parse(fs.readFileSync(path.join(SESS_DIR, f), 'utf8')).sessionId === sid) return true; } catch {}
+  }
+  return false;
 }
 
 let claudeBin = null;
