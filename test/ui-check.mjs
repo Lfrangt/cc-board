@@ -243,10 +243,12 @@ try {
   const PVD = path.join(FX.home, 'Desktop', 'pv'); fs.mkdirSync(path.join(PVD, 'sub'), { recursive: true });
   fs.writeFileSync(path.join(PVD, 'page.html'), '<!doctype html><link rel="stylesheet" href="sub/s.css"><h1>preview ok</h1><script>localStorage.setItem("k", "v")</script>');
   fs.writeFileSync(path.join(PVD, 'sub', 's.css'), 'h1{color:rgb(255,0,0)}');
+  fs.writeFileSync(path.join(PVD, 'own-esc.html'), '<!doctype html><h1>own esc</h1><script>document.addEventListener("keydown", (e) => { if (e.key === "Escape") e.preventDefault(); })</script>');   // 页面自己要用 Esc（比如关它自己的弹窗）
+  let pvTarget = path.join(PVD, 'page.html');
   for (const lang of ['zh', 'en']) {
     ({ ctx, page, errs } = await open({ mode: 'wall', lang }));
     let asked = null, opened2 = null;
-    await page.route('**/api/preview', async (route) => { asked = JSON.parse(route.request().postData() || '{}'); await route.continue({ postData: JSON.stringify({ path: path.join(PVD, 'page.html') }) }); });   // 夹具里那条路径换成真实存在的页面，走真的预览端口
+    await page.route('**/api/preview', async (route) => { asked = JSON.parse(route.request().postData() || '{}'); await route.continue({ postData: JSON.stringify({ path: pvTarget }) }); });   // 夹具里那条路径换成真实存在的页面，走真的预览端口
     await page.route('**/api/open', async (route) => { opened2 = JSON.parse(route.request().postData() || '{}'); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, action: 'open' }) }); });
     const htmlLink = `.card[data-sid="${FX.sids.links}"] .body [data-path$=".html"]`;
     await page.evaluate((sel) => document.querySelector(sel).click(), htmlLink);
@@ -271,6 +273,22 @@ try {
       await page.keyboard.press('Escape'); await sleep(400);
       const closed = await page.evaluate(() => ({ open: document.querySelector('#preview').open, src: document.querySelector('#pFrame').getAttribute('src') }));
       ok(!closed.open && closed.src === 'about:blank', '预览：Esc 关掉，页面跟着卸载（音视频不在背后接着放）', JSON.stringify(closed));
+      // 焦点在预览页里面时（点过页面）按 Esc 也要关：预览端口在 HTML 末尾加的脚本把 Esc 发给总控台
+      const isOpen = () => page.evaluate(() => document.querySelector('#preview').open);
+      const openAndFocus = async (name) => {
+        await page.evaluate((sel) => document.querySelector(sel).click(), htmlLink);
+        let f = null;                                   // 等这一次的页面真的载出来：#pWait 可能还是上一次留下的「已隐藏」，不能拿它当信号
+        for (let i = 0; i < 50 && !f; i++) { await sleep(100); f = page.frames().find((x) => x.url().endsWith('/' + name)) || null; }
+        if (f) { await f.waitForSelector('h1', { timeout: 5000 }).catch(() => {}); await f.click('h1'); }
+        return f ? await f.evaluate(() => document.hasFocus()) : false;
+      };
+      const inFocus = await openAndFocus('page.html'); await page.keyboard.press('Escape'); await sleep(400); const afterEsc = await isOpen();
+      ok(inFocus && !afterEsc, '预览：点进页面里（焦点在 iframe）再按 Esc 也能关', JSON.stringify({ inFocus, afterEsc }));
+      pvTarget = path.join(PVD, 'own-esc.html');
+      const inFocus2 = await openAndFocus('own-esc.html'); await page.keyboard.press('Escape'); await sleep(400); const keptOpen = await isOpen();
+      await page.evaluate(() => postMessage({ ccb: 'preview-esc' }, '*')); await sleep(200); const forged = await isOpen();
+      ok(inFocus2 && keptOpen && forged, '预览：页面自己拦下的 Esc 不关预览；不是这个 iframe 发的消息也不关', JSON.stringify({ inFocus2, keptOpen, forged }));
+      await page.keyboard.press('Escape'); await page.click('#preview [data-close]'); await sleep(300); pvTarget = path.join(PVD, 'page.html');
       await page.evaluate((sel) => document.querySelector(sel).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })), htmlLink); await sleep(300);
       ok(opened2 && opened2.path === '/Users/khalil/Desktop/x y.html' && !(await page.evaluate(() => document.querySelector('#preview').open)), '预览：⌘ 点同一条路径 → 照旧交给 /api/open（默认浏览器）', JSON.stringify(opened2));
       opened2 = null; await page.unroute('**/api/preview');

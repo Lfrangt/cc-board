@@ -116,8 +116,9 @@ Khalil 11/15：「点击那个 HTML 的时候，我们还要到浏览器里。�
 - 响应头：`referrer-policy: no-referrer`（去外网取东西时不带出编号）、`cache-control: no-store`（改了文件点「重新载入」就是新的）。音视频按 `Range` 回 206：WebKit 的 `<video>` / `<audio>` 不回 206 就不播。预览端口查 `Host`（挡 DNS 重绑定），只认 GET / HEAD。
 - 端口：`CCBOARD_PREVIEW_PORT`，默认主端口 + 1000（真实例 5747，测试 5761、改坏版 5770+）。被占就让系统给一个空闲端口，日志里有 `preview … port … busy`。
 - 关掉弹层时 iframe 换成 `about:blank`：页面里的音视频、动画不在背后接着放。
+- 焦点在预览页里时按键到不了总控台（两个源），所以预览端口发 HTML 时在最后一个 `</body>` 前加一小段脚本（`ESC_HOOK`，磁盘上的文件不动）：页面自己没 `preventDefault` 的 Esc 用 `postMessage({ccb:'preview-esc'})` 发给父页面；界面只认 `e.source === #pFrame.contentWindow` 的这条消息才关。页面自己要用 Esc（关它自己的弹窗）时先拦下，就不关预览。HTML 因此整份发、不按段（`content-length` 是加过脚本的长度）。页面的 CSP 不许内联脚本时这段不生效，退回点 ×。（11/15 Khalil：「焦点在预览页里面的时候 Esc 关不掉……别让我每次都去点 ×」）
 - 外壳（main.swift）只放行 `127.0.0.1` 的 http 导航，所以预览网址必须写 `127.0.0.1`，不能写 `localhost`（会被交给默认浏览器）。预览页里点外网链接、`target=_blank` 一样交给默认浏览器。
-- 没验到的：真应用窗口（WebKit）里只有我用测试推断的行为，测试跑的是 Chromium；焦点在 iframe 里时 Esc 传不到外面，要点 × 或点页面外面关。页面里嵌外网 iframe（YouTube 之类）时，外壳的导航策略会把它交给默认浏览器，预览里那一块是空的。
+- 没验到的：真应用窗口（WebKit）里只有我用测试推断的行为，测试跑的是 Chromium；页面里嵌外网 iframe（YouTube 之类）时，外壳的导航策略会把它交给默认浏览器，预览里那一块是空的。
 
 ## 放大看、归档（11/13 khalil-96）
 
@@ -330,10 +331,10 @@ node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；
 node test/suggest.test.mjs               # 输入框预判的解析 28 项，不到 1 秒；--mutants 跑 8 个改坏版
 node test/limits.test.mjs                # 订阅额度的解析和状态栏取数脚本 37 项，不到 2 秒；--mutants 跑 16 个改坏版
 node test/route.test.mjs                 # 新窗口的档位 52 项，不到 1 秒；--mutants 跑 13 个改坏版
-node test/state.test.mjs                 # 服务端 145 项，约 200 秒
-node test/mutants.mjs                    # 81 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/state.test.mjs                 # 服务端 151 项，约 200 秒
+node test/mutants.mjs                    # 83 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 159 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 166 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

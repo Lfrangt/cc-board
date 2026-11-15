@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 node:http / fs / path / crypto；不依赖 server.mjs 的任何状态
- * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), port() }；PAGE_EXT（能预览的扩展名）
+ * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), port() }；PAGE_EXT（能预览的扩展名）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）
  * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register() 拿一个网址，ui.html 用 iframe 打开它。
  *        预览页跑在另一个端口（另一个源），所以页面里的脚本读不到总控台的口令、localStorage 和 /api；
  *        网址里的随机编号就是钥匙：一个编号只开一个文件夹，只发白名单里的文件类型，不进点开头的文件夹，不顺着符号链接出去。
@@ -26,6 +26,15 @@ const MIME = {
   pdf: 'application/pdf',
 };
 const KEEP = 64;                                  // 最多记住 64 个预览；再多就忘掉最早的那个
+
+// 焦点在预览页里时，按键只到预览页，到不了总控台（两个源）。所以发 HTML 时在末尾加这一小段：
+// 页面自己没用掉的 Esc（没 preventDefault）告诉父页面，由总控台关预览。磁盘上的文件不动。
+// 挂在 window 的冒泡阶段：页面自己在元素、document 上的 Esc 处理先跑，它拦下了就不关。
+export const ESC_HOOK = '<script>addEventListener("keydown",function(e){if(e.key==="Escape"&&!e.defaultPrevented&&parent!==window)parent.postMessage({ccb:"preview-esc"},"*")});</script>';
+function withHook(html) {
+  const i = html.toLowerCase().lastIndexOf('</body');   // 最后一个 </body> 前面；没有就接在末尾
+  return i < 0 ? html + ESC_HOOK : html.slice(0, i) + ESC_HOOK + html.slice(i);
+}
 
 const inside = (root, p) => p === root || p.startsWith(root + path.sep);
 
@@ -81,6 +90,11 @@ export function startPreview({ port, home, log = () => {} }) {
       'referrer-policy': 'no-referrer',            // 页面去外网取东西时不把带编号的网址带出去
       'accept-ranges': 'bytes',
     };
+    if (f.type.startsWith('text/html')) {          // 网页整份发（不按段），末尾带上 Esc 的那一小段
+      let body; try { body = Buffer.from(withHook(fs.readFileSync(f.real, 'utf8')), 'utf8'); } catch { return nope(404); }
+      delete head['accept-ranges']; head['content-length'] = body.length;
+      res.writeHead(200, head); return res.end(req.method === 'HEAD' ? undefined : body);
+    }
     // 音视频要按段取（WebKit 的 <video> / <audio> 先要 bytes=0-1，不回 206 就不播）
     const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
     let start = 0, end = f.size - 1, code = 200;

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
- * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口）/ 「归档」自己定删还是留；
+ * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口，含 Esc 转发脚本）/ 「归档」自己定删还是留；
  *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
  *        完全隔离：假的主目录、自己的端口、自己的 tmux 目录，服务因此自认是试验场（不碰 Ghostty、不发系统通知）。收尾只按记下的进程号停。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
@@ -252,13 +252,20 @@ try {
   ok(v1.ok && pu(v1).hostname === '127.0.0.1' && Number(pu(v1).port) === PORT + 1000 && v1.name === '讲解.html' && v1b.url === v1.url, 'preview: HTML（中文 + 空格的文件夹、file:// 百分号编码）→ 另一个端口上的网址；同一个文件再点网址不变', JSON.stringify([v1, v1b]));
   const B = (v1.url || '').replace(/\/[^/]*$/, '');
   const g1 = await raw(v1.url || 'http://127.0.0.1:1/'), g2 = await raw(B + '/img/a.css');
-  ok(g1.code === 200 && /^text\/html/.test(g1.h['content-type'] || '') && g1.body === '<p>x</p>' && g1.h['referrer-policy'] === 'no-referrer' && g2.code === 200 && /^text\/css/.test(g2.h['content-type'] || ''), 'preview: 页面本身和它子文件夹里的 CSS 都能取，类型对，不带 Referer 出去', [g1.code, g1.h['content-type'], g1.h['referrer-policy'], g2.code].join(' '));
+  ok(g1.code === 200 && /^text\/html/.test(g1.h['content-type'] || '') && /^<p>x<\/p><script>.*preview-esc/.test(g1.body) && g1.h['referrer-policy'] === 'no-referrer' && g2.code === 200 && /^text\/css/.test(g2.h['content-type'] || ''), 'preview: 页面本身和它子文件夹里的 CSS 都能取，类型对，不带 Referer 出去', [g1.code, g1.h['content-type'], g1.h['referrer-policy'], g2.code].join(' '));
   const deny = await Promise.all(['/.git/config.css', '/run.sh', '/out.css', '/%2E%2E/secret.css', '/..%2Fsecret.css', '/img/', '/img'].map(async (t) => (await raw(B + t)).code));
   ok(deny.every((c) => c === 404), 'preview: 点开头的文件夹、不在白名单的类型、指到外面的符号链接、..、文件夹本身 → 一律 404', deny.join(','));
   const r206 = await raw(B + '/clip.mp4', { headers: { range: 'bytes=0-1' } }), rFull = await raw(B + '/clip.mp4');
   ok(r206.code === 206 && r206.h['content-range'] === 'bytes 0-1/3000' && r206.body.length === 2 && rFull.code === 200 && rFull.h['content-length'] === '3000', 'preview: 视频按段取回 206（WebKit 的 <video> 要这个才播）', r206.code + ' ' + r206.h['content-range'] + ' / ' + rFull.code);
   const hostBad = await raw(v1.url || 'http://127.0.0.1:1/', { headers: { host: 'evil.example:' + (PORT + 1000) } }), postBad = await raw(v1.url || 'http://127.0.0.1:1/', { method: 'POST' }), idBad = await raw('http://127.0.0.1:' + (PORT + 1000) + '/' + '0'.repeat(32) + '/' + encodeURIComponent('讲解.html'));
   ok(hostBad.code === 403 && postBad.code === 405 && idBad.code === 404, 'preview: 别的 Host（DNS 重绑定）403、POST 405、编号不对 404', [hostBad.code, postBad.code, idBad.code].join(','));
+  // Esc 转发：发 HTML 时在最后一个 </body> 前加一小段脚本；磁盘上的文件不动；别的类型、HEAD、按段请求都照旧
+  const EH = path.join(OD, 'esc.html'); const ESRC = '<html><body><p>a</p><script>var s="</body>"</script></BODY>\n</html>'; fs.writeFileSync(EH, ESRC);
+  const ve = await pv(EH), e1 = await raw(ve.url || 'http://127.0.0.1:1/'), eHead = await raw(ve.url || 'http://127.0.0.1:1/', { method: 'HEAD' }), eRange = await raw(ve.url || 'http://127.0.0.1:1/', { headers: { range: 'bytes=0-1' } });
+  const hookAt = e1.body.indexOf('<script>addEventListener("keydown"');
+  ok(hookAt > 0 && e1.body.slice(hookAt).replace(/^<script>.*?<\/script>/, '') === '</BODY>\n</html>' && e1.body.indexOf('preview-esc') === e1.body.lastIndexOf('preview-esc') && Number(e1.h['content-length']) === Buffer.byteLength(e1.body) && fs.readFileSync(EH, 'utf8') === ESRC,
+    'preview: HTML 末尾带 Esc 转发脚本（插在最后一个 </body> 前、大小写都认、只插一次），长度对，磁盘上的文件没动', e1.body.slice(-120));
+  ok(!/preview-esc/.test(g2.body) && eHead.code === 200 && eHead.body === '' && Number(eHead.h['content-length']) === Buffer.byteLength(e1.body) && eRange.code === 200 && eRange.body === e1.body, 'preview: CSS 不加脚本；HTML 的 HEAD 长度对、不带正文；HTML 不按段发（整份 200）', [eHead.code, eHead.h['content-length'], eRange.code].join(' '));
   const vTop = await pv('~/top.html'), TB = (vTop.url || '').replace(/\/[^/]*$/, '');
   const shallow = [(await raw(TB + '/top.css')).code, (await raw(TB + '/notes/n.css')).code];
   ok(vTop.ok && shallow[0] === 200 && shallow[1] === 404, 'preview: 页面就在主目录里时只发同一层的文件，不往下钻', JSON.stringify(vTop) + ' ' + shallow.join(','));

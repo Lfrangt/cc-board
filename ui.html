@@ -1341,7 +1341,9 @@ async function openPreview(p) {
 }
 $('#pReload').addEventListener('click', () => { const fr = $('#pFrame'); $('#pWait').hidden = false; fr.src = fr.src; });
 $('#pOpen').addEventListener('click', () => openPath(previewAt));
-$('#preview').addEventListener('close', () => { $('#pFrame').src = 'about:blank'; });   // 关掉就卸载页面：里面的音视频、动画不在背后接着放
+$('#preview').addEventListener('close', () => { $('#pFrame').src = 'about:blank'; });
+// 焦点在预览页里时 Esc 到不了这里：预览端口发 HTML 时加了一小段脚本，把页面没用掉的 Esc 发过来。只认这个 iframe 发的
+addEventListener('message', (e) => { if (e.source === $('#pFrame').contentWindow && e.data && e.data.ccb === 'preview-esc' && $('#preview').open) $('#preview').close(); });   // 关掉就卸载页面：里面的音视频、动画不在背后接着放
 
 // ── 全局 ──
 document.addEventListener('click', (e) => {

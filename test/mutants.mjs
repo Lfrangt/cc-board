@@ -90,6 +90,8 @@ const MUTANTS = {
   'preview-any-entry':   ["if (!st.isFile() || !PAGE_EXT.has(", "if (!st.isFile() || !String(", 'preview.mjs'],
   'preview-new-url':     ["let id = byFile.get(real);", "let id = null;", 'preview.mjs'],
   'preview-referrer':    ["'referrer-policy': 'no-referrer',", "", 'preview.mjs'],
+  'preview-no-esc-hook': ["  return i < 0 ? html + ESC_HOOK : html.slice(0, i) + ESC_HOOK + html.slice(i);", "  return html;", 'preview.mjs'],
+  'preview-hook-first-body': ["html.toLowerCase().lastIndexOf('</body')", "html.toLowerCase().indexOf('</body')", 'preview.mjs'],
   // 会话的临时目录：删掉的当场清、留着的满线才清、还在跑的不碰（服务刚起时 allSessions 还是空的，靠读会话登记）
   'tmp-drop-kept':       ["  saveArchive(); tracks.delete(sid); codexTracks.delete(sid); scanSessions();\n  purgeSessionTmp(sid);", "  saveArchive(); tracks.delete(sid); codexTracks.delete(sid); scanSessions();"],
   'tmp-keep-now':        ["Date.now() - (it.archivedAt || 0) > KEEP_TMP_MS", "Date.now() - (it.archivedAt || 0) > 0"],
