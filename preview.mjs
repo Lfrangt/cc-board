@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 node:http / fs / path / crypto；不依赖 server.mjs 的任何状态
- * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), port() }；PAGE_EXT（能预览的扩展名）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）
- * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register() 拿一个网址，ui.html 用 iframe 打开它。
+ * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), port() }；kindOf(ext)（能预览的类型：page / pdf / image / video / audio / text / markdown）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）
+ * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register() 拿一个网址和类型，ui.html 按类型显示：网页、PDF 用 iframe，图和音视频用自己的元素，文本由 register() 直接读出内容。
  *        预览页跑在另一个端口（另一个源），所以页面里的脚本读不到总控台的口令、localStorage 和 /api；
  *        网址里的随机编号就是钥匙：一个编号只开一个文件夹，只发白名单里的文件类型，不进点开头的文件夹，不顺着符号链接出去。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
@@ -12,14 +12,25 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 // ───────────── 发哪些文件 ─────────────
-// 只有 PAGE_EXT 能当入口；页面引用的 CSS、脚本、图、字体、音视频按 MIME 表发，表外的一律 404。
-export const PAGE_EXT = new Set(['html', 'htm']);
+// 什么文件能预览、按哪一类显示（11/15 Khalil：「访达里的这种文件预览，也直接在我们的 APP 里打开」）。不在表里的（Word、Excel、Keynote、程序）照旧交给系统打开。
+// 网址只发 MIME 表里的类型：网页引用的 CSS、脚本、字体也走它；文本类不走网址，内容由 register() 直接读给界面。
+const KIND = {
+  page: ['html', 'htm'], pdf: ['pdf'],
+  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg', 'heic', 'heif', 'tif', 'tiff'],
+  video: ['mp4', 'm4v', 'mov', 'webm'], audio: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'aif', 'aiff'],
+  markdown: ['md', 'markdown'],
+  text: ['txt', 'json', 'csv', 'tsv', 'log', 'srt', 'vtt', 'yaml', 'yml', 'toml', 'ini', 'xml', 'py', 'js', 'mjs', 'ts', 'tsx', 'jsx', 'sh', 'zsh', 'swift', 'css', 'sql', 'diff', 'patch'],
+};
+const KIND_OF = Object.fromEntries(Object.entries(KIND).flatMap(([k, exts]) => exts.map((e) => [e, k])));
+export const kindOf = (ext) => KIND_OF[String(ext).toLowerCase()] || null;
+const TEXT_MAX = 1024 * 1024;                     // 文本类最多读 1 MiB 给界面，再大的只看开头
 const MIME = {
   html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
   css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', mjs: 'text/javascript; charset=utf-8',
   json: 'application/json; charset=utf-8', map: 'application/json; charset=utf-8', wasm: 'application/wasm',
   txt: 'text/plain; charset=utf-8', md: 'text/plain; charset=utf-8', csv: 'text/plain; charset=utf-8', vtt: 'text/vtt; charset=utf-8',
   svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', ico: 'image/x-icon', bmp: 'image/bmp',
+  heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff', aif: 'audio/aiff', aiff: 'audio/aiff',
   woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
   mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac',
   mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
@@ -43,11 +54,12 @@ export function startPreview({ port, home, log = () => {} }) {
   const byFile = new Map();                       // 文件真身 → 编号（同一个文件再点，网址不变）
   let bound = 0;
 
-  // 一个 HTML 文件 → 预览网址。只认真实存在的 .html / .htm 普通文件，按符号链接的真身算。
+  // 一个文件 → 预览网址和类型。只认真实存在、类型在 KIND 表里的普通文件，按符号链接的真身算。文本类顺带读出内容（最多 TEXT_MAX）。
   function register(file) {
     let real, st;
     try { real = fs.realpathSync(file); st = fs.statSync(real); } catch { return { ok: false, error: 'missing' }; }
-    if (!st.isFile() || !PAGE_EXT.has(path.extname(real).slice(1).toLowerCase())) return { ok: false, error: 'not-page' };
+    const kind = st.isFile() ? kindOf(path.extname(real).slice(1)) : null;
+    if (!kind) return { ok: false, error: 'no-preview' };
     if (!bound) return { ok: false, error: 'not-ready' };
     let id = byFile.get(real);
     if (!id || !byId.has(id)) {
@@ -59,7 +71,13 @@ export function startPreview({ port, home, log = () => {} }) {
       while (byId.size > KEEP) { const old = byId.keys().next().value; const it = byId.get(old); byId.delete(old); byFile.delete(path.join(it.root, it.entry)); }
     }
     const it = byId.get(id);
-    return { ok: true, url: `http://127.0.0.1:${bound}/${id}/${encodeURIComponent(it.entry)}`, name: it.entry, dir: it.root };
+    const r = { ok: true, kind, url: `http://127.0.0.1:${bound}/${id}/${encodeURIComponent(it.entry)}`, name: it.entry, dir: it.root };
+    if (kind === 'text' || kind === 'markdown') {
+      const buf = Buffer.alloc(Math.min(st.size, TEXT_MAX)); let fd;
+      try { fd = fs.openSync(real, 'r'); fs.readSync(fd, buf, 0, buf.length, 0); } catch { return { ok: false, error: 'missing' }; } finally { if (fd !== undefined) fs.closeSync(fd); }
+      r.text = buf.toString('utf8'); r.truncated = st.size > TEXT_MAX;
+    }
+    return r;
   }
 
   // 请求路径 /<编号>/<文件夹里的相对路径> → 磁盘上的真身；不合规矩的一律 null（对外都是 404，不说为什么）

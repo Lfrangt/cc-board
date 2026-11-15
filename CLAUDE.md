@@ -108,17 +108,21 @@ Khalil 11/12 18:30：「以后你把这些资料直接把链接给我，我可�
 
 ## 内置预览（11/15 khalil-6d）
 
-Khalil 11/15：「点击那个 HTML 的时候，我们还要到浏览器里。我想给我们这个总控台做一个内置的预览功能，这样就能更快速，不用点出去了。」
+Khalil 11/15：「点击那个 HTML 的时候，我们还要到浏览器里。我想给我们这个总控台做一个内置的预览功能，这样就能更快速，不用点出去了。」14:2x 又扩到所有类型：「访达里的这种文件预览，也直接在我们的 APP 里打开……MP4 文件啊，还有 PDF 什么的，都会弹出去」。
 
-- 正文里 `.html` / `.htm` 结尾的路径点了，界面先调 `POST /api/preview`；服务交给 `preview.mjs` 的 `register()`，回一个网址 `http://127.0.0.1:<主端口+1000>/<32 位随机编号>/<文件名>`。界面用几乎占满窗口的 `<dialog id="preview">` 里的 iframe 打开它。⌘ 点、顶栏「在浏览器打开」照旧走 `/api/open`。服务回 `reason: 'not-page'`（叫 x.html 的文件夹之类）时界面改走 `/api/open`。
+- 类型表是 `preview.mjs` 的 `KIND`（唯一出处）：`page`（html、htm）、`pdf`、`image`（含 heic、tiff、svg）、`video`（mp4、mov、m4v、webm）、`audio`、`markdown`（md）、`text`（txt、json、csv、log、yaml、xml 和常见代码）。不在表里的（Word、Excel、Keynote、.app、文件夹）回 `reason: 'no-preview'`，界面改走 `/api/open`，和以前一样交给系统。
+- 界面按类型显示（`openPreview()`）：网页、PDF 进 iframe；图、音视频用总控台自己的 `<img>` / `<video>` / `<audio>`（焦点不进 iframe，Esc 照样关；视频带控制条、不自动播放）；文本、Markdown 由 `register()` 直接把内容（最多 1 MiB，超了标 `truncated`）放进 `/api/preview` 的应答，界面用 `md()` 或 `<pre>` 排版，内容一律转义。
+- 点击规则：以 `/` 结尾的路径（文件夹）和 ⌘ 点直接 `/api/open`；其余先问 `/api/preview`，除了 `not-ready` 之外的失败（`no-preview`、`missing`）都交给 `/api/open`，错误提示由它报，和以前一样。
+
+- 网页的流程：界面调 `POST /api/preview`；服务交给 `preview.mjs` 的 `register()`，回一个网址 `http://127.0.0.1:<主端口+1000>/<32 位随机编号>/<文件名>`。界面用几乎占满窗口的 `<dialog id="preview">` 里的 iframe 打开它。⌘ 点、顶栏「在浏览器打开」照旧走 `/api/open`。服务回 `reason: 'not-page'`（叫 x.html 的文件夹之类）时界面改走 `/api/open`。
 - 为什么另起一个端口：预览页是另一个源。页面里的脚本读不到总控台页面、口令和 localStorage；`/api/*` 要口令，`/api/open`、`/api/preview` 还查 `Origin`（`fromBoard()`），预览端口的 Origin 也算外人。没用 `<iframe sandbox>`：空源里 `localStorage` 一碰就抛错，讲解页、复习包这类页面会整段脚本停掉。
 - 编号就是钥匙。一个编号只开那个 HTML 所在的文件夹（按符号链接的真身）。只发 `MIME` 表里的类型；路径里有空段、`..`、点开头的段（`.git`、`.env`）一律 404；符号链接指到文件夹外面 404；文件夹本身不列目录。页面就在主目录或更上层（`/tmp` 这种顶层）时只发同一层的文件。同一个文件再点，编号不变；最多记 64 个，服务重启后全部作废（界面每次点都重新要）。
 - 响应头：`referrer-policy: no-referrer`（去外网取东西时不带出编号）、`cache-control: no-store`（改了文件点「重新载入」就是新的）。音视频按 `Range` 回 206：WebKit 的 `<video>` / `<audio>` 不回 206 就不播。预览端口查 `Host`（挡 DNS 重绑定），只认 GET / HEAD。
 - 端口：`CCBOARD_PREVIEW_PORT`，默认主端口 + 1000（真实例 5747，测试 5761、改坏版 5770+）。被占就让系统给一个空闲端口，日志里有 `preview … port … busy`。
-- 关掉弹层时 iframe 换成 `about:blank`：页面里的音视频、动画不在背后接着放。
+- 关掉弹层时 `clearPreview()`：iframe 换成 `about:blank`，音视频 `pause()` 并清掉源，图和文本清空。页面里、视频里的声音不在背后接着放。
 - 焦点在预览页里时按键到不了总控台（两个源），所以预览端口发 HTML 时在最后一个 `</body>` 前加一小段脚本（`ESC_HOOK`，磁盘上的文件不动）：页面自己没 `preventDefault` 的 Esc 用 `postMessage({ccb:'preview-esc'})` 发给父页面；界面只认 `e.source === #pFrame.contentWindow` 的这条消息才关。页面自己要用 Esc（关它自己的弹窗）时先拦下，就不关预览。HTML 因此整份发、不按段（`content-length` 是加过脚本的长度）。页面的 CSP 不许内联脚本时这段不生效，退回点 ×。（11/15 Khalil：「焦点在预览页里面的时候 Esc 关不掉……别让我每次都去点 ×」）
 - 外壳（main.swift）只放行 `127.0.0.1` 的 http 导航，所以预览网址必须写 `127.0.0.1`，不能写 `localhost`（会被交给默认浏览器）。预览页里点外网链接、`target=_blank` 一样交给默认浏览器。
-- 没验到的：真应用窗口（WebKit）里只有我用测试推断的行为，测试跑的是 Chromium；页面里嵌外网 iframe（YouTube 之类）时，外壳的导航策略会把它交给默认浏览器，预览里那一块是空的。
+- 没验到的：真应用窗口（WebKit）里只有我用测试推断的行为，测试跑的是 Chromium（无头 Chromium 放不了 H.264、看不了 HEIC，所以测试只核元素和网址，不核播放）；PDF 进的是 WebKit 自带的阅读器，点进 PDF 里面以后 Esc 能不能关没验过，PDF 不是网页，加不了 Esc 脚本；页面里嵌外网 iframe（YouTube 之类）时，外壳的导航策略会把它交给默认浏览器，预览里那一块是空的。
 
 ## 放大看、归档（11/13 khalil-96）
 
@@ -332,10 +336,10 @@ node test/projects.test.mjs              # 分组规则 30 项，不到 1 秒；
 node test/suggest.test.mjs               # 输入框预判的解析 28 项，不到 1 秒；--mutants 跑 8 个改坏版
 node test/limits.test.mjs                # 订阅额度的解析和状态栏取数脚本 37 项，不到 2 秒；--mutants 跑 16 个改坏版
 node test/route.test.mjs                 # 新窗口的档位 52 项，不到 1 秒；--mutants 跑 13 个改坏版
-node test/state.test.mjs                 # 服务端 152 项，约 200 秒
-node test/mutants.mjs                    # 83 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
+node test/state.test.mjs                 # 服务端 156 项，约 200 秒
+node test/mutants.mjs                    # 86 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 166 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 171 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

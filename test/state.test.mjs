@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
- * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口，含 Esc 转发脚本）/ 「归档」自己定删还是留；
+ * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口：网页、PDF、图、音视频、文本，含 Esc 转发脚本）/ 「归档」自己定删还是留；
  *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
  *        完全隔离：假的主目录、自己的端口、自己的 tmux 目录，服务因此自认是试验场（不碰 Ghostty、不发系统通知）。收尾只按记下的进程号停。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
@@ -269,8 +269,19 @@ try {
   const vTop = await pv('~/top.html'), TB = (vTop.url || '').replace(/\/[^/]*$/, '');
   const shallow = [(await raw(TB + '/top.css')).code, (await raw(TB + '/notes/n.css')).code];
   ok(vTop.ok && shallow[0] === 200 && shallow[1] === 404, 'preview: 页面就在主目录里时只发同一层的文件，不往下钻', JSON.stringify(vTop) + ' ' + shallow.join(','));
-  const q1 = await pv(path.join(OD, 'run.sh')), q2 = await pv(OD), q3 = await pv('~/Desktop/没有.html'), q4 = await pv('Desktop/x.html');
-  ok(q1.reason === 'not-page' && q2.reason === 'not-page' && q3.reason === 'missing' && !q4.ok && !q1.url, 'preview: 不是网页的（脚本、文件夹）回 not-page 让界面改走 open；不存在的、不是完整路径的不给网址', JSON.stringify([q1, q2, q3, q4]));
+  fs.writeFileSync(path.join(OD, 'report.docx'), 'PK'); fs.mkdirSync(path.join(OD, 'dir.png'));
+  const q1 = await pv(path.join(OD, 'report.docx')), q2 = await pv(OD), q3 = await pv('~/Desktop/没有.html'), q4 = await pv('Desktop/x.html'), q5 = await pv(path.join(OD, 'Foo.app')), q6 = await pv(path.join(OD, 'dir.png'));
+  ok(q1.reason === 'no-preview' && q2.reason === 'no-preview' && q5.reason === 'no-preview' && q6.reason === 'no-preview' && q3.reason === 'missing' && !q4.ok && !q1.url, 'preview: 预览不了的（Word、文件夹、.app、叫 x.png 的文件夹）回 no-preview 让界面改走 open；不存在的、不是完整路径的不给网址', JSON.stringify([q1, q2, q3, q4, q5, q6]));
+  // 别的类型（11/15 Khalil：「访达里的这种文件预览，也直接在我们的 APP 里打开」）：图、音视频、PDF 给网址和类型；文本、Markdown 直接带内容，最多 1 MiB
+  for (const [n, body] of [['photo.png', Buffer.from('89504e470d0a1a0a', 'hex')], ['shot.HEIC', 'x'], ['song.m4a', 'x'], ['doc.pdf', '%PDF-1.4'], ['笔记.md', '# 标题\n\n正文'], ['data.json', '{"a":1}'], ['tool.sh', 'echo hi'], ['big.log', 'a'.repeat(1024 * 1024 + 10)]]) fs.writeFileSync(path.join(OD, n), body);
+  const k = {}; for (const n of ['photo.png', 'shot.HEIC', 'clip.mp4', 'song.m4a', 'doc.pdf', '笔记.md', 'data.json', 'tool.sh', 'big.log']) k[n] = await pv(path.join(OD, n));
+  const kinds = Object.fromEntries(Object.entries(k).map(([n, r]) => [n, r.kind]));
+  ok(JSON.stringify(kinds) === JSON.stringify({ 'photo.png': 'image', 'shot.HEIC': 'image', 'clip.mp4': 'video', 'song.m4a': 'audio', 'doc.pdf': 'pdf', '笔记.md': 'markdown', 'data.json': 'text', 'tool.sh': 'text', 'big.log': 'text' }), 'preview: 按扩展名分类（大小写都认）：图 / 视频 / 音频 / PDF / Markdown / 文本', JSON.stringify(kinds));
+  const kp = await raw(k['photo.png'].url || 'http://127.0.0.1:1/'), kd = await raw(k['doc.pdf'].url || 'http://127.0.0.1:1/');
+  ok(kp.code === 200 && kp.h['content-type'] === 'image/png' && kd.code === 200 && kd.h['content-type'] === 'application/pdf' && !/preview-esc/.test(kd.body), 'preview: 图和 PDF 的网址按真类型发，不加 Esc 脚本', [kp.code, kp.h['content-type'], kd.code, kd.h['content-type']].join(' '));
+  ok(k['笔记.md'].text === '# 标题\n\n正文' && k['笔记.md'].truncated === false && k['data.json'].text === '{"a":1}' && !('text' in k['photo.png']) && k['big.log'].text.length === 1024 * 1024 && k['big.log'].truncated === true,
+    'preview: 文本和 Markdown 直接带内容；超过 1 MiB 只带开头并标 truncated；图不带内容', JSON.stringify({ md: k['笔记.md'].text, big: [(k['big.log'].text || '').length, k['big.log'].truncated] }));
+  ok(/preview \S+ image .*photo\.png/.test(log()) && /preview \S+ markdown .*笔记\.md/.test(log()), 'preview: 日志里写类型');
   const pBad = await fetch('http://127.0.0.1:' + PORT + '/api/preview', { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://127.0.0.1:' + (PORT + 1000) }, body: JSON.stringify({ path: path.join(OD, '讲解.html') }) });
   const pNoTok = await fetch('http://127.0.0.1:' + PORT + '/api/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: path.join(OD, '讲解.html') }) });
   ok(pBad.status === 403 && pNoTok.status === 403, 'preview: 预览页自己（另一个端口的 Origin）和不带口令的都调不了 /api/preview', pBad.status + ',' + pNoTok.status);

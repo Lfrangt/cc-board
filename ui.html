@@ -6,7 +6,7 @@
         「为什么停了」由服务端的 alert 给，「交付了什么、要不要你回」由服务端的 digest 给；这里只负责显示，记「先不管」（ccb_ack）和「审完了 / 先放着」（ccb_done）。看一眼、点开都不改状态。
         ccb_done 经 syncDone() 告诉服务的 /api/processed（点的时候、撤销的时候、页面第一次轮询成功之后全发一遍）：服务端的自动收工只认他明确点过的「审完了」。
         正文里的本机路径（file://、~/…、/Users/…、反引号里的路径）都变成可点的链接，点了交给服务的 /api/open；
-        .html / .htm 结尾的改走 openPreview()：向 /api/preview 要另一个端口上的网址，在 #preview 弹层的 iframe 里看（⌘ 点照旧 /api/open）。
+        点了先走 openPreview()：向 /api/preview 要网址和类型，在 #preview 弹层里按类型显示（网页 / PDF 用 iframe，图和音视频用自己的元素，文本和 Markdown 排版显示）；不能预览的、文件夹、⌘ 点照旧 /api/open。
         放大看一张卡：⌘O（zoomTarget() 定哪一张）、双击卡片封面、右上角 ⤢，都走 zoomCard() → openDetail()。卡片右上角「归档」由服务定删还是留。
         回话框上的预判只读服务端的 suggest 字段（服务从终端屏幕读来的灰字建议和「下一步 1/2/3」）：灰字 Tab 收下，三条点一下或按数字键，都只是填进输入框当草稿，不自己发。
         新任务有两个入口：右上角（⌘N）和墙上每个列头的「＋ 新任务」；后者把那一列记在 newIn，goNew 带着它交给服务，新卡落进那一列。
@@ -339,6 +339,15 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
 .pdir{flex:1;min-width:0;color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pbody{position:relative;flex:1;min-height:0;background:#fff}
 #pFrame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+/* 图、音视频放在总控台自己的页面里（焦点不进 iframe，Esc 照样关）；底色跟总控台走，文本类按卡片正文的样式排 */
+.pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"]{background:var(--bg)}
+#pImg,#pVid{position:absolute;inset:0;margin:auto;max-width:calc(100% - 32px);max-height:calc(100% - 32px)}
+#pImg{object-fit:contain} #pVid{width:calc(100% - 32px);height:calc(100% - 32px);background:#000}
+#pAud{position:absolute;inset:0;margin:auto;width:min(560px,calc(100% - 32px))}
+#pText{position:absolute;inset:0;overflow:auto;padding:24px max(24px,calc(50% - 400px));font-size:15px;line-height:1.7}
+#pText pre.raw{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+#pText .cut{color:var(--text-3);font-size:12px;margin-top:16px}
+#pImg[hidden],#pVid[hidden],#pAud[hidden],#pText[hidden],#pFrame[hidden]{display:none}
 .pwait{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-3);font-size:13px;pointer-events:none} .pwait[hidden]{display:none}
 .dbody{padding:18px 20px 20px;overflow:auto}
 .dfoot{display:flex;align-items:center;gap:8px;padding:12px 16px 14px 20px;border-top:1px solid var(--hair);flex:none}
@@ -385,7 +394,7 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
 <div id="toast" role="status"><span></span><button hidden></button></div>
 
 <dialog id="detail"><div class="dhead"><h1 id="dTitle"></h1><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="dbody" id="dBody"></div></dialog>
-<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><div class="pwait" id="pWait">读取中…</div></div></dialog>
+<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody" id="pBody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><img id="pImg" alt="" hidden><video id="pVid" controls playsinline preload="metadata" hidden></video><audio id="pAud" controls preload="metadata" hidden></audio><div id="pText" class="md" hidden></div><div class="pwait" id="pWait">读取中…</div></div></dialog>
 
 <dialog id="newDlg" style="--w:580px"><div class="dhead"><h1 id="nTitle">新任务</h1></div>
   <div class="dbody">
@@ -466,7 +475,7 @@ const EN = {
   '待审阅': 'To review', '处理过': 'Handled', '审完了': 'Reviewed', '先放着': 'Later',
   '只有点这里、或回它一句，才算处理过': 'Only this button or a reply marks it handled',
   '重新载入': 'Reload', '在浏览器打开': 'Open in browser', '在默认浏览器里打开（也可以 ⌘ 点链接）': 'Open in your default browser (or ⌘-click the link)', '预览': 'Preview',
-  '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second',
+  '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second', '文件太大，只显示了开头 1 MB。': 'File is large; showing the first 1 MB only.',
 };
 const RULES = [
   [/^运行中 · (\d+) 分钟没动静$/, 'Running · no activity for $1 min'], [/^运行中 · (.+)$/, 'Running · $1'],
@@ -1326,29 +1335,45 @@ $('#nGo').addEventListener('click', goNew);
 $('#nPrompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); goNew(); } });
 
 // ── 内置预览（11/15 Khalil：「点 HTML 还要到浏览器里……做一个内置的预览功能」）──
-// 正文里 .html / .htm 结尾的路径点了：问服务要预览网址，在总控台里用 iframe 看（页面跑在另一个端口，碰不到总控台）。
-// 服务说它不是网页（比如叫 x.html 的文件夹）就改走 /api/open；别的路径、⌘ 点，一律照旧交给 /api/open。
+// 正文里的路径点了：先问服务能不能预览（网页、PDF、图、音视频、文本），能就在总控台里看；网页跑在另一个端口，碰不到总控台。
+// 不能预览的（文件夹、Word、程序）改走 /api/open；以 / 结尾的路径（文件夹）和 ⌘ 点直接交给 /api/open。
 let previewAt = '';
 function openPath(p) {
   api('/api/open', { path: p }).then((r) => { if (!r.ok) toast(r.error || '打不开'); else if (r.action === 'reveal') toast('这种文件不直接打开，已在访达里选中'); }).catch(() => toast('总控台服务没应答'));
 }
+// 卸掉上一次的内容：iframe 换成空白页、音视频停下并清掉源，不在背后接着放
+function clearPreview() {
+  $('#pFrame').src = 'about:blank';
+  for (const m of [$('#pVid'), $('#pAud')]) { m.pause(); m.removeAttribute('src'); m.load(); }
+  $('#pImg').removeAttribute('src'); $('#pText').textContent = '';
+}
+// 服务说能预览就按类型显示：网页、PDF 用 iframe；图、音视频用自己的元素；文本、Markdown 用服务读来的内容排版。说不能（文件夹、Word 这类）或不在了，就交给 /api/open
 async function openPreview(p) {
   let r; try { r = await api('/api/preview', { path: p }); } catch { toast('总控台服务没应答'); return; }
-  if (!r.ok) { if (r.reason === 'not-page') openPath(p); else toast(r.error || '打不开'); return; }
-  previewAt = p; $('#pTitle').textContent = r.name; $('#pDir').textContent = tilde(r.dir); $('#pDir').title = r.dir;
-  const fr = $('#pFrame'); $('#pWait').hidden = false; fr.onload = () => { if (fr.src !== 'about:blank') $('#pWait').hidden = true; }; fr.src = r.url;
+  if (!r.ok) { if (r.reason === 'not-ready') toast(r.error); else openPath(p); return; }
+  clearPreview(); previewAt = p;
+  $('#pTitle').textContent = r.name; $('#pDir').textContent = tilde(r.dir); $('#pDir').title = r.dir; $('#pBody').dataset.kind = r.kind;
+  const show = { page: '#pFrame', pdf: '#pFrame', image: '#pImg', video: '#pVid', audio: '#pAud', text: '#pText', markdown: '#pText' }[r.kind] || '#pFrame';
+  for (const id of ['#pFrame', '#pImg', '#pVid', '#pAud', '#pText']) $(id).hidden = id !== show;
+  const wait = $('#pWait'); wait.hidden = false;
+  if (show === '#pFrame') { const fr = $('#pFrame'); fr.onload = () => { if (fr.src !== 'about:blank') wait.hidden = true; }; fr.src = r.url; }
+  else if (show === '#pImg') { const im = $('#pImg'); im.onload = im.onerror = () => { wait.hidden = true; }; im.src = r.url; }
+  else if (show === '#pText') {
+    $('#pText').innerHTML = (r.kind === 'markdown' ? md(r.text) : '<pre class="raw">' + esc(r.text) + '</pre>') + (r.truncated ? L('<div class="cut">文件太大，只显示了开头 1 MB。</div>') : '');
+    $('#pText').scrollTop = 0; wait.hidden = true;
+  } else { const m = $(show); m.src = r.url; wait.hidden = true; }      // 音视频：给出控制条就算好了，不自动播放
   const d = $('#preview'); if (!d.open) d.showModal();
 }
-$('#pReload').addEventListener('click', () => { const fr = $('#pFrame'); $('#pWait').hidden = false; fr.src = fr.src; });
+$('#pReload').addEventListener('click', () => { if (previewAt) openPreview(previewAt); });
 $('#pOpen').addEventListener('click', () => openPath(previewAt));
-$('#preview').addEventListener('close', () => { $('#pFrame').src = 'about:blank'; });
+$('#preview').addEventListener('close', clearPreview);   // 关掉就卸载：里面的音视频、动画不在背后接着放
 // 焦点在预览页里时 Esc 到不了这里：预览端口发 HTML 时加了一小段脚本，把页面没用掉的 Esc 发过来。只认这个 iframe 发的
-addEventListener('message', (e) => { if (e.source === $('#pFrame').contentWindow && e.data && e.data.ccb === 'preview-esc' && $('#preview').open) $('#preview').close(); });   // 关掉就卸载页面：里面的音视频、动画不在背后接着放
+addEventListener('message', (e) => { if (e.source === $('#pFrame').contentWindow && e.data && e.data.ccb === 'preview-esc' && $('#preview').open) $('#preview').close(); });
 
 // ── 全局 ──
 document.addEventListener('click', (e) => {
   const f = e.target.closest('[data-path]');
-  if (f) { e.preventDefault(); const p = f.dataset.path; if (!e.metaKey && /\.html?$/i.test(p)) openPreview(p); else openPath(p); return; }
+  if (f) { e.preventDefault(); const p = f.dataset.path; if (!e.metaKey && !p.endsWith('/')) openPreview(p); else openPath(p); return; }
   const c = e.target.closest('[data-close]'); if (c) { c.closest('dialog').close(); return; }
   if (e.target.tagName === 'DIALOG') { e.target.close(); return; }             // 点弹层外面关掉
   const nw = e.target.closest('[data-newin]'); if (nw) { openNew({ key: nw.dataset.newin, name: nw.dataset.newname }); return; }

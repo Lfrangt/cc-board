@@ -289,12 +289,32 @@ try {
       await page.evaluate(() => postMessage({ ccb: 'preview-esc' }, '*')); await sleep(200); const forged = await isOpen();
       ok(inFocus2 && keptOpen && forged, '预览：页面自己拦下的 Esc 不关预览；不是这个 iframe 发的消息也不关', JSON.stringify({ inFocus2, keptOpen, forged }));
       await page.keyboard.press('Escape'); await page.click('#preview [data-close]'); await sleep(300); pvTarget = path.join(PVD, 'page.html');
+      // 别的类型（11/15 Khalil：「访达里的这种文件预览，也直接在我们的 APP 里打开」）：图、视频、Markdown、纯文本在总控台自己的页面里显示
+      fs.writeFileSync(path.join(PVD, 'dot.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+      fs.writeFileSync(path.join(PVD, 'clip.mp4'), Buffer.alloc(2048, 1)); fs.writeFileSync(path.join(PVD, '笔记.md'), '# 标题一\n\n- 第一条\n- 第二条\n'); fs.writeFileSync(path.join(PVD, 'run.log'), '<b>not html</b>\nline 2');
+      await page.unroute('**/api/preview');
+      const shown = () => page.evaluate(() => { const v = (id) => !document.querySelector(id).hidden; const vid = document.querySelector('#pVid');
+        return { open: document.querySelector('#preview').open, kind: document.querySelector('#pBody').dataset.kind, frame: v('#pFrame'), img: v('#pImg'), vid: v('#pVid'), text: v('#pText'),
+          imgW: document.querySelector('#pImg').naturalWidth, imgSrc: document.querySelector('#pImg').getAttribute('src') || '', vidSrc: vid.getAttribute('src') || '', paused: vid.paused, controls: vid.controls,
+          h: (document.querySelector('#pText h1, #pText h2, #pText h3') || {}).textContent || '', li: document.querySelectorAll('#pText li').length, pre: (document.querySelector('#pText pre.raw') || {}).textContent || '', bold: document.querySelectorAll('#pText b').length }; });
+      const pvOpen = async (n) => { await page.evaluate((p) => openPreview(p), path.join(PVD, n)); await sleep(700); return shown(); };
+      const sImg = await pvOpen('dot.png');
+      ok(sImg.open && sImg.kind === 'image' && sImg.img && !sImg.frame && sImg.imgW === 1 && Number(new URL(sImg.imgSrc).port) === boardPort + 1000, '预览：图片用总控台自己的 <img> 显示，图从预览端口取', JSON.stringify(sImg));
+      const sVid = await pvOpen('clip.mp4');
+      ok(sVid.kind === 'video' && sVid.vid && !sVid.img && sVid.controls && sVid.paused && /\/clip\.mp4$/.test(sVid.vidSrc), '预览：视频用 <video>，带控制条、不自动播放；换文件时上一张图收起', JSON.stringify(sVid));
+      await page.focus('#pVid'); await page.keyboard.press('Escape'); await sleep(400); const sClosed = await shown();
+      ok(!sClosed.open && sClosed.vidSrc === '', '预览：焦点在视频上按 Esc 关掉，视频的源清掉（不在背后接着放）', JSON.stringify(sClosed));
+      const sMd = await pvOpen('笔记.md');
+      ok(sMd.kind === 'markdown' && sMd.text && sMd.h === '标题一' && sMd.li === 2, '预览：Markdown 按卡片正文的样式排版（标题、列表）', JSON.stringify(sMd));
+      const sTxt = await pvOpen('run.log');
+      ok(sTxt.kind === 'text' && sTxt.pre === '<b>not html</b>\nline 2' && sTxt.bold === 0, '预览：纯文本原样显示，里面的标签不当成 HTML', JSON.stringify(sTxt));
+      await page.click('#preview [data-close]'); await sleep(300);
       await page.evaluate((sel) => document.querySelector(sel).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })), htmlLink); await sleep(300);
       ok(opened2 && opened2.path === '/Users/khalil/Desktop/x y.html' && !(await page.evaluate(() => document.querySelector('#preview').open)), '预览：⌘ 点同一条路径 → 照旧交给 /api/open（默认浏览器）', JSON.stringify(opened2));
       opened2 = null; await page.unroute('**/api/preview');
-      await page.route('**/api/preview', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, reason: 'not-page', error: 'x' }) }));
+      await page.route('**/api/preview', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, reason: 'no-preview', error: 'x' }) }));
       await page.evaluate((sel) => document.querySelector(sel).click(), htmlLink); await sleep(300);
-      ok(opened2 && !(await page.evaluate(() => document.querySelector('#preview').open)), '预览：服务说它不是网页（比如叫 .html 的文件夹）→ 改走 /api/open', JSON.stringify(opened2));
+      ok(opened2 && !(await page.evaluate(() => document.querySelector('#preview').open)), '预览：服务说预览不了（文件夹、Word 这类）→ 改走 /api/open', JSON.stringify(opened2));
     } else {
       const zhLeft = pv.head.match(/[一-鿿]+/g) || [];
       ok(pv.open && zhLeft.length === 0 && /Open in browser/.test(pv.head), '预览（英文）：顶栏按钮都翻好了', pv.head);
