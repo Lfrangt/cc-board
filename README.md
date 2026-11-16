@@ -55,11 +55,11 @@ You need macOS 13+ on Apple Silicon, Node 22+, `tmux`, the Xcode Command Line To
 ```sh
 git clone https://github.com/Lfrangt/cc-board.git
 cd cc-board
-./build.sh                       # compiles the small Swift/WKWebView shell, installs ~/Applications/总控台.app
-open ~/Applications/总控台.app
+CCBOARD_APP_NAME=cc-board ./build.sh   # compiles the small Swift/WKWebView shell, installs ~/Applications/cc-board.app
+open ~/Applications/cc-board.app
 ```
 
-The app bundle is still called 总控台 ("main console" in Chinese); an English name is an open question. Node is looked up at `~/.local/node/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. On first launch macOS asks whether the app may control Ghostty. Every rebuild changes the ad-hoc signature, so it asks again.
+Without `CCBOARD_APP_NAME` the bundle is called 总控台 ("main console" in Chinese), which is the author's own build. The app looks for Node 22 or later in this order: a path you write into `~/Library/Application Support/cc-board/node`, then `~/.local/node/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, then Homebrew's `node@NN` kegs, then nvm, fnm, Volta, mise, asdf and nodenv (newest version first), then your login shell's `PATH`. On first launch macOS asks whether the app may control Ghostty. Every rebuild changes the ad-hoc signature, so it asks again.
 
 After you pull changes, `./build.sh update` swaps in the new `ui.html`, `server.mjs`, `projects.mjs`, `suggest.mjs`, `limits.mjs`, `statusline-tap.mjs` and `accounts.mjs` and restarts the service. No recompile, no new permission prompt.
 
@@ -119,6 +119,7 @@ Pills appear after any session replies. If you run several Claude accounts, set 
 ```sh
 npm install                       # only for the UI tests (playwright-core)
 node test/projects.test.mjs       # project-grouping rules, under a second
+node test/app-shell.test.mjs      # the native shell: where it looks for Node, how a release bundle installs its code; about 8 s
 node test/limits.test.mjs         # usage-limit parsing and the status-line tap, under a second
 node test/state.test.mjs          # the server, in a throwaway fake $HOME, about 90 s
 node test/mutants.mjs             # deliberately broken servers; each must turn the suite red, about 7 min

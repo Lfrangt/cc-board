@@ -5,11 +5,13 @@
 # English: no argument = compile the Swift shell, sign it ad hoc, install it (macOS asks again before it may control Ghostty);
 #          `update`   = copy server.mjs / ui.html / projects.mjs / suggest.mjs / limits.mjs / statusline-tap.mjs / accounts.mjs / route.mjs / preview.mjs into the data dir and restart the service. No rebuild, no re-authorization.
 # NODE=/path/to/node overrides the node that checks syntax (the app itself looks in ~/.local/node/bin, /opt/homebrew/bin, /usr/local/bin).
+#   ./build.sh stage    只编译打包到 build/，不装、不动数据目录（release/release.sh 用）。Compile into build/ only; install nothing.
+# CCBOARD_APP_NAME=cc-board 换成公开版的名字和包信息（app/public-info.sh）；不设就是「总控台」，和以前一样。
 set -e
 cd "${0:a:h}"
 NODE="${NODE:-$(command -v node || echo "$HOME/.local/node/bin/node")}"
 [ -x "$NODE" ] || { echo "node not found: install Node 22+ or set NODE=/path/to/node" >&2; exit 1; }
-NAME="总控台"; STAGE="build/$NAME.app"; DEST="$HOME/Applications/$NAME.app"
+NAME="${CCBOARD_APP_NAME:-总控台}"; STAGE="build/$NAME.app"; DEST="$HOME/Applications/$NAME.app"
 LIVE="$HOME/Library/Application Support/cc-board/app"
 push_live() { mkdir -p "$LIVE"; /bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs "$LIVE/"; }
 if [ "$1" = "update" ]; then
@@ -27,11 +29,13 @@ if [ "$1" = "update" ]; then
   exit 0
 fi
 rm -rf build; mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
-/usr/bin/swiftc -O -swift-version 5 -target arm64-apple-macos13 -framework Cocoa -framework WebKit app/main.swift -o "$STAGE/Contents/MacOS/ccboard"
+/usr/bin/swiftc -O -swift-version 5 -target arm64-apple-macos13 -framework Cocoa -framework WebKit app/main.swift app/node.swift app/bundlecode.swift -o "$STAGE/Contents/MacOS/ccboard"
 /bin/cp app/Info.plist "$STAGE/Contents/Info.plist"
 /bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs "$STAGE/Contents/Resources/"
 [ -f app/AppIcon.icns ] && /bin/cp app/AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
+[ "$NAME" = "总控台" ] || /bin/sh app/public-info.sh "$STAGE" "$NAME"
 /usr/bin/codesign --force --sign - "$STAGE" >/dev/null 2>&1
+if [ "$1" = "stage" ]; then echo "staged: $STAGE"; exit 0; fi
 push_live
 mkdir -p "$HOME/Applications"; rm -rf "$DEST"; /bin/cp -R "$STAGE" "$DEST"
 echo "installed: $DEST"
