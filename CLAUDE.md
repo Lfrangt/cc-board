@@ -6,6 +6,7 @@ Node 22（无依赖）+ 单文件 HTML + Swift / WKWebView 外壳 + tmux + Ghost
 app/ - 原生外壳（main.swift + Info.plist + 图标）
 test/ - 隔离测试（7 个脚本：分组规则、输入框预判、订阅额度、新窗口档位、服务端、改坏对照、界面；假主目录 + 自己的端口）
 build/ - 编译产物（build.sh 生成，可删）
+release/ - 公开安装包：出公证 dmg 的脚本和签名权限（见「公开安装包」一节）
 publish/ - 本机的发帖素材（不进仓库）
 docs/ - README 用的图和视频
 .rollback/ - 每次上线前装着的那一版，按日期存
@@ -317,6 +318,18 @@ Khalil 11/15：「再学 Raft 的看板，加按状态分列」。Raft 的任务
 - 不另写一套布局：按项目分列的整套机制（`setGroups()` 分组、`lanes()` 分横向格子、列头、收起、换列动画）原样复用，只换「这张卡属于哪一组」这一问。`setGroups()` 里的 `raw()` 在 `groupBy === 'status'` 且在墙上时返回 `laneOf()`，组的 key 是 `s:act` / `s:review` / `s:busy` / `s:calm`，不和项目 key 撞，收起的状态照样记在 `ccb_fold`。
 - 四列：要你处理（等你选、停住了、待跟进、进程退出）→ 待审阅 → 运行中（含后台在跑、启动中）→ 无需处理（回给别的窗口的、处理过的、空闲的）。判法和底下那排点的 `dotOf()` 同一套，所以列的先后就是排位。启动中的卡自带 `v`，弹着选择框的算要你处理。
 - 按状态时列名已经说了状态，卡左上角的 `.proj` 改写它属于哪个项目（按项目时墙上不写，列头已经写了）。封面不受影响，照旧按项目。
+
+## 公开安装包（release/，11/16 khalil-2d）
+
+Khalil 11/15 定：官网的下载 = 公证过的安装包；证书好之前先挂一行安装命令（ccboard.dev/install.sh，它跑 build.sh）。
+
+- 公开装法：dmg 由 `release/release.sh <版本>` 出，名字是 cc-board。官网的一行安装脚本（cc-board-site 的 install.sh）11/16 还钉在 438cb69，装出来仍叫「总控台」；改钉到含这一节的提交时，要同时让它设 `CCBOARD_APP_NAME=cc-board`、应用路径改 cc-board.app，并去掉它那句「应用只在三个地方找 node」的提示。`CCBOARD_APP_NAME` 不是「总控台」时 build.sh 调 `app/public-info.sh`：包名 cc-board、包标识 `dev.ccboard.app`、「控制 Ghostty」的说明英文（中文系统看 `app/zh-Hans.lproj` 里的中文）。不设就是「总控台」、`local.khalil.ccboard`，和以前一模一样：包标识一变，macOS 当它是另一个应用，Khalil 要重新允许控制 Ghostty。
+- 外壳的菜单和提示按系统首选语言出中文或英文（`L()`），应用名取包信息，所以作者本机看到的字一个没变。
+- 找 node（`app/node.swift`）：数据目录的 `node` 文件（一行路径）→ 原来的三个固定位置（顺序不变）→ Homebrew keg（`node@24`）→ nvm / fnm / volta / mise / asdf / nodenv（各取版本最高的）→ `zsh -lc 'command -v node'`。每个候选真跑 `--version`，低于 22 的跳过，最后报「找到的是 v20」；版本读不出来（超时 5 秒、崩了）的不算太旧，什么都没找到时照旧拿它起服务（11/16 之前根本不查版本）。不用 `zsh -i`：有人的 .zshrc 会自动接上 tmux。
+- dmg 里的应用 Info.plist 带 `CCBoardSyncCode = true`：应用启动那一刻（`prepareReleaseCode()`，只这一次；服务重启、⌘R 不做，不然两个版本同时开着会互相停对方的服务）把包里的 `.mjs` / `ui.html` 换进数据目录的 `app/`（`app/bundlecode.swift`）。版本记在 `app/.bundle-version`，记号对得上、文件一个不少才算「已是这一版」（少了就补）；先拷进 `app.incoming/`，齐了整个换上，旧版本独有的文件不留，失败时原样不动；几个实例同时启动时用数据目录的 `.bundle-sync.lock` 排队（11/16 审查实测不加锁时同时启动 150 对里 126 对把 app/ 弄残）。真换了、而端口上答话的是同一个数据目录的旧服务（上一版被强退留下的），按 `/health` 报的 pid 停掉再起新的（启动时 `/health` 连试 3 次，机器卡时不至于漏掉旧服务）。例外：`app/` 归 build.sh 管（有 server.mjs、没有 `.bundle-version`）而且服务正在跑，什么都不动，直接连上——作者本机开着总控台时误开公开包、一行安装脚本的用户开着旧版时打开 dmg 版，都是这种。所以换新版 dmg 后跑的是新代码，README 里状态栏命令写的 `app/statusline-tap.mjs` 也一直在。build.sh 装的没有这个键，数据目录由 `build.sh update` 管，外壳不碰。
+- **别在这台机器上用真主目录打开 dmg 里的应用**：总控台开着时它什么都不动（上面的例外），但总控台没开时它会把包里的代码盖到 `~/Library/Application Support/cc-board/app/`，之后总控台起服务就跑那一份，要 `./build.sh update` 换回来。要试就换一个 macOS 用户。出包脚本跑完会删掉工作目录里的 .app，只留 dmg。
+- 出包：`release/release.sh 0.3.0`（正式）或 `release/release.sh 0.3.0 --adhoc`（演练：ad-hoc 签名、不公证，核对结构）。步骤：`build.sh stage` → 写版本号和 `CCBoardSyncCode` → hardened runtime + 时间戳 + `release/entitlements.plist`（只有 apple-events 一条）签名 → 公证应用并钉票据 → 打 dmg（应用 + 指向「应用程序」的替身）→ 签 dmg → 公证 dmg 并钉票据 → 挂上（`-nobrowse`，不弹访达）过 `spctl` → 写 sha256。正式模式要工作区干净、钥匙串里正好一张「Developer ID Application」证书。前提和证书怎么建见 `release/CLAUDE.md`。
+- 测试：`node test/app-shell.test.mjs`（53 项：找 node 25、换代码 28，含 12 轮每轮 6 个进程同时换；约 10 秒，其中一项等 5 秒超时。`--mutants` 16 个改坏版，约 3 分钟）。不起服务、不碰 tmux、不碰真实数据目录。`prepareReleaseCode()`（启动时换代码、停旧服务、build.sh 管的不动）在 AppDelegate 里，测试够不着，没真跑过。
 
 ## 上线
 

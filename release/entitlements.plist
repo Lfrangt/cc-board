@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 公开包签名时用的权限（release/release.sh）。hardened runtime 下，应用（和它起的 osascript）要发 Apple Event 给 Ghostty，
+     缺这一条系统会直接拒（-1743），不弹「允许控制」的框。不开沙盒：服务要读 ~/.claude。 -->
+<plist version="1.0"><dict>
+  <key>com.apple.security.automation.apple-events</key><true/>
+</dict></plist>
