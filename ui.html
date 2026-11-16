@@ -474,6 +474,7 @@ const EN = {
   '开工前要你先选一下': 'Choose before it starts', '无需处理': 'No action needed',
   '待审阅': 'To review', '处理过': 'Handled', '审完了': 'Reviewed', '先放着': 'Later',
   '只有点这里、或回它一句，才算处理过': 'Only this button or a reply marks it handled',
+  '你点过「审完了」': 'you marked it reviewed', '无需处理的交付': 'a no-action delivery', '待审阅的交付': 'a delivery to review', '几十秒': 'under a minute', '要你：': 'Needs you: ',
   '重新载入': 'Reload', '在浏览器打开': 'Open in browser', '在默认浏览器里打开（也可以 ⌘ 点链接）': 'Open in your default browser (or ⌘-click the link)', '预览': 'Preview',
   '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second', '文件太大，只显示了开头 1 MB。': 'File is large; showing the first 1 MB only.',
 };
@@ -487,7 +488,10 @@ const RULES = [
   [/^这一轮还没有交付，已经做了 (\d+) 步$/, 'No delivery in this turn yet · $1 steps so far'],
   [/^你 · (.+)$/, 'You · $1'], [/^默认（当前登录 (.+)）$/, 'Default (signed in: $1)'], [/^(.+)（钥匙串里还没有 token）$/, '$1 (no token in Keychain yet)'], [/^默认（(.+)）$/, 'Default ($1)'], [/^归档 (\d+)$/, 'Archive $1'],
   [/^自动收工：留了 (\d+) 个，删了 (\d+) 个（(.*)）$/, 'Auto-tidied: kept $1, deleted $2 ($3)'],
-  [/^已归档「(.*)」：(.*)，能接回来$/, 'Archived “$1”: $2 — can be resumed'],[/^删了「(.*)」：(.*)（对话在暂存处放 30 天）$/, 'Deleted “$1”: $2 (transcript kept 30 days)'],
+  [/^已归档「(.*)」：(.*)，能接回来$/, (m, a, b) => 'Archived “' + a + '”: ' + trWhy(b) + ' — can be resumed'],[/^删了「(.*)」：(.*)（对话在暂存处放 30 天）$/, (m, a, b) => 'Deleted “' + a + '”: ' + trWhy(b) + ' (transcript kept 30 days)'],
+  // 归档 / 自动收工的原因（服务的 tidyVerdict、tidyDue 拼的，带数字、用「，」连着几段），由 trWhy() 一段一段翻
+  [/^改过 (\d+) 次文件$/, 'file edits: $1'], [/^用了 (\d+) 次工具$/, 'tool calls: $1'], [/^(几十秒|\d+ 分钟|\d+ 小时)没人理它$/, (m, a) => 'untouched for ' + T(a)], [/^(几十秒|\d+ 分钟|\d+ 小时)没点「审完了」$/, (m, a) => 'not marked reviewed for ' + T(a)],
+  [/^(\d+) 分钟$/, '$1 min'], [/^(\d+) 小时$/, '$1 h'],
   [/^点「归档」：没留下东西的直接删（对话在暂存处放 (\d+) 天），其余停掉会话、对话留着，能恢复。$/, 'Archive: sessions that left nothing behind are deleted (transcript kept $1 days); the rest are stopped and kept, and can be restored.'],
   [/^自动删掉的（没留下东西；对话在暂存处放 (\d+) 天）$/, 'Deleted automatically (left nothing behind; transcript kept $1 days)'],
   [/^已归档「(.*)」$/, 'Archived “$1”'], [/^已删除「(.*)」$/, 'Deleted “$1”'], [/^归档「(.*)」？$/, 'Archive “$1”?'], [/^删除「(.*)」？$/, 'Delete “$1”?'], [/^恢复「(.*)」$/, 'Restore “$1”'],
@@ -505,6 +509,16 @@ function T(s) {
   if (Object.prototype.hasOwnProperty.call(EN, k)) return s.replace(k, EN[k]);
   if (k.length <= 90) for (const [re, to] of RULES) if (re.test(k)) return s.replace(k, k.replace(re, to));
   return s;
+}
+// 服务给的归档原因可能是「，」连着的几段（「无需处理的交付，25 小时没人理它，改过 1 次文件」）：中文原样；英文一段一段过 T()
+function trWhy(w) {
+  if (LANG !== 'en') return String(w || '');
+  const parts = String(w || '').split('，'), out = [];
+  for (let i = 0; i < parts.length; i++) {             // 固定原因自己也带「，」（「只聊了几句，没改过文件」）：先试相邻两段合起来
+    const two = i + 1 < parts.length ? parts[i] + '，' + parts[i + 1] : null;
+    if (two && T(two) !== two) { out.push(T(two)); i++; } else out.push(T(parts[i]));
+  }
+  return out.join(', ');
 }
 // 一段拼好的 HTML → 把标签之间和提示属性里的界面文字换成当前语言
 function L(html) {
@@ -1219,7 +1233,7 @@ async function doDelete(sid, title) {
   let r; try { r = await api('/api/delete', { sid }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
   toast(r.ok ? '已删除「' + cut(title, 18) + '」' : (r.error || '没删成')); refresh(); if ($('#archDlg').open) loadArchive();
 }
-const noteLine = (x) => (x.note ? [x.note.project, x.note.head, x.note.ask ? '要你：' + x.note.ask : ''].filter(Boolean).join(' · ') : '');   // 归档时记下的那一笔
+const noteLine = (x) => (x.note ? [x.note.project, x.note.head, x.note.ask ? T('要你：') + x.note.ask : ''].filter(Boolean).join(' · ') : '');   // 归档时记下的那一笔
 async function loadArchive() {
   let r; try { r = await api('/api/archive'); } catch (e) { r = { items: [] }; }
   const now = Date.now();
@@ -1229,7 +1243,7 @@ async function loadArchive() {
     '<button class="plain" data-a="detail">对话</button><button class="bordered" data-a="restore">恢复</button><button class="plain" data-a="delete" style="color:var(--danger)">删除</button></div>').join('')
     : '<div class="empty" style="padding:26px 0;text-align:center">还没有归档的会话。<br>点卡片右上角的「归档」。</div>') +
     ((r.dropped || []).length ? '<div class="lbl" style="margin:18px 0 6px">自动删掉的（没留下东西；对话在暂存处放 ' + (r.keepDays || 30) + ' 天）</div>' + r.dropped.map((x) =>
-      '<div class="arow drop"><div class="t"><b>' + esc(x.title) + '</b><span>' + esc(cut((x.why || '') + (noteLine(x) || x.prompt ? ' · ' + (noteLine(x) || x.prompt) : ''), 110)) + '</span></div><span class="w num">' + when(x.at, now) + '</span></div>').join('') : '');
+      '<div class="arow drop"><div class="t"><b>' + esc(x.title) + '</b><span>' + esc(cut(trWhy(x.why) + (noteLine(x) || x.prompt ? ' · ' + (noteLine(x) || x.prompt) : ''), 110)) + '</span></div><span class="w num">' + when(x.at, now) + '</span></div>').join('') : '');
   $('#aNote').textContent = T('点「归档」：没留下东西的直接删（对话在暂存处放 ' + (r.keepDays || 30) + ' 天），其余停掉会话、对话留着，能恢复。');
 }
 $('#archBtn').addEventListener('click', () => { loadArchive(); $('#archDlg').showModal(); });

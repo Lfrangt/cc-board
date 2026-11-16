@@ -134,6 +134,7 @@ Khalil 11/15：「点击那个 HTML 的时候，我们还要到浏览器里。�
   - 留：其余的，和在等他决定的（待跟进）。照旧停掉、对话留在原处、能恢复，`note` 记下项目、最后那句结论、要他做的事、动过的文件夹，归档列表里直接显示。
   - 两种都先等 8 秒（`GRACE`），提示条上能撤销。计数（`nHuman`、`nTools`、`nEdits`）来自服务读进来的那一段对话记录（最近 4 MB 起），长会话照样算「做了很多事」。
   - 归档列表里每一行还能手动「删除」。
+- 英文界面里，服务给的归档原因（`tidyVerdict` / `tidyDue` 的 `why`，带数字、用「，」连着几段）经 `ui.html` 的 `trWhy()` 一段一段翻；固定原因自己带「，」的先试相邻两段合起来。服务端新增或改动原因句式时，要在 `RULES` 里加对应的规则，`test/ui-check.mjs` 有一条按真实句式逐句核没有漏翻（11/15 khalil-be 报的「改过 1 次文件」原样露出）。
 
 ## 输入框上的预判（11/13 khalil-90）
 
@@ -339,7 +340,7 @@ node test/route.test.mjs                 # 新窗口的档位 52 项，不到 1 
 node test/state.test.mjs                 # 服务端 156 项，约 200 秒
 node test/mutants.mjs                    # 86 个改坏版，每个都必须让上面的测试变红，约 30 分钟；`node test/mutants.mjs 名字,名字` 只跑这几个
 node test/state.test.mjs --ui &          # 搭好场景并保持
-python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 171 项
+python3 ~/Projects/shared/fretflow-lock/heavy-lock.py <窗口名> ccboard-ui -- ~/.local/node-v24.21.0-darwin-arm64/bin/node test/ui-check.mjs   # 界面 172 项
 ```
 
 拿真实会话预览新逻辑：`CCBOARD_PORT=4791 CCBOARD_DATA=<临时目录> CCBOARD_READONLY=1 node server.mjs`。只读模式拒绝所有 POST。

@@ -224,6 +224,13 @@ try {
   ok(/^Running · /.test(s.cards.run.meta) && s.cards.limit.meta === 'Stopped · out of quota' && s.cards.flag.meta === 'Stopped · safety block' && s.cards.flag.head === "Blocked by the model's safeguards, so it stopped here." && s.cards.gone.meta === 'Stopped · process exited' && /^Running · no activity for \d+ min$/.test(s.cards.stall.meta), '英文：右上角的标志是英文', s.cards.run.meta + ' | ' + s.cards.limit.meta + ' | ' + s.cards.stall.meta);
   const zh = await page.evaluate(() => { const bad = []; for (const el of document.querySelectorAll('.meta,.why,.next,.lbl,.body button,.chead .done,#filters button,.pager,.reply textarea,.ghead')) { const t = (el.textContent || '') + ' ' + (el.getAttribute('placeholder') || ''); if (/[一-鿿]/.test(t)) bad.push(t.trim().slice(0, 40)); } return bad; });
   ok(zh.length === 0, '英文：标志、原因、按钮、顶栏里没有漏翻的中文', zh.join(' | '));
+  // 归档提示和归档列表里服务给的原因（11/15 khalil-be 报：「改过 1 次文件」原样露出来）：照服务真实会拼出的几种句子逐句翻
+  const whyEn = await page.evaluate(() => [
+    T('已归档「Crash on launch」：改过 1 次文件，能接回来'), T('已归档「x」：用了 12 次工具，能接回来'), T('删了「x」：一句话都没说过（对话在暂存处放 30 天）'),
+    T('已归档「x」：无需处理的交付，25 小时没人理它，改过 3 次文件，能接回来'), T('删了「x」：待审阅的交付，30 分钟没点「审完了」，只聊了几句，没改过文件（对话在暂存处放 30 天）'),
+    trWhy('你点过「审完了」，它在等你决定'), trWhy('无需处理的交付，几十秒没人理它，用了 2 次工具'), T('要你：')]);
+  const whyZh = whyEn.filter((x) => /[一-鿿]/.test(x));
+  ok(whyZh.length === 0 && whyEn[0] === 'Archived “Crash on launch”: file edits: 1 — can be resumed' && whyEn[4].includes('only a short chat, no files changed'), '英文：归档提示和归档列表里服务给的原因（带数字、几段连着的）都翻了', JSON.stringify(whyEn));
   await page.screenshot({ path: path.join(OUT, 'wall-dark-en.png') }); await ctx.close();
   ({ ctx, page, errs } = await open({ mode: 'wall', w: 390, h: 844 }));
   const nar = await page.evaluate(() => { const cols = [...document.querySelectorAll('.gcol')].map((c) => c.getBoundingClientRect()); return { sw: document.documentElement.scrollWidth, n: cols.length, stacked: cols.every((r, i) => i === 0 || r.top > cols[i - 1].top), ch: Math.round(document.querySelector('.gbody > .card:not([hidden])').getBoundingClientRect().height) }; });
