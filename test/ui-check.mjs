@@ -1247,6 +1247,8 @@ try {
       await pg.screenshot({ path: path.join(OUT, 'new-task.png') });
       const ac = await pg.evaluate(() => [...document.querySelector('#nAcct').options].map((o) => o.value + '=' + o.textContent + (o.disabled ? '(灰)' : '')));
       ok(ac.join('|') === '=默认|good=旧号|none=还没存 token 的号（钥匙串里还没有 token）(灰)', '新任务：账号下拉列出 config 里的号，钥匙串里没有 token 的灰着不能选', JSON.stringify(ac));
+      const acD = await ev(pg, () => { const c = last.providers.claude, keep = c.defaultAccount; c.defaultAccount = 'good'; fillNew(); const t = document.querySelector('#nAcct').options[0].textContent; c.defaultAccount = keep; fillNew(); return t; });
+      ok(acD === '默认（旧号）', '新任务：config 设了 defaultAccount，「默认」那一项写那个号的名字，不再写当前登录的号', JSON.stringify(acD));
       await pg.selectOption('#nModel', 'opus'); await pg.selectOption('#nAcct', 'good'); await pg.fill('#nPrompt', '测试'); await pg.click('#nGo'); await sleep(600);
       ok(sent && sent.account === 'good', '新任务：选了「旧号」，发给服务的 account 是 good', JSON.stringify(sent));
       ok(sent && sent.model === 'opus' && sent.provider === 'claude' && sent.effort === 'max' && sent.prompt === '测试', '新任务：选 Opus 再开工，发给服务的就是 opus', JSON.stringify(sent));

@@ -1533,6 +1533,136 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     }
     await zStop();
   }
+  // ── 通知的门：另起一份服务（T_PORT + 600），自己的假主目录里 15 个会话（后来再上墙 1 个）。试验场里不真发通知，服务日志的 notify 行写「本来会发什么」，这一段读它。
+  //    不该发：服务起来时已经是待跟进 / 已经停住的、重启以后已经发过的、后来才上墙的待跟进、交付了待跟进马上又动了（后台通知、自动续跑把它叫醒）、推迟中停住了、
+  //            推迟到点翻回来的那件、刚交付就推迟的那件到点以后、发过以后它 busy 一下又回来（同一次交付）、等你选期间登记重写；
+  //    该发：新交付一个【待跟进】恰好一条（站稳 5 秒以后）、后台命令还在跑时交付的待跟进（等得更久）、停下来等你选、离开又进来的等你选、推迟中被新的【待跟进】叫醒那一拍、
+  //          推迟到点时还停着、会话登记读坏一两轮又回来、重启前刚交付还没站稳的；他正看着时记 ui 不记 sent ──
+  console.log('\n[4n] 通知的门：服务起来 / 重启时已有的不发；同一件只发一次；待跟进站稳 5 秒、期间又动了不发、后台在跑多等；推迟中不发、叫醒那一拍和到点还停着的发；后来才上墙的不发；等你选也发；登记读坏一轮不丢；重启前没站稳的重启后照发；看着时只记 ui');
+  {
+    const NPORT = PORT + 600, NH = path.join(ROOT, 'nhome'), NSESS = path.join(NH, '.claude/sessions'), NCWD = path.join(NH, 'work');
+    const NPROJ = path.join(NH, '.claude/projects', NCWD.replace(/[^A-Za-z0-9]/g, '-')), NDATA = path.join(ROOT, 'ndata'), NOUT = path.join(ROOT, 'server-n.out');
+    for (const d of [NSESS, NCWD, NPROJ, NDATA]) fs.mkdirSync(d, { recursive: true });
+    const N = {}, nT0 = Date.now() - 600000;
+    const nreg = (x, status, at = nT0) => fs.writeFileSync(path.join(NSESS, x.pid + '.json'), JSON.stringify({ pid: x.pid, sessionId: x.sid, cwd: NCWD, startedAt: x.at, kind: 'interactive', entrypoint: 'cli', name: 'n-' + x.name, nameSource: 'derived', status, statusUpdatedAt: at, updatedAt: at }));
+    const nadd = (x, recs) => fs.appendFileSync(x.file, recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const nmk = (name, recs) => {
+      const i = Object.keys(N).length, c = spawn('/bin/sleep', ['900'], { stdio: 'ignore' }); kids.push(c.pid);
+      const x = { name, pid: c.pid, sid: 'n' + String(i).padStart(7, '0') + '-0000-4000-8000-' + String(c.pid).padStart(12, '0'), at: nT0 + i * 1000 };
+      x.file = path.join(NPROJ, x.sid + '.jsonl'); fs.writeFileSync(x.file, ''); nadd(x, recs); nreg(x, 'idle'); N[name] = x; return x;
+    };
+    const fyi = (n) => [R.human('做 ' + n), R.tool(), R.result(), R.final(n + ' 做了一半。\n\n【进展】还在做')];
+    const ask = (n, t) => [R.human('做 ' + n), R.tool(), R.result(), R.final(n + ' 做好了两版。\n\n【待跟进】' + t)];
+    const reply = (n) => [R.human('接着做 ' + n), R.tool(), R.result(), R.final(n + ' 做好了。\n\n【待跟进】回 C 或 D')];
+    nmk('old', ask('old', '回 A 或 B'));                                                        // 服务起来时已经是待跟进
+    nmk('halt', [R.human('跑一下'), R.tool(), R.result(), R.apiErr('rate_limit', LIMIT)]);      // 服务起来时已经停住（额度）
+    for (const n of ['fresh', 'quick', 'flick', 'asker', 'seen', 'shl', 'shl2', 'zc', 'pend', 'stale']) nmk(n, fyi(n));   // 起来时是【进展】，之后各自来一件
+    for (const n of ['snz', 'rz', 'zh']) nmk(n, ask(n, '回 A 或 B'));                           // 起来时是待跟进，之后推迟
+    const nenv = { ...env, HOME: NH, CCBOARD_PORT: String(NPORT), CCBOARD_PREVIEW_PORT: String(NPORT + 1000), CCBOARD_DATA: NDATA, CCBOARD_TMUX_SOCKET: path.join(TMUXDIR, 'n', 'ccboard.sock'), CCBOARD_STALL_MS: '3600000', CCBOARD_REPLY_SHELL_MS: '12000' };
+    let nsrv = null, NTOK = '';
+    const nStart = async () => {      // 起来了回 true；端口先被别人占着、10 秒没起来回 false
+      for (const p of [NPORT, NPORT + 1000]) { try { await fetch('http://127.0.0.1:' + p + '/health', { signal: AbortSignal.timeout(1500) }); return false; } catch {} }
+      const o = fs.openSync(NOUT, 'a'); nsrv = spawn(NODE, [SERVER], { env: nenv, stdio: ['ignore', o, o] }); kids.push(nsrv.pid);
+      for (let i = 0; i < 50; i++) { await sleep(200); try { NTOK = fs.readFileSync(path.join(NDATA, '.token'), 'utf8').trim(); const h = await (await fetch('http://127.0.0.1:' + NPORT + '/health')).json(); if (h.ok && h.pid === nsrv.pid && h.data === NDATA) return true; } catch {} }
+      return false;
+    };
+    const nStop = async () => { const p = nsrv && nsrv.pid; if (!(p > 1)) return; try { process.kill(p, 'SIGTERM'); } catch {} for (let i = 0; i < 25; i++) { await sleep(200); try { await fetch('http://127.0.0.1:' + NPORT + '/health'); } catch { break; } } };
+    const nget = async (p) => (await fetch('http://127.0.0.1:' + NPORT + p, { headers: { 'x-ccboard': NTOK } })).json();
+    const npost = async (p, body) => { const r = await fetch('http://127.0.0.1:' + NPORT + p, { method: 'POST', headers: { 'x-ccboard': NTOK, 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { code: r.status, body: await r.json().catch(() => ({})) }; };
+    const ns = async (q = '') => Object.fromEntries((await nget('/api/state?peek=1' + q)).sessions.map((x) => [x.sid, x]));
+    const nlines = (pre) => (fs.existsSync(NOUT) ? fs.readFileSync(NOUT, 'utf8') : '').split('\n').filter((l) => l.startsWith(pre));
+    const nlog = () => nlines('notify ');
+    const limitTok = () => nlines('alert ').reduce((a, l) => a + (l.split(' ')[4] || '').split(',').filter((k) => k === 'limit').length, 0);   // 原来那行（alert <时间> <how> n=… <类,…>）里 limit 出现几次：底上也写这一行
+    const sent = (x, kind) => nlog().filter((l) => (l.split(' ')[3] || '').split(',').includes(kind + ':' + x.sid.slice(0, 8)));   // notify <时间> <dry:sent|dry:ui> <类:会话前 8 位,…> | 标题 | 正文
+    const tOf = (l) => Date.parse((l || '').split(' ')[1]);
+    const nUp = await nStart();
+    ok(nUp, '[4n] 另起的一份服务（端口 ' + NPORT + '）起来了、/health 报的数据目录是这一段自己的（没起来时这一段后面全跳过；先看端口 ' + NPORT + ' / ' + (NPORT + 1000) + ' 是不是被别人占着）', fs.existsSync(NOUT) ? fs.readFileSync(NOUT, 'utf8').slice(-300) : '');
+    n4: if (nUp) {
+      const NAMES = Object.keys(N);
+      const S0 = await until(async () => { try { const S = await ns(); return NAMES.every((n) => S[N[n].sid] && (S[N[n].sid].alert || (S[N[n].sid].digest && S[N[n].sid].digest.need))) ? S : null; } catch { return null; } }, 15000) || {};
+      const sv = (n, S = S0) => S[N[n].sid] || {};
+      // 推迟：snz 一小时（推迟中先停住、再被新的【待跟进】叫醒）；rz 6 秒（推迟中被【进展】盖住，到点翻回待跟进）；zh 12 秒（推迟中停住，到点还停着）
+      const pz = await npost('/api/snooze', { sid: N.snz.sid, until: Date.now() + 3600e3, at: sv('snz').resultAt });
+      const pr = await npost('/api/snooze', { sid: N.rz.sid, until: Date.now() + 6000, at: sv('rz').resultAt });
+      const ph = await npost('/api/snooze', { sid: N.zh.sid, until: Date.now() + 12000, at: sv('zh').resultAt });
+      nadd(N.rz, [R.peer('win-zz', '顺手看下 C'), R.tool(), R.result(), R.final('C 看过了。\n\n【进展】C 看完了')]);
+      for (const n of ['snz', 'zh']) nadd(N[n], [R.peer('win-zz', '再跑一下'), R.tool(), R.result(), R.apiErr('rate_limit', LIMIT)]);   // 推迟中被别的窗口叫醒、撞上额度
+      // 同一拍：fresh / quick / flick / zc 交付【待跟进】；shl 交付【待跟进】时后台命令还在跑（shell）；asker 停下来等你选；late 上墙时已经是待跟进
+      for (const n of ['quick', 'flick', 'zc', 'shl', 'shl2']) nadd(N[n], reply(n));
+      nadd(N.fresh, aged(8000, reply('fresh')));                                   // fresh 用真时间：重启后它走 notified.json 那条路（太旧的交付不看盘）
+      for (const n of ['shl', 'shl2']) nreg(N[n], 'shell', Date.now()); nreg(N.asker, 'waiting', Date.now());
+      nmk('late', ask('late', '回 A 或 B'));
+      const S1 = await until(async () => { const S = await ns(); return ['fresh', 'quick', 'flick', 'zc', 'shl', 'shl2'].every((n) => sv(n, S).done && sv(n, S).digest && sv(n, S).digest.need === 'reply') ? S : null; }, 8000) || {};
+      const tObs = Date.now();                                                    // 这一刻服务已经看到了这几件待跟进（它的 5 秒从更早算起）
+      nadd(N.quick, [R.notif()]); nreg(N.quick, 'busy', Date.now());              // 交付完马上又动了：后台通知把它叫醒（自动续跑发出去也是这个样子）
+      const pc = await npost('/api/snooze', { sid: N.zc.sid, until: Date.now() + 6000, at: sv('zc', S1).resultAt });   // 刚交付、还没站稳就推迟：推迟的就是这一件
+      fs.writeFileSync(path.join(NSESS, N.flick.pid + '.json'), '{');           // flick 的会话登记读坏（正在写一半）
+      const flickGone = !!(await until(async () => !(await ns())[N.flick.sid], 6000));
+      nreg(N.flick, 'idle');
+      const flickBack = !!(await until(async () => !!(await ns())[N.flick.sid], 6000));
+      await until(() => Date.now() - tObs >= 6000, 8000);                         // shl2：后台在跑时交付、已经过了 5 秒（还没到后台的 12 秒），后台跑完先写一拍 idle、马上又被叫醒（busy）：从头站稳，不发
+      nreg(N.shl2, 'idle', Date.now());
+      const shl2Idle = !!(await until(async () => ((await ns())[N.shl2.sid] || {}).status === 'idle', 5000)); nreg(N.shl2, 'busy', Date.now());
+      const zHalt = await until(async () => { const x = (await ns())[N.snz.sid]; return x && x.alert && x.alert.kind === 'limit' && x.snooze ? x : null; }, 8000) || {};
+      await until(() => sent(N.fresh, 'reply').length && sent(N.flick, 'reply').length && sent(N.asker, 'ask').length, 15000);
+      nreg(N.asker, 'waiting', Date.now()); const tRw = Date.now();               // 一直停在选择框上，登记被重写（状态时间变了）：还是同一件
+      nreg(N.fresh, 'busy', Date.now()); await sleep(4000); nreg(N.fresh, 'idle', Date.now());   // 发过以后它 busy 了一下又回来，交付还是那一次
+      nadd(N.quick, [R.tool(), R.result(), R.final('后台那件也跑完了。\n\n【进展】都好了')]); nreg(N.quick, 'idle', Date.now());
+      const zMid = (await ns())[N.snz.sid] || {};
+      const zHaltSent = sent(N.snz, 'limit').length;
+      nadd(N.snz, [R.peer('win-zz', '额度回来了，接着'), R.tool(), R.result(), R.final('做完了。\n\n【待跟进】回 C 或 D')]);   // 推迟中又交付【待跟进】：叫醒它
+      const zhDue = await until(async () => { const x = (await ns())[N.zh.sid]; return x && !x.snooze ? Date.now() : null; }, 10000) || 0;
+      await until(() => Date.now() - tRw >= 12000, 14000);
+      const askMid = sent(N.asker, 'ask').length;                                 // 重写登记 12 秒以后：要是当成新的一件，多半已经发了第二条（负载高时扫描慢，不靠它，靠下面数总条数）
+      nreg(N.asker, 'busy', Date.now()); await sleep(4000); nreg(N.asker, 'waiting', Date.now()); const tW2 = Date.now();   // 离开选择框又停下来等你选：新的一件
+      await until(() => sent(N.snz, 'reply').length && sent(N.shl, 'reply').length && sent(N.zh, 'limit').length && sent(N.asker, 'ask').some((l) => tOf(l) >= tW2), 20000);   // 等到新的那一件发出来再数：登记重写要是也算一件，这时一共 3 条
+      await sleep(4000);
+      const S2 = await ns();
+      const fl = sent(N.fresh, 'reply');
+      ok(sv('old').digest && sv('old').digest.need === 'reply' && sv('halt').alert && sv('halt').alert.kind === 'limit' && !sent(N.old, 'reply').length && !sent(N.halt, 'limit').length,
+        '服务起来时已经是待跟进的、已经停住（额度）的：不发（墙上照常是待跟进 / 停住了）', JSON.stringify({ old: sv('old').digest && sv('old').digest.need, halt: sv('halt').alert, log: nlog() }));
+      ok(fl.length === 1 && / dry:sent /.test(fl[0]), '新交付一个【待跟进】：恰好一条（dry:sent；和同一拍的几件合成一条也算）；隔几轮、它 busy 一下又回来（同一次交付）还是一条', JSON.stringify(fl));
+      ok(fl.length === 1 && tOf(fl[0]) - tObs >= 4500, '……站稳 5 秒才发：这一条比测试看到它是待跟进晚 ≥ 4.5 秒（' + (fl[0] ? tOf(fl[0]) - tObs : '-') + ' ms）', JSON.stringify(fl));
+      ok(sv('quick', S1).digest && sv('quick', S1).digest.need === 'reply' && !sent(N.quick, 'reply').length,
+        '交付了【待跟进】、5 秒内又动了（登记变 busy、后台通知叫醒，自动续跑同样）：不发；同一拍交付、没动的 fresh 发了', JSON.stringify(sent(N.quick, 'reply')));
+      const sh = sent(N.shl, 'reply');
+      ok(sh.length === 1 && tOf(sh[0]) - tObs >= 10000, '交付【待跟进】时后台命令还在跑（shell）：不取消、等得更久（这一条比测试看到它晚 ≥ 10 秒，试验场里等 12 秒、线上 60 秒）', JSON.stringify({ sh, dt: sh[0] ? tOf(sh[0]) - tObs : null }));
+      ok(shl2Idle && !sent(N.shl2, 'reply').length, '后台在跑时交付的待跟进、过了 5 秒后后台跑完（idle 一拍）马上又被叫醒：从头站稳 5 秒，不发', JSON.stringify(sent(N.shl2, 'reply')));
+      ok(!!sv('late', S2).digest && sv('late', S2).digest.need === 'reply' && !sent(N.late, 'reply').length, '后来才上墙的会话（上墙时已经是待跟进）：不发', JSON.stringify(sent(N.late, 'reply')));
+      ok(flickGone && flickBack && sent(N.flick, 'reply').length === 1, '会话登记读坏、一两轮不在墙上又回来：它的【待跟进】照样发一条（不当成没见过的会话）', JSON.stringify({ flickGone, flickBack, l: sent(N.flick, 'reply') }));
+      ok(askMid === 1 && sv('asker', S2).status === 'waiting' && sent(N.asker, 'ask').length === 2, '停下来等你选：发一条；一直停着、登记被重写也只一条；离开再停下来是新的一件，第二条（等第二条发出来以后一共恰好 2 条）', JSON.stringify({ askMid, l: sent(N.asker, 'ask') }));
+      ok(pz.code === 200 && pz.body.ok && !!zHalt.sid && !!zMid.snooze && zHaltSent === 0 && !sent(N.snz, 'limit').length && limitTok() <= 1,
+        '推迟中停住了（额度，卡片照常亮）：不发，站稳以后也不发（alert 行里的 limit 最多一个：是下面到点还停着的 zh）', JSON.stringify({ pz: pz.body, halt: zHalt.alert, snooze: zMid.snooze, l: sent(N.snz, 'limit'), tok: limitTok() }));
+      ok(sent(N.snz, 'reply').length === 1 && !sv('snz', S2).snooze, '推迟中又交付了【待跟进】：叫醒它，那一拍发一条', JSON.stringify({ l: sent(N.snz, 'reply'), snooze: sv('snz', S2).snooze }));
+      const zl = sent(N.zh, 'limit');
+      ok(ph.code === 200 && ph.body.ok && zhDue > 0 && zl.length === 1 && tOf(zl[0]) >= zhDue, '推迟中停住了、到点时还停着：到点以后发一条（推迟中没发、也没记成已知道）', JSON.stringify({ zhDue, zl }));
+      ok(pr.code === 200 && pr.body.ok && sv('rz', S2).digest && sv('rz', S2).digest.raised === true && sv('rz', S2).digest.need === 'reply' && !sent(N.rz, 'reply').length,
+        '推迟到点、被【进展】盖住的那件翻回待跟进（raised）：不另发（推迟的那件他已经知道）', JSON.stringify({ dg: sv('rz', S2).digest, l: sent(N.rz, 'reply') }));
+      ok(pc.code === 200 && pc.body.ok && !sv('zc', S2).snooze && sv('zc', S2).digest.need === 'reply' && !sent(N.zc, 'reply').length,
+        '刚交付【待跟进】、还没站稳就推迟：推迟中不发，到点以后也不补发（推迟的就是这一件）', JSON.stringify({ pc: pc.body, snooze: sv('zc', S2).snooze, l: sent(N.zc, 'reply') }));
+      // 重启：pend 刚交付【待跟进】、还没站稳就停服务（真时间）。重起以后墙上发过的、停住的、等你选的一个都不重发；pend 那件照发一条（notified.json 记着它上一次是哪件）；
+      //       stale 在服务停着时交付了一件 10 分钟前的待跟进（停了很久 / 回滚到不写 notified.json 的旧版）：算旧的，不发
+      nadd(N.pend, aged(6000, reply('pend')));
+      await until(async () => { const x = (await ns())[N.pend.sid]; return x && x.digest && x.digest.need === 'reply'; }, 8000);
+      const n0 = nlog().length;
+      await nStop();
+      const disk = (() => { try { return JSON.parse(fs.readFileSync(path.join(NDATA, 'notified.json'), 'utf8')); } catch { return null; } })() || {};
+      nadd(N.stale, aged(600000, reply('stale')));
+      if (!(await nStart())) { ok(false, '[4n] 重起的服务没起来', ''); break n4; }
+      const R1 = await until(async () => { try { const S = await ns(); return Object.keys(N).every((n) => S[N[n].sid]) ? S : null; } catch { return null; } }, 15000) || {};
+      await until(() => sent(N.pend, 'reply').length, 15000); await sleep(6000);
+      const after = nlog().slice(n0);
+      ok(Object.keys(R1).length >= 16 && sv('asker', R1).status === 'waiting' && sv('fresh', R1).digest.need === 'reply' && sv('zh', R1).alert && sv('stale', R1).digest.need === 'reply' && after.length === 1 && after[0].split(' ')[3] === 'reply:' + N.pend.sid.slice(0, 8),
+        '重启服务：发过的待跟进、停住了、等你选一个都不重发；停着时交付的 10 分钟前的待跟进（stale）不发；重启前刚交付、还没站稳的那件（pend）照发，而且这一条里只有它', JSON.stringify(after));
+      ok(disk[N.fresh.sid] === 'reply@' + sv('fresh', S2).resultAt && disk[N.pend.sid] === 'reply@' + sv('pend', S0).resultAt && Object.keys(disk).length >= 16,
+        'notified.json：每个见过的会话记着它的待跟进发到了哪一件（fresh = 发过的那次；pend = 停服务时还没发，记的是上一次）', JSON.stringify({ fresh: disk[N.fresh.sid], pend: disk[N.pend.sid], n: Object.keys(disk).length }));
+      // 他正看着总控台（轮询带 f=1）：记 ui，不记 sent；文案是「「标题」要你回」+ 要你做的那件事
+      nadd(N.seen, [R.human('接着做 seen'), R.tool(), R.result(), R.final('seen 做好了。\n\n【待跟进】回 E 或 F')]);
+      const u1 = await until(async () => { await nget('/api/state?peek=1&f=1'); return sent(N.seen, 'reply')[0] || null; }, 15000) || '';
+      ok(/ dry:ui /.test(u1) && u1.includes('| 「n-seen」要你回 | 回 E 或 F'), '他正看着总控台时交付【待跟进】：记 dry:ui，不记 sent；标题「「n-seen」要你回」、正文是要你做的那件事', u1);
+    }
+    await nStop();
+  }
   console.log('\n[8] config.json 写坏了：照常起来、记一行日志、用默认值（空项目表；自动点信任和 Codex 都关着）');
   clearArgv(); const n8 = await post('/api/new', { prompt: 'PW-8 服务重启以后还在', cwd: CWD, provider: 'claude' }); await readArgv();
   const nm8 = n8.body.name, s8 = Number(tmw(nm8, 'display', '-p', '#{pid}').stdout.trim()) || 0;
@@ -1574,6 +1704,33 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
   ok(n1.body.ok && !('by' in n1.body) && dt8 < 3000 && !fs.readFileSync(log2File, 'utf8').split('\n').some((x) => x.startsWith('spawn ')), '认调用方很慢（ps 每次 0.3 秒、要走 15 层）：1.5 秒就放弃，/api/new 照常成功、不记（' + dt8 + ' ms）', JSON.stringify(n1.body) + ' ' + dt8 + ' ms');
   const arc8 = await get('/api/archive');
   ok(by(st, 'atOff') && !arc8.items.some((x) => x.sid === S.atOff.sid) && !fs.readFileSync(log2File, 'utf8').split('\n').some((x) => x.startsWith('tidy ')), 'autoTidy 默认关：超线 3 小时的 fyi 也一动不动，日志里没有 tidy', JSON.stringify([!!by(st, 'atOff'), arc8.items.length]));
+
+  console.log('\n[8b] config 的 defaultAccount（总管 11/17 17:3x）：没选账号的新任务按它包；写的不是登记过的号就整份 config 不用');
+  // 换两次 config 各重起一次服务（同一个端口、同一个数据目录）：先写一个没登记的号，再写 good
+  let srvB = srv2;
+  const restartB = async (cfg, log) => {
+    try { process.kill(srvB.pid, 'SIGTERM'); } catch {}
+    for (let i = 0; i < 25; i++) { await sleep(200); try { await fetch('http://127.0.0.1:' + PORT + '/health'); } catch { break; } }
+    await sleep(300);
+    fs.writeFileSync(path.join(DATA, 'config.json'), JSON.stringify(cfg));
+    const o = fs.openSync(path.join(ROOT, log), 'w'); srvB = spawn(NODE, [SERVER], { env, stdio: ['ignore', o, o] }); kids.push(srvB.pid);
+    let u = false; for (let i = 0; i < 50 && !u; i++) { await sleep(200); try { u = (await (await fetch('http://127.0.0.1:' + PORT + '/health')).json()).ok === true; } catch {} }
+    return u ? fs.readFileSync(path.join(ROOT, log), 'utf8').split('\n').filter((l) => l.startsWith('config ')).join(' | ') : null;
+  };
+  const cfgB = JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), accB = [{ id: 'good', name: '旧号' }, { id: 'none', name: '还没存 token 的号' }];
+  let cB = await restartB({ ...cfgB, accounts: accB, defaultAccount: 'nobody' }, 'server3.out');
+  ok(cB && /读不了.*defaultAccount/.test(cB), 'defaultAccount 写了没登记的号：整份 config 不用，日志一行说清（不悄悄退回钥匙串当前登录的号）', String(cB));
+  cB = await restartB({ ...cfgB, accounts: accB, defaultAccount: 'good' }, 'server4.out');
+  ok(cB && /accounts=2，defaultAccount=good，/.test(cB), 'defaultAccount=good：config 用上了，日志里写着', String(cB));
+  let pB = null; for (let i = 0; i < 20 && !(pB && (pB.accounts || []).length); i++) { await sleep(200); pB = ((await get('/api/state')).providers || {}).claude; }
+  ok(pB && pB.defaultAccount === 'good', '/api/state 的 providers.claude.defaultAccount 是 good（界面「默认」那一项写它的名字）', JSON.stringify(pB && { d: pB.defaultAccount, n: (pB.accounts || []).length }));
+  for (const [extra, what] of [[{}, '接口没传 account'], [{ account: '' }, '界面选「默认」（account 是空串）']]) {
+    clearArgv(); clearEnv(); n1 = await post('/api/new', { prompt: '默认号做', cwd: CWD, provider: 'claude', ...extra }); got = await readArgv(); envNow = await readEnv();
+    ok(n1.body.ok && n1.body.account === 'good' && envNow === 'tok-good|good', what + '：按 defaultAccount 包，会话里是 good 的 token，应答回 account', JSON.stringify(n1.body) + ' ' + envNow);
+  }
+  clearArgv(); clearEnv(); n1 = await post('/api/new', { prompt: 'x', cwd: CWD, provider: 'claude', account: 'none' });
+  ok(!n1.body.ok && /token/.test(n1.body.error), '设了 defaultAccount，明说的号照旧优先：选了没 token 的号照样不开', JSON.stringify(n1.body));
+  ok(/^account \S+ \S+ good default$/m.test(fs.readFileSync(path.join(ROOT, 'server4.out'), 'utf8')), '服务日志 account 那一行标 default（默认号顶上的，不是调用方选的）');
 
   console.log('\n[9] 不改脑子（P0-2）：这一整趟里总控台起的每个 Claude 会话，参数只有模型、强度、--resume 和任务原文；假主目录里的 CLAUDE.md / AGENTS.md / settings / .claude.json 一个没动');
   // 白名单，不是黑名单：--append-system-prompt、--system-prompt、--disallowedTools、--settings、--mcp-config、--agents……任何没列在这里的旗子都算违约

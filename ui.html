@@ -1981,7 +1981,7 @@ function followDetail() {
 }
 
 // ── 新任务：交给谁、用哪个模型、多大强度 ──
-let pick = store('ccb_new') || { provider: 'claude', model: {}, effort: {} };   // pick.account：选的账号 id，'' = 默认（钥匙串当前登录的那个号）
+let pick = store('ccb_new') || { provider: 'claude', model: {}, effort: {} };   // pick.account：选的账号 id，'' = 默认（config 的 defaultAccount；没设就是钥匙串当前登录的那个号）
 function fillNew() {
   const P = (last && last.providers) || { claude: { label: 'Claude Code', ok: true, models: [], efforts: [] } };
   if (!P[pick.provider] || !P[pick.provider].ok) pick.provider = 'claude';
@@ -1995,10 +1995,10 @@ function fillNew() {
   $('#nModel').value = mNow;
   $('#nEffort').innerHTML = L('<option value="">默认' + (p.defaultEffort ? '（' + esc(p.defaultEffort) + '）' : '') + '</option>' + (p.efforts || []).map((e) => '<option value="' + esc(e) + '">' + esc(e) + '</option>').join(''));
   $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
-  // 账号：config.json 里登记了 accounts 才出现。默认 = 当前登录的号；钥匙串里还没有 token 的号列出来但不能选
-  const A = p.accounts || [];
+  // 账号：config.json 里登记了 accounts 才出现。默认 = config 的 defaultAccount（写它的名字），没设就是当前登录的号；钥匙串里还没有 token 的号列出来但不能选
+  const A = p.accounts || [], dA = A.find((a) => a.id === p.defaultAccount);
   $('#nAcctField').style.display = A.length ? '' : 'none';
-  $('#nAcct').innerHTML = L('<option value="">默认' + (p.login ? '（当前登录 ' + esc(p.login) + '）' : '') + '</option>' + A.map((a) => '<option value="' + esc(a.id) + '"' + (a.ready ? '' : ' disabled') + '>' + esc(a.name) + (a.ready ? '' : '（钥匙串里还没有 token）') + '</option>').join(''));
+  $('#nAcct').innerHTML = L('<option value="">默认' + (dA ? '（' + esc(dA.name) + '）' : p.login ? '（当前登录 ' + esc(p.login) + '）' : '') + '</option>' + A.map((a) => '<option value="' + esc(a.id) + '"' + (a.ready ? '' : ' disabled') + '>' + esc(a.name) + (a.ready ? '' : '（钥匙串里还没有 token）') + '</option>').join(''));
   $('#nAcct').value = A.some((a) => a.ready && a.id === pick.account) ? pick.account : '';
 }
 $('#nProv').addEventListener('click', (e) => { const b = e.target.closest('[data-prov]'); if (!b || b.disabled) return; keepPick(); pick.provider = b.dataset.prov; fillNew(); });

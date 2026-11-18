@@ -162,19 +162,22 @@ function parseOrg(o) {                   // 写错了就抛出去，和别的键
 }
 let CONFIG_OK = false;                   // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], org: { ...ORG_DEF }, auto: parseAutoConfig() };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig() };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
     if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('不是一个 JSON 对象');
     for (const k of ['autoTrust', 'codex', 'autoTidy', 'tidyJudge']) if (k in c && typeof c[k] !== 'boolean') throw new Error(k + ' 要是 true 或 false');
     const accounts = parseAccounts(c.accounts);
+    // 没选账号时开哪个号（总管 11/17 17:3x）：只认 accounts 里登记过的 id；写错和别的键一样整份不用，不悄悄退回钥匙串当前登录的号
+    if ('defaultAccount' in c && !accounts.some((a) => a.id === c.defaultAccount)) throw new Error('defaultAccount 要是 accounts 里登记过的 id');
+    const defaultAccount = c.defaultAccount || '';
     const org = parseOrg(c.org);
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，org.chief=${org.chief || '无'}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, org, auto };
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，org.chief=${org.chief || '无'}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto };
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -937,7 +940,7 @@ function watchGone(out, seen) {
       goneCrash.delete(sid); for (let i = goneLog.length - 1; i >= 0; i--) if (goneLog[i].sid === sid) goneLog.splice(i, 1);
       const c = archive.crashes && archive.crashes[cid];
       if (c && !c.alerted) { c.alerted = true; queueAlert(c.sids.length + ' 个窗口', 'crash'); }   // 合成一条，等真记成进程退出了再发（看不到会话登记的那一轮不算）
-    } else queueAlert(p.title, 'gone');
+    } else queueAlert(p.title, 'gone', sid);
   }
   for (const s of out) {
     const tr = tracks.get(s.sid) || codexTracks.get(s.sid);
@@ -1136,39 +1139,95 @@ function watchSnooze() {          // 每轮扫描后：该醒的从表里拿掉�
 }
 const withSnooze = (o) => { const z = snoozes[o.sid]; return z && !snoozeWake(o, z) ? { ...o, snooze: { until: z.until, at: z.at } } : o; };   // 给界面：推迟中的会话多一个 snooze
 
-// 系统通知：你不在总控台前面时才发；几个窗口一起停（比如额度用完）合成一条；启动后的第一轮只记账不发。
-const WHY = { limit: '额度用完了', auth: '登录过期了', flagged: '被安全检查拦了', error: '报错了', interrupt: '被打断了', unfinished: '没做完就停了', stall: '可能卡住了', gone: '进程退出了', crash: '一起退出了' };
-const alerted = new Map();     // sid → 已经提醒过的 key
-const alertHold = new Map();   // sid → {key, since}：站稳 4 秒才算，免得状态闪一下就打扰你
-let alertBase = false, alertQueue = [], alertTimer = null, uiFocusAt = 0;
-function queueAlert(title, kind) {
-  alertQueue.push({ title: String(title || '').replace(/\s+/g, ' ').slice(0, 24), kind });
+// 系统通知：你不在总控台前面时才发；几个窗口一起停（比如额度用完）合成一条。
+// 发三类：停住了（alert）、【待跟进】（reply：交付了、要你本人定）、停下来等你选（ask）。门：
+// 没见过的会话当下的几件只记账不发（服务刚起的第一轮全是；后来才上墙的、接回来的也是）；同一件事只发一次（每类记一个 key）；
+// 站稳才发（停住了 4 秒、没做完 15 秒、等你选 4 秒、待跟进 5 秒：这期间它又动了——自动续跑、后台通知把它叫醒——就不发）；
+// 推迟中（先放着、没到点、没被叫醒）的不发，推迟期间出现的也不补发；被打断不发。
+const WHY = { limit: '额度用完了', auth: '登录过期了', flagged: '被安全检查拦了', error: '报错了', interrupt: '被打断了', unfinished: '没做完就停了', stall: '可能卡住了', gone: '进程退出了', crash: '一起退出了', reply: '要你回', ask: '等你选' };
+const alerted = new Map();     // sid → { alert, reply, ask }：每类已经提醒过（或算作已知道）的那一件的 key
+const alertHold = new Map();   // sid + ' ' + 类 → {key, since}：站稳才算，免得状态闪一下就打扰你
+const alertGone = new Map();   // sid → 第一次不在墙上的时间：一两轮读不到会话登记（文件正在写）不算没见过，60 秒后才忘
+const askEp = new Map();       // sid → 这一段「等你选」的 key：一直停在选择框上就是同一件，离开再进来才算新的一件
+const ALERT_FORGET_MS = 60000;
+const REPLY_SHELL_MS = Number(process.env.CCBOARD_REPLY_SHELL_MS) || 60000;   // 交付了待跟进、后台命令还在跑（shell）：跑完它多半自己接着做，多等一会儿；一直不完也要告诉他
+// 【待跟进】发过（或算作已知道）的那件记在 notified.json，服务重启也认得：重启前刚交付、还没站稳的，和重启后小模型才第一次判成待跟进的，照常发；已经发过的不重发。
+// 停住了、等你选不存：重启后照旧只记账。
+const NOTIFIED_FILE = path.join(DATA, 'notified.json');
+const replyDisk = new Map();   // sid → 盘上记的 reply key（null = 记过、那时还没交付）
+try { const j = JSON.parse(fs.readFileSync(NOTIFIED_FILE, 'utf8')); if (j && typeof j === 'object' && !Array.isArray(j)) for (const [sid, k] of Object.entries(j)) if (/^[\w-]{8,64}$/.test(sid) && (k === null || (typeof k === 'string' && k.length < 200))) replyDisk.set(sid, k); } catch {}
+let replySaved = null;
+const ALERT_BOOT = Date.now();
+function saveNotified() {
+  const early = process.uptime() < ALERT_FORGET_MS / 1000;
+  if (!early && replyDisk.size) replyDisk.clear();                           // 过了头 60 秒，盘上那份只当刚起来时的底：之后才上墙的（接回来的）照旧只记账
+  if (READONLY) return;
+  const o = {}; for (const [sid, d] of alerted) o[sid] = d.reply ?? null;
+  if (early) for (const [sid, k] of replyDisk) if (!(sid in o)) o[sid] = k;  // 刚起来、还没扫到的会话先留着（不在墙上 60 秒以后才忘，和内存里一样）
+  const j = JSON.stringify(o); if (j === replySaved) return;
+  try { const tmp = NOTIFIED_FILE + '.tmp'; fs.writeFileSync(tmp, j); fs.renameSync(tmp, NOTIFIED_FILE); replySaved = j; } catch (e) { console.log(`notified ${new Date().toISOString()} 写不进 notified.json：${e.message}`); replySaved = j; }
+}
+let alertQueue = [], alertTimer = null, uiFocusAt = 0;
+function queueAlert(title, kind, sid = '', text = '') {
+  alertQueue.push({ title: String(title || '').replace(/\s+/g, ' ').slice(0, 24), kind, sid, text: String(text || '').replace(/\s+/g, ' ').slice(0, 80) });
   if (!alertTimer) alertTimer = setTimeout(flushAlerts, 2500);
+}
+const asking = (s) => s.status === 'waiting' || !!s.ask;
+function askKey(s) {
+  let k = askEp.get(s.sid);
+  if (!k) { const tr = tracks.get(s.sid); k = 'ask@' + ((tr && tr.st.ask && tr.st.ask.id) || s.statusAt || s.lastAt || Date.now()); askEp.set(s.sid, k); }
+  return k;
+}
+function needsOf(s) {          // 这个会话此刻要你处理的事，每类至多一件：{ slot, kind, key, wait, text }
+  const out = [];
+  if (s.alert) out.push({ slot: 'alert', kind: s.alert.kind, key: s.alert.key, wait: s.alert.kind === 'unfinished' ? 15000 : 4000 });   // 原因不明的多等一会儿
+  if (asking(s)) out.push({ slot: 'ask', kind: 'ask', key: askKey(s), wait: 4000, text: (s.ask && s.ask.questions && s.ask.questions[0] && s.ask.questions[0].q) || '' });
+  else if (!s.alert && s.done && s.resultAt && s.digest && s.digest.need === 'reply' && !s.digest.raised && s.status !== 'busy') out.push({ slot: 'reply', kind: 'reply', key: 'reply@' + s.resultAt, wait: s.status === 'shell' ? REPLY_SHELL_MS : 5000, text: s.digest.ask || '' });
+  return out;                  // raised（先放着到点、翻回来的那件）不另发：推迟的那件他已经知道
+}
+function baseOf(s) {           // 没见过的会话：当下的几件记成已知道。待跟进先看盘上（重启前的那一份服务记的）；盘上没有，当下这一次交付不论是不是待跟进都记上（头一回见到它，之后小模型再把它判成待跟进也不算新的）
+  const b = { alert: s.alert ? s.alert.key : null, reply: s.resultAt ? 'reply@' + s.resultAt : null, ask: asking(s) ? askKey(s) : null };
+  const stale = s.digest && s.digest.need === 'reply' && Date.parse(s.resultAt) < ALERT_BOOT - 120000;   // 服务停着的时候早就交付了的待跟进（停了很久、回滚到不写这个文件的旧版跑过一阵）：算旧的，不看盘
+  if (replyDisk.has(s.sid) && !stale) b.reply = replyDisk.get(s.sid);
+  return b;
 }
 function watchAlerts() {
   const now = Date.now(); const live = new Set();
   for (const s of sessions) {
-    live.add(s.sid); const a = s.alert;
-    if (!a) { alertHold.delete(s.sid); continue; }
-    if (alerted.get(s.sid) === a.key) continue;
-    if (!alertBase) { alerted.set(s.sid, a.key); continue; }
-    const h = alertHold.get(s.sid);
-    if (!h || h.key !== a.key) { alertHold.set(s.sid, { key: a.key, since: now }); continue; }
-    if (now - h.since < (a.kind === 'unfinished' ? 15000 : 4000)) continue;   // 原因不明的多等一会儿
-    alerted.set(s.sid, a.key); alertHold.delete(s.sid);
-    if (a.kind !== 'interrupt') queueAlert(s.title, a.kind);                  // 被打断是你自己按的 Esc，界面上标出来就够了
+    live.add(s.sid); alertGone.delete(s.sid);
+    if (!asking(s)) askEp.delete(s.sid);
+    const done = alerted.get(s.sid);
+    if (!done) { alerted.set(s.sid, baseOf(s)); continue; }                   // 没见过的会话：当下的几件只记账不发
+    const ns = needsOf(s), z = snoozes[s.sid];
+    if (z && !snoozeWake(s, z, now)) {                                        // 推迟中：都不发。推迟的那件待跟进记成已知道（醒了也不补）；停住了不记，醒来时还停着就照常发
+      const r = ns.find((n) => n.slot === 'reply'); if (r) done.reply = r.key;
+      for (const n of ['alert', 'reply', 'ask']) alertHold.delete(s.sid + ' ' + n);
+      continue;
+    }
+    for (const slot of ['alert', 'reply', 'ask']) {
+      const n = ns.find((x) => x.slot === slot), hk = s.sid + ' ' + slot;
+      if (!n) { alertHold.delete(hk); continue; }
+      if (done[slot] === n.key) continue;                                     // 同一件事只发一次
+      if (slot === 'ask' && s.provider === 'codex' && process.uptime() < 60) { done.ask = n.key; continue; }   // Codex 的弹框要等读屏（slowLoop）才知道，服务起来 60 秒内读到的算已有的
+      const h = alertHold.get(hk);
+      if (!h || h.key !== n.key || h.wait !== n.wait) { alertHold.set(hk, { key: n.key, since: now, wait: n.wait }); continue; }   // 要等多久变了（后台跑完 shell → idle）从头站稳
+      if (now - h.since < n.wait) continue;
+      done[slot] = n.key; alertHold.delete(hk);
+      if (n.kind !== 'interrupt') queueAlert(s.title, n.kind, s.sid, n.text); // 被打断是你自己按的 Esc，界面上标出来就够了
+    }
   }
-  for (const k of [...alerted.keys()]) if (!live.has(k)) alerted.delete(k);
-  for (const k of [...alertHold.keys()]) if (!live.has(k)) alertHold.delete(k);
-  alertBase = true;
+  for (const k of [...alerted.keys()]) if (!live.has(k)) { const g = alertGone.get(k); if (!g) alertGone.set(k, now); else if (now - g > ALERT_FORGET_MS) { alerted.delete(k); alertGone.delete(k); askEp.delete(k); } }
+  for (const k of [...alertHold.keys()]) if (!live.has(k.split(' ')[0])) alertHold.delete(k);
+  saveNotified();
 }
 async function flushAlerts() {
   alertTimer = null; const q = alertQueue; alertQueue = []; if (!q.length) return;
-  const title = q.length === 1 ? (q[0].kind === 'crash' ? q[0].title + WHY.crash : '「' + q[0].title + '」' + WHY[q[0].kind]) : q.length + ' 个窗口停住了';
-  const body = q.length === 1 ? '打开总控台跟进一下' : q.slice(0, 3).map((x) => '「' + x.title + '」' + WHY[x.kind]).join('；') + (q.length > 3 ? ' 等' : '');
+  const title = q.length === 1 ? (q[0].kind === 'crash' ? q[0].title + WHY.crash : '「' + q[0].title + '」' + WHY[q[0].kind]) : q.length + (q.every((x) => x.kind === 'reply' || x.kind === 'ask') ? ' 个窗口在等你' : q.some((x) => x.kind === 'reply' || x.kind === 'ask') ? ' 个窗口要你处理' : ' 个窗口停住了');
+  const body = q.length === 1 ? q[0].text || '打开总控台跟进一下' : q.slice(0, 3).map((x) => '「' + x.title + '」' + WHY[x.kind]).join('；') + (q.length > 3 ? ' 等' : '');
   const would = Date.now() - uiFocusAt < 6000 ? 'ui' : 'sent';                    // ui = 你正看着总控台，界面自己会提示
   const how = SANDBOX ? 'dry:' + would : would;                                  // 试验场里只写日志，不真发
   console.log(`alert ${new Date().toISOString()} ${how} n=${q.length} ${q.map((x) => x.kind).join(',')}`);
+  console.log(`notify ${new Date().toISOString()} ${how} ${q.map((x) => x.kind + ':' + (x.sid ? x.sid.slice(0, 8) : '-')).join(',')} | ${title} | ${body}`);   // 本来会发 / 发了什么（试验场里测试读这一行）
   if (how !== 'sent') return;
   await new Promise((resolve) => execFile('/usr/bin/osascript', ['-e', 'display notification (system attribute "CCB_BODY") with title (system attribute "CCB_TITLE")'],
     { timeout: 8000, env: { ...process.env, CCB_TITLE: '总控台 · ' + title, CCB_BODY: body } }, () => resolve()));
@@ -2070,7 +2129,7 @@ function providers() {
     xm = (t.match(/^model\s*=\s*"([^"]+)"/m) || [])[1] || null; xe = (t.match(/^model_reasoning_effort\s*=\s*"([^"]+)"/m) || [])[1] || null; } catch {}
   return {
     claude: { label: 'Claude Code', ok: true, models: ['fable', 'opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultModel: cm, defaultEffort: ce,
-      accounts: acctList, login: acctList.length ? loginNow : null },
+      accounts: acctList, login: acctList.length ? loginNow : null, defaultAccount: CONFIG.defaultAccount || null },
     ...(CONFIG.codex ? { codex: { label: 'Codex', ok: !!codexBin, models: xm ? [xm] : [], efforts: ['low', 'medium', 'high', 'xhigh'], defaultModel: xm, defaultEffort: xe } } : {}),
   };
 }
@@ -2269,9 +2328,10 @@ async function newSession(prompt, cwd, opt = {}) {
   const model = String(opt.model || '').trim(), effort = String(opt.effort || '').trim();
   if ((model && !SAFE_ARG.test(model)) || (effort && !SAFE_ARG.test(effort))) return { ok: false, error: '模型或强度的写法不对' };
   let acct = null;                                    // 选了账号：只认 config 里登记过、钥匙串里有 token 的
-  if (opt.account && provider === 'claude') {
-    acct = acctList.find((a) => a.id === String(opt.account));
-    if (!acct) return { ok: false, error: '没有这个账号：' + String(opt.account).slice(0, 40) };
+  const want = opt.account || (provider === 'claude' ? CONFIG.defaultAccount : '');   // 没选：config 有 defaultAccount 就用它（照样要钥匙串里有 token），没有才是钥匙串当前登录的号
+  if (want && provider === 'claude') {
+    acct = acctList.find((a) => a.id === String(want));
+    if (!acct) return { ok: false, error: '没有这个账号：' + String(want).slice(0, 40) };
     if (!acct.ready) return { ok: false, error: '钥匙串里还没有「' + acct.name + '」的 token' };
   }
   const files = await cleanFiles(opt.files);
@@ -2294,11 +2354,11 @@ async function newSession(prompt, cwd, opt = {}) {
   const r = await openSession(name, args);           // 每个窗口一台 tmux（P0-0）
   if (!r.ok) return r;
   launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });
-  if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}`);
+  if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}${opt.account ? '' : ' default'}`);
   if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
   if (provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: shown, sid: null, rollout: null, model, effort }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // config 里打开就替他点，开在哪个文件夹都一样；不等它，卡片先出来
-  return { ok: true, name, project: pin };
+  return { ok: true, name, project: pin, account: acct ? acct.id : null };
 }
 
 // 新开的会话如果卡在「是否信任这个文件夹」，界面上给一个确认按钮

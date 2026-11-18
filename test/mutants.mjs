@@ -54,10 +54,10 @@ const MUTANTS = {
   'no-stall':            ["return s.quiet >= STALL_MS ? {", "return false ? {"],
   'no-gone':             ["    if (now - since < 6000) continue;", "    continue;"],
   'gone-when-idle':      ["    if (!p.mid && !cid) {", "    if (false) {"],      // 单个闲着的退出也记
-  'no-baseline':         ["    if (!alertBase) { alerted.set(s.sid, a.key); continue; }", ""],
+  'no-baseline':         ["    if (!done) { alerted.set(s.sid, baseOf(s)); continue; }", "    if (!done) { alerted.set(s.sid, {}); continue; }"],
   'notify-while-watched': ["const would = Date.now() - uiFocusAt < 6000 ? 'ui' : 'sent';", "const would = 'sent';"],
   'rehalt-new-key':      ["          if (st.halt && st.halt.kind === h.kind) st.halt.text = h.text; else st.halt = h;", "          st.halt = h;"],
-  'interrupt-notifies':  ["    if (a.kind !== 'interrupt') queueAlert(s.title, a.kind);", "    queueAlert(s.title, a.kind);"],
+  'interrupt-notifies':  ["      if (n.kind !== 'interrupt') queueAlert(s.title, n.kind, s.sid, n.text);", "      queueAlert(s.title, n.kind, s.sid, n.text);"],
   'shell-counts-as-stopped': ["  if (s.status === 'shell') return null;                               // 它放到后台的活还在跑", "  // 它放到后台的活还在跑"],
   'no-folder-note':      ["  if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;", ""],
   'note-when-folder-given': ["  if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;", "  if (text) text += pin ? pinNote(pin) : FOLDER_NOTE;"],
@@ -75,12 +75,15 @@ const MUTANTS = {
   'codex-new-off':       ["  if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };\n  const provider", "  const provider"],
   'codex-listed-off':    ["...(CONFIG.codex ? { codex:", "...(true ? { codex:"],
   'codex-pane-pending':  ["    if (agents[pane.name] && !CONFIG.codex) continue;", ""],
-  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, org, auto };", "    return def;"],
+  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto };", "    return def;"],
   'limits-codex-ungated': ['codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null', 'codex: codexLimits(CODEX_HOME, now)'],
   'limits-not-in-state': ['sandbox: SANDBOX, limits: LIMITS };', 'sandbox: SANDBOX };'],
   'account-not-wrapped': ['    args.push(...wrapLaunch(acct, cl));', '    args.push(...cl);'],
   'account-skip-ready':  ["    if (!acct.ready) return { ok: false, error: '钥匙串里还没有「' + acct.name + '」的 token' };\n", ''],
-  'account-any-id':      ["    if (!acct) return { ok: false, error: '没有这个账号：' + String(opt.account).slice(0, 40) };", "    if (!acct) acct = { id: String(opt.account), name: String(opt.account), ready: true };"],
+  'account-any-id':      ["    if (!acct) return { ok: false, error: '没有这个账号：' + String(want).slice(0, 40) };", "    if (!acct) acct = { id: String(want), name: String(want), ready: true };"],
+  // config 的 defaultAccount（11/17 car3）：没选账号时不按它包；写了没登记的号也照用
+  'default-account-ignored':   ["  const want = opt.account || (provider === 'claude' ? CONFIG.defaultAccount : '');", "  const want = opt.account;"],
+  'default-account-unchecked': ["    if ('defaultAccount' in c && !accounts.some((a) => a.id === c.defaultAccount)) throw new Error('defaultAccount 要是 accounts 里登记过的 id');\n", ""],
   'bad-config-crashes':  ["  } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }", "  } catch (e) { throw e; }"],
   'trust-any-dialog':    ["    const i = d.options.findIndex((o) => TRUST_OPT.test(o));", "    const i = d.options.length - 1;"],
   // 首次启动向导（11/15 23:19）：认不出向导 / 终端设置回车 / 选登录方式也回车 / 恢复归档不点
@@ -96,8 +99,8 @@ const MUTANTS = {
   'suggest-plain-screen': ["['capture-pane', '-p', '-e', '-t', s.tmux]", "['capture-pane', '-p', '-t', s.tmux]"],
   'suggest-stale-kept':  ["  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);", ""],
   // 自动收工（autoTidy）：每一道守卫、每一条线、两个开关，各有一个改坏版
-  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], org: { ...ORG_DEF }, auto: parseAutoConfig() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], org: { ...ORG_DEF }, auto: parseAutoConfig() };"],
-  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, org, auto };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, org, auto };"],
+  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], defaultAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig() };"],
+  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto };"],
   'auto-ignores-focus':  ["  if (now - uiFocusAt < 6000) return;", ""],
   'auto-acts-in-readonly': ["      if (READONLY) { const k = s.sid + '@' + s.resultAt;", "      if (false) { const k = s.sid + '@' + s.resultAt;"],
   'auto-stale-mark':     ["if (need === 'review' && p && p.at === String(s.resultAt) &&", "if (need === 'review' && p && true &&"],
@@ -241,6 +244,26 @@ const MUTANTS = {
   'snooze-no-wake-you':   ["  if (s.promptAt && Date.parse(s.promptAt) > Date.parse(z.at) && !isAutoPrompt(s.prompt || '')) return 'you';", "  ;"],
   'snooze-no-raise':      ["  for (const o of out) applyRaised(o);", "  ;"],
   'snooze-ignores-at':    ["if (body.at !== undefined && String(body.at) !== String(s.resultAt)) return", "if (false) return"],
+  // 通知的门（[4n]）：重复发、待跟进不等站稳 / 又动了照发、推迟中照发、不发待跟进 / 等你选、登记读坏一轮就忘、翻回来的那件又发（no-baseline、interrupt-notifies 跟着新写法改了原文）
+  'notify-repeat':        ["      if (done[slot] === n.key) continue;", "      ;"],
+  'reply-busy-counts':    [" && s.status !== 'busy') out.push({ slot: 'reply'", ") out.push({ slot: 'reply'"],
+  'reply-no-wait':        ["? REPLY_SHELL_MS : 5000,", "? REPLY_SHELL_MS : 0,"],
+  'snooze-notifies':      ["    if (z && !snoozeWake(s, z, now)) {", "    if (false) {"],
+  'reply-not-notified':   ["  else if (!s.alert && s.done && s.resultAt && s.digest", "  else if (false && s.digest"],
+  'ask-not-notified':     ["  if (asking(s)) out.push({ slot: 'ask'", "  if (false) out.push({ slot: 'ask'"],
+  'alert-forget-at-once': ["{ const g = alertGone.get(k); if (!g) alertGone.set(k, now); else if (now - g > ALERT_FORGET_MS) {", "{ {"],
+  'notify-raised':        [" && !s.digest.raised &&", " &&"],
+  // 审查后加（fable 11/17 16:5x）：后台在跑不多等、推迟中连停住了也记成已知道、推迟的那件到点又发、等你选登记一重写就算新的、发过以后 busy 一下回来又发、重启不认 notified.json
+  'reply-shell-no-wait':  ["wait: s.status === 'shell' ? REPLY_SHELL_MS", "wait: s.status === 'shell' ? 5000"],
+  'snooze-consumes-alert': ["const r = ns.find((n) => n.slot === 'reply'); if (r) done.reply = r.key;", "for (const n of ns) done[n.slot] = n.key;"],
+  'snooze-no-consume':    ["const r = ns.find((n) => n.slot === 'reply'); if (r) done.reply = r.key;", ";"],
+  'ask-no-episode':       ["  let k = askEp.get(s.sid);", "  let k = null;"],
+  'notify-forget-on-busy': ["      if (!n) { alertHold.delete(hk); continue; }", "      if (!n) { alertHold.delete(hk); done[slot] = null; continue; }"],
+  'notified-not-saved':   ["  if (replyDisk.has(s.sid) && !stale) b.reply = replyDisk.get(s.sid);", "  ;"],
+  // 复审后加（fable 11/17 17:1x）：盘上那份当成都没发过（重启全部重发）、太旧的交付也看盘、后台跑完 idle 一拍不从头站稳
+  'notified-reply-null':  ["  if (replyDisk.has(s.sid) && !stale) b.reply = replyDisk.get(s.sid);", "  if (replyDisk.has(s.sid) && !stale) b.reply = null;"],
+  'stale-disk-trusted':   [" && !stale) b.reply = replyDisk.get(s.sid);", ") b.reply = replyDisk.get(s.sid);"],
+  'shell-hold-no-reset':  ["|| h.key !== n.key || h.wait !== n.wait) {", "|| h.key !== n.key) {"],
 };
 for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边
