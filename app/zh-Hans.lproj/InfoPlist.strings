@@ -1,0 +1,2 @@
+/* 公开版（cc-board.app）在中文系统上的「控制 Ghostty」说明。只有 app/public-info.sh 用它；Khalil 本机的 总控台.app 直接用 Info.plist 里的中文。 */
+NSAppleEventsUsageDescription = "cc-board 要通过 Ghostty 把你的回复送进对应的会话标签，并在你点「去终端」时跳到那个标签。";

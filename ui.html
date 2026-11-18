@@ -1,16 +1,25 @@
 <!doctype html>
 <!--
  [INPUT]: 依赖 server.mjs 的 /api/state（每 1.5 秒轮询）和 /api/* 操作接口；依赖原生外壳的 ccb 消息通道（Dock 角标、拖窗口），没有外壳时静默
- [OUTPUT]: 提供总控台的全部界面：封面 / 墙两个视图、卡片、回话框、新任务、归档、干净的对话；window.ccbNew / ccbBlank 给原生菜单调用
+ [OUTPUT]: 提供总控台的全部界面：封面 / 墙 / 架构三个视图、卡片、回话框、新任务、归档、干净的对话；window.ccbNew / ccbBlank 给原生菜单调用
  [POS]: 单文件界面，没有构建步骤。一个会话算什么状态只在 view() 一处判断，排位、左上角的状态标志、顶栏计数、底下的点和 Dock 角标都从它来；
         「为什么停了」由服务端的 alert 给，「交付了什么、要不要你回」由服务端的 digest 给；这里只负责显示，记「先不管」（ccb_ack）和「审完了 / 先放着」（ccb_done）。看一眼、点开都不改状态。
         ccb_done 经 syncDone() 告诉服务的 /api/processed（点的时候、撤销的时候、页面第一次轮询成功之后全发一遍）：服务端的自动收工只认他明确点过的「审完了」。
         正文里的本机路径（file://、~/…、/Users/…、反引号里的路径）都变成可点的链接，点了交给服务的 /api/open；
-        点了先走 openPreview()：向 /api/preview 要网址和类型，在 #preview 弹层里按类型显示（网页 / PDF 用 iframe，图和音视频用自己的元素，文本和 Markdown 排版显示）；不能预览的、文件夹、⌘ 点照旧 /api/open。
-        放大看一张卡：⌘O（zoomTarget() 定哪一张）、双击卡片封面、右上角 ⤢，都走 zoomCard() → openDetail()。卡片右上角「归档」由服务定删还是留。
+        点了先走 openPreview()：向 /api/preview 要网址和类型，在 #preview 弹层里按类型显示（网页 / PDF 用 iframe，图和音视频用自己的元素，文本和 Markdown 排版显示）；不能预览的、⌘ 点照旧 /api/open。
+        文件夹也先问服务：多半是图 / 视频的回 kind: gallery，排成格子墙（renderGallery），点一张放大、← → 翻页、Esc 先回格子墙；其余文件夹服务回 no-preview，照旧交给访达。
+        md() 发现正文里提到 2 张以上不同的图 / 视频路径时，在正文最上面放一个「图集」小按钮（data-gallery），点了把这些路径一起交给 /api/preview 的 paths（openGallery）。
+        待审阅的卡正文最上面一行「这一轮改了 N 个文件 ▸」（服务给的 wrote，wroteHTML()），默认收起，点开才列，每行是 data-path，点了和正文里的路径同一条路；
+        服务给了 collide 的卡在封面里多一行琥珀「和 <短名> 同时在写 <仓库>」（clashOf() / paintClash()，短名用架构视图的 shortName()）。
+        放大看一张卡：⌘O（zoomTarget() 定哪一张）、双击卡片封面、右上角 ⤢，都走 zoomCard() → openDetail()。大窗口打开时滚到「最新交付」的第一行（标签青色、正文左边一道淡青线），不再落在最底。卡片右上角「归档」由服务定删还是留。
+        预览、放大看开着时（两个都是 showModal，卡片被挡住），syncDock() 把来源那张卡自己的回话框（.ap / .sg / .reply，存在 el._ap / _sg / _rp 上）挪进弹层底部 #pDock / #dDock，关掉还回卡片；
+        所以取回话框零件一律经 el._rp，不从卡片里查。预览的来源卡由 fromSid() 在点路径时记下（previewSid）。
         回话框上的预判只读服务端的 suggest 字段（服务从终端屏幕读来的灰字建议和「下一步 1/2/3」）：灰字 Tab 收下，三条点一下或按数字键，都只是填进输入框当草稿，不自己发。
         新任务有两个入口：右上角（⌘N）和墙上每个列头的「＋ 新任务」；后者把那一列记在 newIn，goNew 带着它交给服务，新卡落进那一列。
-        按项目分组只读服务端的 project 字段：setGroups() 定每张卡的组（墙放不下的小组并进「其他」），byProject() 排先后，placeWall() 把墙排成一个项目一列，layout() 给封面的点加组名。~/Projects/ccboard-launch-film 逐字读取本文件的样式表和 i18n 字典。
+        按项目分组只读服务端的 project 字段：setGroups() 定每张卡的组（封面里组太多时小组并进「其他」，墙上不并），byProject() 排先后，placeWall() 把墙排成一个项目一列，layout() 给封面的点加组名。
+        墙上每列几格由 allot() 定：拖两列之间的分隔条（.gsplit，pointer 事件 → dragPaint() 跟手、endDrag() 吸附）记下的格数（ccb_span）先拿，其余照 lanes() 分，放不下的列挤成窄条（.squeezed，点一下 peek 先让它一格）。~/Projects/ccboard-launch-film 逐字读取本文件的样式表和 i18n 字典。
+        架构视图（body.org）只照服务端的 org 画谁归谁管，不自己推：orgModel() 定画在哪（你 → 总管 → 每个项目一列：负责人的树、总管带、你直接带），paintOrg() 按 sid 复用方块（.onode 用墙上卡片同一套状态 class），
+        orgLines() 量几何画 SVG 墨线，悬停 / 聚焦时 orgChain() 那一串加重并在 #otip 写依据（orgWhy）；orgFlights() 比前后两次轮询找刚到的消息，orgFly() 飞一个一次性的小点、收信人亮一下。
  [PROTOCOL]: Update this header on change, then check CLAUDE.md
 -->
 <html lang="zh-CN">
@@ -107,7 +116,8 @@ svg{display:block}
 .lq .pc{color:var(--text);font-weight:600;min-width:2.5ch;text-align:right}
 .lq.warn .mtr i{background:var(--attn)} .lq.warn .pc{color:var(--attn)}
 .lq.none .pc{color:var(--text-3);font-weight:500}
-@media (max-width:1180px){.lq .mtr,.lq .tg{display:none}}   /* 窗口窄：先去掉进度条和账号后缀 */
+.lq.stale{opacity:.7} .lq.stale .pc{color:var(--text-3);font-weight:500} .lq .ago{color:var(--text-3)}   /* 超过 1 小时没更新：整格淡下去，数字不加粗，后面写「N 小时前」 */
+@media (max-width:1180px){.lq .mtr,.lq .tg,.lq .ago{display:none}}   /* 窗口窄：先去掉进度条、账号后缀和「N 小时前」（过时的照样是灰的） */
 @media (max-width:1000px){.lim{display:none}}               /* 再窄顶栏本来就满了，整条让位给按钮 */
 
 main{position:absolute;inset:var(--bar-h) 0 0 0}
@@ -120,6 +130,9 @@ body.wall #stage{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:
 @media (max-width:1080px){body.wall #stage{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:700px){body.wall #stage{grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(340px,auto)}}
 body.wall .card{transition:transform var(--d-move) var(--spring);box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
+/* 看不见的卡（列里滚出去的）不排版、不绘制、不占图层（11/17 性能：WebKit 里 71 张卡的墙图层内存约减半，滚列表不再掉帧）。
+   卡片高度由格子定，用不到内容撑；卡片本来就 overflow:hidden，绘制裁剪不改样子；菜单在 body 层，不受影响 */
+body.wall .card{content-visibility:auto;contain-intrinsic-size:auto 320px}
 
 body.wall .pager,body.flow #rows,body.flow #by{display:none}
 
@@ -146,6 +159,7 @@ body.flow .title{margin:16px 26px 0;font-size:clamp(22px,1.6vw,31px);line-height
 body.flow .head{margin:12px 26px 0;font-size:clamp(16px,1.08vw,20px);line-height:1.55;font-weight:500;color:color-mix(in srgb,var(--text) 86%,transparent);-webkit-line-clamp:3}
 body.flow .ask{margin:14px 26px 0;padding:11px 15px;border-radius:12px;font-size:clamp(15px,.98vw,18px)}
 body.flow .you{margin:16px 26px 0;font-size:13px;color:var(--text-3);-webkit-line-clamp:1}
+body.flow .clash{margin:12px 26px 0;font-size:13px}
 body.flow .body{margin-top:14px;padding:16px 26px 18px}
 body.flow .md{font-size:15px;line-height:1.78;max-width:40em}
 body.flow .md p{margin:0 0 12px} body.flow .md li{margin:4px 0} body.flow .md ul,body.flow .md ol{margin:0 0 12px}
@@ -154,8 +168,8 @@ body.flow .md table{font-size:14px} body.flow .md code,body.flow .md pre{font-si
 body.flow .lbl{font-size:12px;margin-bottom:8px}
 body.flow .done{height:30px;padding:0 14px;font-size:13.5px;border-radius:var(--r-ctl)}
 /* 两边的卡片：标题和结论照常读得清，正文淡到只剩一点纹理（离得远本来就看不清，留着全亮只是一片灰字，反而费眼） */
-body.flow .card .you,body.flow .card .body,body.flow .card .reply,body.flow .card .sg{transition:opacity var(--d2) var(--ease)}
-body.flow .card.side .you,body.flow .card.side .reply,body.flow .card.side .sg{opacity:0} body.flow .card.side .body{opacity:.28}
+body.flow .card .you,body.flow .card .body,body.flow .card .reply,body.flow .card .sg,body.flow .card .ap{transition:opacity var(--d2) var(--ease)}
+body.flow .card.side .you,body.flow .card.side .reply,body.flow .card.side .sg,body.flow .card.side .ap{opacity:0} body.flow .card.side .body{opacity:.28}
 body.flow .card.side .done{visibility:hidden}
 .pager{position:absolute;left:0;right:0;bottom:14px;display:flex;justify-content:center;align-items:center;gap:6px;color:var(--text-3);font-size:12px;z-index:150;user-select:none;-webkit-user-select:none}
 .pager button{width:26px;height:26px;border-radius:var(--r-ctl);display:grid;place-items:center;color:var(--text-2)} .pager button:hover{background:var(--hover);color:var(--text)}
@@ -193,8 +207,22 @@ body.wall.cols #stage{grid-template-columns:var(--gtpl);grid-template-rows:minma
 .gcol.folded:hover .ghead{color:var(--text)}
 .gdots{display:flex;gap:5px} .gdots i{width:7px;height:7px;border-radius:50%} .gdots .act{background:var(--attn)} .gdots .review{background:var(--accent)}
 .pager #pos button.pg.folded{color:var(--text-3);opacity:.75} .pager #pos button.pg.folded:hover{opacity:1;color:var(--text)}
+/* 列宽（11/15 Khalil：「FretFlow 是我主要的开发，窗口小的时候会被缩到一列，我希望它能占两列」「模仿苹果的窗口管理，可以左右滑动」）
+   两列之间的空隙是分隔条：指上去出现一根竖把手，拖动时两列跟着手走，松手吸附到整格（一格 = 一张卡宽），像 iPad 分屏的分隔条。
+   每列至少 1 格，所以是「推开」：最近那列到 1 格了接着压再旁边的；都到底了再多拖过半格，最近那列变暗，松手就让出去（挤成窄条或收起）。双击分隔条恢复自动分配。放不下的列挤成窄条（.squeezed），点一下先给它让一格 */
+body.wall.cols #stage{position:relative}
+.gcol{position:relative}
+.gsplit{position:absolute;top:30px;bottom:28px;right:calc(var(--gap) * -2);width:calc(var(--gap) * 2);z-index:5;display:grid;place-items:center;cursor:col-resize;touch-action:none;outline:none}
+.gsplit::before{content:"";width:4px;height:44px;border-radius:2px;background:var(--hair-3);opacity:0;transition:opacity var(--d1) var(--ease),height var(--d2) var(--ease),background var(--d1) var(--ease)}
+.gsplit:hover::before,.gsplit:focus-visible::before{opacity:1}
+.gsplit.on::before{opacity:1;height:72px;background:var(--text-2)}
+body.resizing,body.resizing *{cursor:col-resize !important;user-select:none !important;-webkit-user-select:none !important}
+body.wall.cols.resizing #stage{transition:none}         /* 拖的时候列宽直接跟手：选择器要和上面那条带过渡的一样具体，不然过渡还在，列会慢半拍追着手走（11/15 界面测试量出来只走到一半多） */
+.gcol.yield{opacity:.38;transition:opacity var(--d1) var(--ease)}
+.gsnap{position:absolute;top:30px;bottom:28px;width:2px;margin-left:-1px;border-radius:1px;background:var(--text-3);opacity:.55;pointer-events:none;z-index:6;transition:left var(--d2) var(--ease)}
+.gcol.squeezed .ghead{color:var(--text-3)}
 @keyframes gcol-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-@media (max-width:700px){body.wall.cols main{overflow:auto} body.wall.cols #stage{grid-template-columns:minmax(0,1fr);grid-template-rows:none;height:auto} .gcol.folded .ghead{writing-mode:horizontal-tb;height:44px;padding:0 14px} .gbody{overflow:visible;grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(340px,auto)}}
+@media (max-width:700px){.gsplit,.gsnap{display:none} body.wall.cols main{overflow:auto} body.wall.cols #stage{grid-template-columns:minmax(0,1fr);grid-template-rows:none;height:auto} .gcol.folded .ghead{writing-mode:horizontal-tb;height:44px;padding:0 14px} .gbody{overflow:visible;grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(340px,auto)}}
 .chead .proj{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 body:not(.grouped) .chead .proj,body.wall:not(.bystatus) .chead .proj{display:none}
 .pager #pos button.pg{width:auto;height:22px;padding:0 4px 0 10px;font-size:11px;color:var(--text-3);white-space:nowrap}
@@ -210,7 +238,11 @@ body:not(.grouped) .chead .proj,body.wall:not(.bystatus) .chead .proj{display:no
 /* 卡头放不下（11/13 Khalil「修吧」）：墙上的窄卡（1520 px 宽的窗口里约 356 px）里，药丸 + 审完了 + 去终端 + 归档 + 放大看排不下，按钮被切掉、点不到。
    卡窄于 540 px 时（英文带字的按钮排一行要约 523 px）「去终端」「归档」只留图标，名字还在 title / aria-label 里，间距和「审完了」的内边距也收一点；
    再放不下就换行（上面的 flex-wrap），宁可多一行也不切掉。用容器查询而不是窗口宽度：同一个窗口里墙的卡窄、封面的卡宽，只有量卡自己分得出来 */
-@container (max-width:540px){.chead{gap:6px}.chead .grow{min-width:0}.chead .done{padding:0 8px}.chead .go{width:24px;padding:0;justify-content:center}.chead .go>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
+@container (max-width:540px){.chead{gap:6px}.chead .grow{min-width:0}.mdl .mv{display:none}.chead .done{padding:0 8px}.chead .go{width:24px;padding:0;justify-content:center}.chead .go>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
+/* 墙上的卡按自己的宽度排字（11/15 Khalil：「智能地调节文字的显示排版」）：列被拖宽、一列只有一张卡时卡会变宽，拖窄时会变窄。
+   量卡自己（容器查询），不量窗口：同一个窗口里各列的卡宽度不同。宽卡标题大一号、结论和你说的话多露一行；窄卡收边距、标题小一号。封面不受影响（只写在 body.wall 下） */
+@container (min-width:620px){body.wall .title{font-size:19px;-webkit-line-clamp:3} body.wall .head{font-size:14px;-webkit-line-clamp:3} body.wall .you{-webkit-line-clamp:3} body.wall .md{font-size:14px;line-height:1.6}}
+@container (max-width:300px){body.wall .chead{padding-left:12px} body.wall .title{margin:8px 12px 0;font-size:15px} body.wall .head,body.wall .you{margin-left:12px;margin-right:12px} body.wall .ask,body.wall .clash{margin-left:12px;margin-right:12px}}
 .grow{flex:1;min-width:8px}
 /* 状态标志在左上角：一个符号 + 字。琥珀色 = 要你动手（等你选 / 停住了 / 待跟进），青色 = 交付了等你审、在跑，灰色 = 处理过 / 空闲 */
 .meta{display:flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 6px;box-shadow:inset 0 0 0 var(--ink-w) color-mix(in srgb,currentColor var(--badge-line),transparent);border-radius:var(--r-badge);font-size:12px;font-weight:600;white-space:nowrap;flex:none;color:var(--text-2)}
@@ -236,10 +268,27 @@ body.flow .alert .meta::before{width:16px;height:16px;margin:0}
 /* 停住了的原因已经写在封面那一句里，正文里不再重复一遍 */
 .card:has(.head:not(:empty)) .body>.why{display:none}
 .tag{font:500 10.5px/16px var(--mono);letter-spacing:0;color:var(--text-3);border:1px solid var(--hair-2);border-radius:5px;padding:0 5px;flex:none}
+/* 模型胶囊（11/15 Khalil：换模型时会忘「那个窗口开的是什么」）：写它最近一条回复用的模型和强度，纯灰阶、一圈墨线，颜色只给状态。
+   不放进卡头那一行：墙上的卡 350–400 px 宽，带「审完了」的待审阅卡头行自己就满了，再挤一个进去必换行，墙就多吃一行高（他嫌过显示面积）。
+   所以挂在卡头下沿（.chead 是定位参照），右边和按钮对齐、和标题第一行同高，每张卡位置一样、不占新高度；标题右边留出它的宽度（:has），标题最多两行，所以只是更早换行。
+   窄卡（容器查询，见 .chead）只留模型名不写版本号，Fable 5.2 → Fable，字号 10.5、内边距 5，最长的真实组合 Sonnet · medium（15 个字符）也放得下；版本和完整 id 在 title 里。放不下的模型名（gpt-…）截省略号，不顶到标题上。
+   11/15 21:13 线上第一天：max-width 104 时 Sonnet · xhigh（占线上 27 张卡里的 7 张）被截成 Sonnet · xhi…，强度恰恰是要看的那个字；夹具里没有这么长的组合所以测试没发现 */
+.chead{position:relative}
+.mdl{position:absolute;top:100%;right:10px;margin-top:9px;box-sizing:border-box;max-width:112px;overflow:hidden;text-overflow:ellipsis;height:22px;padding:0 5px;box-shadow:inset 0 0 0 var(--ink-w) var(--ink);border-radius:var(--r-badge);font:500 10.5px/22px var(--mono);letter-spacing:0;color:var(--text-2);white-space:nowrap}
+.mdl[hidden]{display:none}
+.mdl .me{color:var(--text-3)}
+.card:has(.mdl:not([hidden])) .title{padding-right:120px}
+body.flow .mdl{right:16px;margin-top:22px}
+@container (min-width:541px){.mdl{max-width:160px;padding:0 8px;font-size:11px}.card:has(.mdl:not([hidden])) .title{padding-right:176px}}
 .head{margin:6px 16px 0;font-size:13px;line-height:1.5;color:var(--text);word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .head:empty{display:none} .s-handled .head,.s-fyi .head,.s-idle .head{color:var(--text-2)}
 .ask{margin:9px 16px 0;padding:7px 10px;border-radius:var(--r-ctl);font-size:12.5px;line-height:1.5;font-weight:600;color:var(--attn);background:color-mix(in srgb,var(--attn) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--attn) 22%,transparent);word-break:break-word}
 .ask[hidden]{display:none} .ask b{font-weight:700;margin-right:7px}
+/* 撞车（11/16 P1-4）：30 分钟内墙上另一个窗口也往同一个 git 仓库里写过。琥珀 = 要你留意；只占一行，放不下先截仓库路径、再截名字 */
+.clash{display:flex;align-items:baseline;gap:5px;min-width:0;flex:none;margin:7px 16px 0;font-size:12px;line-height:1.45;font-weight:600;color:var(--attn);white-space:nowrap;overflow:hidden}
+.clash[hidden]{display:none} .clash b{flex:none;font-weight:700}
+.clash .cw{flex:none;min-width:0;max-width:64%;overflow:hidden;text-overflow:ellipsis}
+.clash .cr{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:500} .clash .cm{flex:none;font-weight:500}
 .done{height:24px;padding:0 10px;border-radius:7px;font-size:12px;font-weight:600;white-space:nowrap;flex:none;color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:background var(--d1) var(--ease)}
 .done:hover{background:color-mix(in srgb,var(--accent) 18%,transparent)} .done[hidden]{display:none}
 .go{display:flex;align-items:center;gap:5px;height:24px;padding:0 9px 0 7px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none;color:var(--text-2);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:background var(--d1) var(--ease),color var(--d1) var(--ease)}
@@ -262,6 +311,16 @@ body.wall .s-handled .body,body.wall .s-fyi .body,body.wall .s-idle .body{color:
 body.wall .card:hover .body{color:var(--text)}
 .lbl{font-size:11.5px;color:var(--text-3);margin-bottom:6px}
 .sep{height:1px;background:var(--hair);margin:12px 0 10px}
+/* 待审阅：这一轮改了哪些文件（11/16 P1-9），正文最上面。默认只有一行「这一轮改了 N 个文件 ▸」（11/17 总管定 B：卡上先看到的是交付那句话），点开一行一个：文件名（点开走预览，和正文里的路径同一条路）+ 所在文件夹（淡）+ 改了几次 */
+.wrote ul{list-style:none;margin:0;padding:0}
+.wrote li{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:12.5px;line-height:1.65}
+.wrote .file{display:flex;align-items:baseline;gap:7px;min-width:0;flex:0 1 auto;cursor:pointer;color:var(--text)}
+.wrote .wb{flex:none;min-width:0;max-width:72%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent);text-decoration:underline dotted;text-underline-offset:3px}
+.wrote .wd{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-3)}
+.wrote .file:hover .wb{text-decoration-style:solid} .wrote .file:hover .wd{color:var(--text-2)}
+.wrote .wn{flex:none;margin-left:auto;font-size:11.5px;color:var(--text-3)}
+.wrote:not(.open) ul{display:none}
+.wrote .wl{display:flex;align-items:baseline;gap:6px;max-width:100%;margin-bottom:0;text-align:left} .wrote .wl:hover{color:var(--text-2)} .wrote.open .wl{margin-bottom:6px} .wrote .wc{flex:none;font-size:14px;line-height:1}
 .tick{margin-top:6px;font:11.5px/1.5 var(--mono);letter-spacing:0;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .empty{color:var(--text-3)}
 .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -281,6 +340,16 @@ body.flow .send{right:20px;bottom:20px} body.flow .clip{right:48px;bottom:20px}
 body.flow .ghost{left:14px;right:78px;height:37px;padding-left:12px}
 .reply.gh textarea::placeholder{color:transparent}
 .sg{display:flex;flex-direction:column;gap:1px;padding:0 10px 6px;flex:none} .sg[hidden]{display:none}
+/* 自动续跑（11/16）：倒数时一行（青色字 + 秒数 + 两个按钮；会发的那句和依据的灰字在整行的提示里，重开前 ② v2），不自动发时一行灰字写原因。服务端见 server.mjs「自动续跑」 */
+.ap{display:flex;align-items:center;gap:8px;padding:0 10px 6px;flex:none;min-width:0;font-size:12.5px;line-height:1.35;color:var(--text-2)} .ap[hidden]{display:none}
+body.flow .ap{padding:0 14px 8px}
+.ap .apw{flex:none;color:var(--accent);font-weight:500}
+.ap .apt{flex:none;margin-right:auto;color:var(--text-3);font-variant-numeric:tabular-nums}
+.ap .apw,.ap .apt,.ap button{white-space:nowrap}
+.ap .aph{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ap .aph{color:var(--text-3)}
+.ap button{flex:none;padding:2px 8px;border-radius:var(--r-ctl);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);color:var(--text-2);font-size:12px;transition:background var(--d1) var(--ease),color var(--d1) var(--ease)}
+.ap button:hover{background:var(--hover);color:var(--text)}
 body.flow .sg{padding:0 14px 8px}
 .chip{display:flex;align-items:center;gap:8px;width:100%;min-width:0;padding:3px 8px 3px 4px;border-radius:8px;text-align:left;font-size:12.5px;line-height:1.35;color:var(--text-2);transition:background var(--d1) var(--ease),color var(--d1) var(--ease)}
 .chip:hover{background:var(--hover);color:var(--text)}
@@ -324,6 +393,14 @@ body.flow .sg{padding:0 14px 8px}
 .menu button:hover{background:var(--hover)} .menu .danger{color:var(--danger)} .menu hr{border:0;border-top:1px solid var(--hair);margin:4px 6px}
 #toast{position:fixed;left:50%;bottom:48px;translate:-50% 0;display:none;align-items:center;gap:12px;padding:8px 14px;border-radius:10px;background:var(--hud);color:var(--on-hud);box-shadow:var(--shadow-pop);z-index:400;max-width:calc(100vw - 32px)}
 #toast.on{display:flex} #toast button{color:var(--hud-accent);font-weight:600;white-space:nowrap}
+/* 一起退出（P0-0）：墙顶一条横幅。浮在顶栏下面、居中，不挪墙的格子（墙的行高都按 --bar-h 算）；颜色只用状态色：要你动手琥珀「!」，在接回 / 接完了青点 */
+#crash{position:fixed;top:calc(var(--bar-h) + 8px);left:50%;translate:-50% 0;z-index:350;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 32px);box-sizing:border-box;padding:6px 6px 6px 12px;border-radius:var(--r-cover);background:var(--raised);color:var(--text);box-shadow:var(--shadow-pop);font-size:13px;line-height:1.35}
+#crash[hidden]{display:none}
+#crash .cx-i{flex:none;width:16px;height:16px;border-radius:50%;background:var(--attn);color:var(--surface);font:700 10.5px/16px var(--font);text-align:center}
+#crash .cx-i::before{content:"!"} #crash .cx-i.ok{width:8px;height:8px;margin:0 4px;background:var(--accent)} #crash .cx-i.ok::before{content:none}
+#crash .cx-t{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;min-width:0} #crash .cx-t b{font-weight:600} #crash .cx-s{color:var(--text-2);font-variant-numeric:tabular-nums}
+#crash .cx-b{flex:none;display:flex;gap:4px}
+@media (max-width:700px){#crash{left:16px;right:16px;translate:none;flex-wrap:wrap}}
 
 /* 弹层：入场 320ms，退场 150ms */
 dialog{border:0;padding:0;margin:auto;background:var(--raised);color:var(--text);border-radius:14px;width:min(var(--w,760px),calc(100vw - 32px));max-height:calc(100vh - 56px);box-shadow:var(--shadow-pop);overflow:hidden;opacity:0;transform:translateY(8px);transition:opacity 150ms var(--ease),transform 150ms var(--ease),overlay 150ms allow-discrete,display 150ms allow-discrete}
@@ -333,6 +410,15 @@ dialog::backdrop{background:var(--scrim);opacity:0;transition:opacity 150ms var(
 dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity:0}}
 .dhead{display:flex;align-items:center;gap:10px;padding:14px 14px 12px 20px;border-bottom:1px solid var(--hair);flex:none}
 .dhead h1{flex:1;min-width:0;margin:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 弹层里回话（11/17）：预览、放大看开着时，来源那张卡自己的回话框（.ap / .sg / .reply）挪到这里，关掉还回卡片。尺寸照封面里的回话框 */
+.dock{position:relative;flex:none;border-top:1px solid var(--hair);padding-top:10px;background:var(--raised)} .dock[hidden]{display:none}
+.dto{display:flex;gap:6px;padding:0 20px 7px;font-size:12px;line-height:1.35;color:var(--text-3);min-width:0}
+.dto span{flex:none} .dto b{min-width:0;font-weight:500;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body .dock .reply{padding:0 14px 14px} body .dock .reply textarea{padding:8px 68px 8px 12px;line-height:19px;height:37px;max-height:140px}
+body .dock .send{right:20px;bottom:20px} body .dock .clip{right:48px;bottom:20px}
+body .dock .ghost{left:14px;right:78px;height:37px;padding-left:12px}
+body .dock .sg,body .dock .ap{padding:0 14px 8px}
+.dock .note{left:20px;right:auto;bottom:calc(100% + 8px)}
 /* 内置预览：几乎占满窗口；页面底色按网页的默认白，不跟总控台的深色走 */
 #preview{width:calc(100vw - 32px);height:calc(100vh - 32px);max-height:none}
 #preview .dhead h1{flex:0 1 auto}
@@ -340,14 +426,56 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
 .pbody{position:relative;flex:1;min-height:0;background:#fff}
 #pFrame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
 /* 图、音视频放在总控台自己的页面里（焦点不进 iframe，Esc 照样关）；底色跟总控台走，文本类按卡片正文的样式排 */
-.pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"]{background:var(--bg)}
+.pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"],.pbody[data-kind="gallery"]{background:var(--bg)}
 #pImg,#pVid{position:absolute;inset:0;margin:auto;max-width:calc(100% - 32px);max-height:calc(100% - 32px)}
 #pImg{object-fit:contain} #pVid{width:calc(100% - 32px);height:calc(100% - 32px);background:#000}
 #pAud{position:absolute;inset:0;margin:auto;width:min(560px,calc(100% - 32px))}
 #pText{position:absolute;inset:0;overflow:auto;padding:24px max(24px,calc(50% - 400px));font-size:15px;line-height:1.7}
 #pText pre.raw{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
 #pText .cut{color:var(--text-3);font-size:12px;margin-top:16px}
-#pImg[hidden],#pVid[hidden],#pAud[hidden],#pText[hidden],#pFrame[hidden]{display:none}
+#pImg[hidden],#pVid[hidden],#pAud[hidden],#pText[hidden],#pFrame[hidden],#pGal[hidden]{display:none}
+/* 图集（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」）：格子墙 + 点一张放大。
+   每张图按自己的比例排（高度统一、宽度随图，一行放满再换行），不裁切：手机截图是竖的，裁成方的就看不到字了。读的顺序是从左到右、一行行往下。 */
+#pGal{position:absolute;inset:0;overflow:hidden}
+.ggrid{position:absolute;inset:0;overflow:auto;padding:20px;display:flex;flex-wrap:wrap;gap:16px 12px;align-content:flex-start}
+.gi{display:flex;flex-direction:column;gap:6px;padding:0;background:none;color:var(--text-3);font:inherit;text-align:left;cursor:zoom-in;min-width:0}
+.gi:hover,.gi:focus-visible{color:var(--text)}
+/* 图集格子里的图框。只认 .gi 里的：输入框灰字的文字也叫 .gt（11/13 先有的），11/15 起这三条把灰字套成了一个带底色和描边的框（11/17 修） */
+.gi .gt{position:relative;display:block;border-radius:var(--r-ctl);background:var(--fill)}
+.gi .gt::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 var(--ink-w) var(--ink);pointer-events:none}   /* 描边画在图上面：图自己的 box-shadow 会被图盖住 */
+.gi .gt img,.gi .gt video{display:block;height:clamp(200px,34vh,360px);width:auto;min-width:96px;max-width:min(100%,560px);object-fit:contain;border-radius:inherit}
+.gplay{position:absolute;right:8px;bottom:14px;font-size:11px;line-height:1;padding:4px 6px;border-radius:var(--r-badge);background:var(--hud);color:#fff;pointer-events:none;transition:opacity var(--d1) var(--ease)}
+/* 图集里的视频（11/17 Khalil：「直接播放……不用把它放到全屏」「同时播放」）：点格子就在格子里播 / 停，底边一条进度能点能拖；右上角 ⤢ 才进放大层。
+   在播时 ▶ 换成 ❚❚，只在指着时露出来，不挡画面。「同时播放」时有声的那一格描一圈青线、左上角一个喇叭 */
+.gv{position:relative}
+.gi.gv .gt{cursor:pointer;text-align:left}
+.gv.play .gplay{opacity:0}
+.gv.play:hover .gplay,.gv.play .gt:focus-visible .gplay{opacity:1}
+.gv.aud .gt::after{box-shadow:inset 0 0 0 2px var(--accent)}
+.gsnd{position:absolute;left:8px;top:8px;display:none;padding:3px 5px;border-radius:var(--r-badge);background:var(--hud);color:var(--hud-accent);line-height:0;pointer-events:none}
+.gv.aud .gsnd{display:block}
+.gbar{position:absolute;left:0;right:0;bottom:0;height:12px;cursor:pointer;border-radius:0 0 var(--r-ctl) var(--r-ctl);overflow:hidden}
+.gbar::before,.gbar i{content:"";position:absolute;left:0;right:0;bottom:0;height:3px}
+.gbar::before{background:var(--hair)}
+.gbar i{background:var(--accent);transform:scaleX(0);transform-origin:left;transition:transform .25s linear}
+.gbar:hover::before,.gbar:hover i{height:5px}
+.gz{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:var(--r-ctl);background:var(--hud);color:var(--on-hud);display:grid;place-items:center;opacity:0;transition:opacity var(--d1) var(--ease)}
+.gv:hover .gz,.gz:focus-visible{opacity:1}
+#pSync[hidden]{display:none}
+.gn{width:0;min-width:100%;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}   /* 文件名不撑宽格子：宽度跟着图走 */
+.ggrid .cut{flex:0 0 100%;color:var(--text-3);font-size:12px}
+.lb{position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column}
+.lbar{display:flex;align-items:center;gap:6px;padding:10px 14px;flex:none;border-bottom:1px solid var(--hair)}
+.lcap{flex:1;min-width:0;font-size:12.5px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lcap b{font-weight:600;color:var(--text);margin-right:8px}
+.lstage{position:relative;flex:1;min-height:0;cursor:zoom-out}
+.lstage img,.lstage video{position:absolute;inset:0;margin:auto;max-width:calc(100% - 32px);max-height:calc(100% - 32px);object-fit:contain;cursor:default}
+.ib[disabled]{opacity:.3;pointer-events:none}
+#pReload[hidden],#pOpen[hidden]{display:none}      /* .ib 自己设了 display:grid，盖过了 hidden 属性 */
+/* 正文里提到 2 张以上的图时，正文最上面一个「图集」小按钮：不用一张张点 */
+.gchip-row{margin:0 0 10px}
+.gchip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px 0 8px;border-radius:var(--r-badge);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);color:var(--text-2);font-size:12px;white-space:nowrap;transition:background var(--d1) var(--ease)}
+.gchip:hover{background:var(--hover);color:var(--text)} .gchip:active{background:var(--press)}
 .pwait{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-3);font-size:13px;pointer-events:none} .pwait[hidden]{display:none}
 .dbody{padding:18px 20px 20px;overflow:auto}
 .dfoot{display:flex;align-items:center;gap:8px;padding:12px 16px 14px 20px;border-top:1px solid var(--hair);flex:none}
@@ -355,6 +483,9 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
 .turn+.turn{margin-top:22px;padding-top:20px;border-top:1px solid var(--hair)}
 .turn .q{background:var(--fill);border-radius:10px;padding:10px 13px;white-space:pre-wrap;word-break:break-word;color:var(--text-2);max-height:220px;overflow:auto}
 .turn .m{font:11.5px var(--mono);letter-spacing:0;color:var(--text-3);margin:12px 0 6px}
+/* 最新那条交付（11/15 Khalil：「放大的时候，从哪里开始看？」）：标签变青，正文左边一道淡青线，一直陪到它结束；打开时滚到它的第一行 */
+.turn .m.new{color:var(--accent)}
+.turn .md.new{padding-left:14px;box-shadow:inset 2px 0 0 color-mix(in srgb,var(--accent) 55%,transparent)}
 .field label,.field .lab{display:block;font-size:12px;color:var(--text-2);margin:0 0 6px}
 .field+.field,.frow,.frow+.field{margin-top:14px}
 .frow{display:flex;gap:12px;flex-wrap:wrap} .frow .field{margin-top:0} .frow .grow{flex:1;min-width:150px}
@@ -368,6 +499,64 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
 .arow .t b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .arow .t span{display:block;color:var(--text-2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .arow .w{color:var(--text-3);font:11.5px var(--mono);letter-spacing:0;white-space:nowrap}
+/* 视图三：架构（11/16 khalil-a0）。Khalil：「做一个可视化的窗口上下级关系……让我更好、更清晰地管理这几个窗口他们在干嘛」。
+   一张从上往下的架构图：你 → 总管 → 每个项目一列；列里先是负责人和它下面的树，再是「总管带」，最后「你直接带」。谁归谁管只照服务端的 org 画（org.mjs 定），界面不推。
+   线和卡片描边是同一种细墨线（--ink / --ink-w），画在 SVG 里（一整条 path 一次描，交叉处不会叠深）；悬停一个窗口，它往上到「你」的那条线加重（--text-2），别的不动。
+   一个窗口一个矮方块：状态点和状态词沿用墙上卡片的 class（.s-busy / .alert …），所以颜色、呼吸动画和墙上一模一样，不在跑的没有任何持续动画。
+   「消息飞过去」是一次性的：青色小点约 700ms 从发信人飞到收信人，到了收信人描边亮一下；减少动态效果时不飞，只亮。 */
+#org{display:none}
+body.org main{overflow:auto}
+body.org #stage,body.org .pager,body.org #filters,body.org #rows,body.org #by{display:none}
+body.org #org{display:block;position:relative;min-height:100%;padding:28px 0 64px}
+.otop{display:flex;flex-direction:column;align-items:center;padding:0 16px}
+.oyou{max-width:100%;padding:8px 14px 9px 13px;border-radius:var(--r-card);background:var(--surface);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:box-shadow var(--d1) var(--ease)}
+.oyou>b{display:block;font-size:14px;line-height:20px;font-weight:650}
+.oyou>span{display:block;font-size:12.5px;line-height:18px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oyou .orun{font-weight:600;color:var(--accent)} .oyou .oact{font-weight:600;color:var(--attn)}   /* 状态色：在跑青、等你琥珀；数是 0 时不包这一层，不着色 */
+.oyou>.oyn2{font-size:11.5px;line-height:16px;color:var(--text-3)}
+.oyou.hot{box-shadow:inset 0 0 0 var(--ink-w) var(--text-2)}
+.ovl{display:block;flex:none;width:var(--ink-w);height:22px;background:var(--ink);transition:background var(--d1) var(--ease)}
+.ovl.hot{background:var(--text-2);box-shadow:0 0 0 .25px var(--text-2)}
+#org.nochief .ochief,#org.nochief .ovl.o1l,#org.nocols .ovl.o2l{display:none}
+.ochief{width:min(400px,100%);margin:0;padding:0;list-style:none} .ochief>.oli{padding-top:0}
+.oscroll{overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain}
+.orow{position:relative;display:flex;justify-content:center;align-items:flex-start;gap:28px;width:max-content;min-width:100%;padding:22px 16px 0}
+.ocol{position:relative;flex:none;width:var(--ocw,272px);min-width:0}
+.ocol>.ghead{height:28px;padding:4px 0 0 22px}   /* 列名让出左边 22 px：列头那根竖线从这里经过，接到负责人和「总管带」 */
+.obus,.olines{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.obus path,.olines path{fill:none;stroke:var(--ink);stroke-width:var(--ink-w)}
+.obus path.hot,.olines path.eh,.olines path.sh{stroke:var(--text-2);stroke-width:1.5}
+.olab{margin:18px 0 0;font-size:12px;line-height:18px;font-weight:500;color:var(--text-2);transition:color var(--d1) var(--ease)}
+.olab.hot{color:var(--text)}
+.otree,.okids{list-style:none;margin:0;padding:0}
+.okids{padding-left:22px}
+.ogrp[data-g="lead"]>.otree>.oli:first-child{padding-top:4px}
+.oli{padding-top:10px}   /* 两个方块之间 10 px：悬停提示骑在下边线上，往下最多盖这 10 px */
+.ogrp[data-g="lead"]>.otree,.ogrp[data-g="chief"]>.otree,.ogrp[data-g="chief"]>.olab{padding-left:22px}   /* 归总管的两组缩进一层，给列头那根竖线让位；「你直接带」不缩、不接线 */
+.onode{position:relative;display:block;width:100%;min-width:0;padding:7px 10px 8px 9px;border-radius:var(--r-card);background:var(--surface);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);cursor:pointer;user-select:none;-webkit-user-select:none;transition:box-shadow var(--d2) var(--ease)}
+.onode:hover{box-shadow:inset 0 0 0 var(--ink-w) var(--text-2),inset 0 0 0 999px var(--hover)}
+.onode.hot{box-shadow:inset 0 0 0 var(--ink-w) var(--text-2)}
+.onode.hot:hover{box-shadow:inset 0 0 0 var(--ink-w) var(--text-2),inset 0 0 0 999px var(--hover)}
+.onode.ping{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.onode.former{opacity:.7}
+.o1{display:flex;align-items:center;gap:6px;height:20px;min-width:0}
+.onode .meta{flex:none;width:14px;height:14px;padding:0;gap:0;justify-content:center;background:none;box-shadow:none;border-radius:0}
+.ot{flex:1;min-width:0;font-size:13px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-handled .ot,.s-fyi .ot,.s-idle .ot{font-weight:500}
+.orole{flex:none;height:18px;padding:0 5px;border-radius:var(--r-badge);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);font-size:11px;line-height:18px;font-weight:600;color:var(--text-2);white-space:nowrap}
+.orole[hidden],.obr:empty,.o3:empty{display:none}
+.obr{flex:none;font-size:11.5px;color:var(--text-3);white-space:nowrap}
+.o2,.o3{padding-left:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.o2{margin-top:1px;font-size:12px;line-height:18px;color:var(--text-2)}
+.o2 .ow{font-weight:600;color:var(--text);margin-right:6px}
+.s-review .o2 .ow{color:var(--accent)} .s-reply .o2 .ow,.s-ask .o2 .ow,.alert .o2 .ow{color:var(--attn)}
+.s-handled .o2 .ow,.s-fyi .o2 .ow,.s-idle .o2 .ow{color:var(--text-2)}
+.o3{font-size:11px;line-height:16px;color:var(--text-3)}
+#otip{position:absolute;z-index:30;max-width:320px;padding:2px 8px;border-radius:var(--r-ctl);background:var(--raised);box-shadow:var(--shadow-pop);font-size:11.5px;line-height:16px;color:var(--text);pointer-events:none}   /* 一行 20 px：骑在下边线上时上下各 10 px */
+#otip[hidden]{display:none} #otip .nw{white-space:nowrap}
+.ofx{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:25}
+.ofly{position:absolute;left:0;top:0;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;border-radius:50%;background:var(--accent)}
+@media (max-width:700px){body.org #org{padding-top:18px} .orow{flex-direction:column;align-items:stretch;width:auto;min-width:0;gap:24px;padding-top:0} .ocol{width:auto} .obus{display:none}}
 @media (max-width:700px){.hint,.brand,.lim{display:none} .bar{gap:8px;padding-left:10px;padding-right:10px} .seg button{padding:0 8px} :root{--cw:calc(100vw - 28px)} .arow{flex-wrap:wrap}.arow .t{flex-basis:100%}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important} dialog,dialog[open]{transform:none} .card{transition-property:opacity,filter!important} .halo{transition-property:opacity!important}}
 </style>
@@ -375,7 +564,7 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
 <body class="flow">
 <header class="bar" data-drag>
   <div class="brand" data-drag><svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true" fill="currentColor"><rect x="1" y="1" width="5.5" height="5.5" rx="1.6"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.6" opacity=".45"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.6" opacity=".45"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1.6" opacity=".45"/></svg>总控台</div>
-  <div class="seg" id="modes" aria-label="视图"><button data-mode="flow">封面</button><button data-mode="wall">墙</button></div>
+  <div class="seg" id="modes" aria-label="视图"><button data-mode="flow">封面</button><button data-mode="wall">墙</button><button data-mode="org" title="谁归谁管：总管、各项目的负责人和它们带的窗口">架构</button></div>
   <nav class="seg" id="filters" aria-label="筛选"></nav>
   <div class="spacer" data-drag></div>
   <span class="hint" id="hint" data-drag></span>
@@ -385,16 +574,18 @@ dialog[open]::backdrop{opacity:1} @starting-style{dialog[open]::backdrop{opacity
   <div class="seg" id="rows" aria-label="一屏放多少"><button data-rows="2">8 格</button><button data-rows="3">12 格</button></div>
   <button class="primary" id="newBtn" title="⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片">新任务</button>
 </header>
+<div id="crash" role="status" aria-live="polite" hidden></div>
 <main>
   <div id="stage"></div>
+  <div id="org" role="region" aria-label="架构"></div>
   <div class="pager"><button id="prev" aria-label="上一张"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 3 4.5 7l4 4"/></svg></button><span class="num" id="pos"></span><button id="next" aria-label="下一张"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3l4 4-4 4"/></svg></button></div>
 </main>
 
 <div class="menu" id="menu" role="menu"></div>
 <div id="toast" role="status"><span></span><button hidden></button></div>
 
-<dialog id="detail"><div class="dhead"><h1 id="dTitle"></h1><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="dbody" id="dBody"></div></dialog>
-<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody" id="pBody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><img id="pImg" alt="" hidden><video id="pVid" controls playsinline preload="metadata" hidden></video><audio id="pAud" controls preload="metadata" hidden></audio><div id="pText" class="md" hidden></div><div class="pwait" id="pWait">读取中…</div></div></dialog>
+<dialog id="detail"><div class="dhead"><h1 id="dTitle"></h1><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="dbody" id="dBody"></div><div class="dock" id="dDock" hidden></div></dialog>
+<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="tbtn" id="pSync" hidden title="所有视频从头一起播；鼠标停在哪一格，就听哪一格的声音">同时播放</button><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody" id="pBody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><img id="pImg" alt="" hidden><video id="pVid" controls playsinline preload="metadata" hidden></video><audio id="pAud" controls preload="metadata" hidden></audio><div id="pText" class="md" hidden></div><div id="pGal" hidden></div><div class="pwait" id="pWait">读取中…</div></div><div class="dock" id="pDock" hidden><div class="dto"><span>回给</span><b></b></div></div></dialog>
 
 <dialog id="newDlg" style="--w:580px"><div class="dhead"><h1 id="nTitle">新任务</h1></div>
   <div class="dbody">
@@ -433,13 +624,18 @@ const calm = matchMedia('(prefers-reduced-motion: reduce)');
 const LANG = (() => { const q = new URLSearchParams(location.search).get('lang'); if (q === 'en' || q === 'zh') return q; const k = store('ccb_lang'); if (k === 'en' || k === 'zh') return k; return (navigator.language || 'zh').toLowerCase().startsWith('zh') ? 'zh' : 'en'; })();
 /* i18n:start */
 const EN = {
+  '回给': 'Reply to',
   '放大看：只看你说的和它交付的（⌘O）': 'Enlarge: only your prompts and its deliveries (⌘O)', '⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片': '⌘N new task · ⌘T blank session · ⌘O enlarge card', '把鼠标移到要放大的卡片上，再按 ⌘O': 'Point at a card, then press ⌘O',
   '归档：没留下东西的删掉，其余留着、能接回来': 'Archive: deletes it if it left nothing behind, otherwise keeps it resumable', '放大看（双击封面 / ⌘O）': 'Enlarge (double-click the cover / ⌘O)', '双击放大（⌘O）': 'Double-click to enlarge (⌘O)', '还没有归档的会话。': 'No archived sessions yet.', '点卡片右上角的「归档」。': 'Use “Archive” at the top right of a card.', '它在等你决定': 'it is waiting for your decision', '一句话都没说过': 'nothing was ever said', '只聊了几句，没改过文件': 'only a short chat, no files changed',
-  '其他': 'Other', '收起这一列': 'Collapse column', '在这一列里新建任务': 'New task in this column', '订阅额度': 'Subscription usage',
+  '其他': 'Other', '收起这一列': 'Collapse column', '拖动调宽，松手吸附到整格 · 双击恢复自动': 'Drag to resize; snaps to whole cards on release · double-click to reset',
+  '窗口放不下，挤到了旁边 · 点一下先看它': 'No room in this window, moved aside · click to show it', '收起了一列，点那根竖条就能展开': 'Column collapsed. Click its strip to expand it.', '在这一列里新建任务': 'New task in this column', '订阅额度': 'Subscription usage',
   '直接写任务，它就在这个项目里做，做完会站到最前面。留空 = 开一个空会话，等你在卡片里说第一句。': 'Describe the task. It works in this project and comes to the front when done. Leave empty for a blank session.', '展开': 'Expand', '点开': 'Open', '这种文件不直接打开，已在访达里选中': 'Not opened directly — revealed in Finder',
   '总控台': 'cc-board', '封面': 'Covers', '墙': 'Wall', '归档': 'Archive', '8 格': '8 up', '12 格': '12 up', '按项目': 'By project', '按状态': 'By status', '墙上怎么分列': 'Group the wall', '要你处理': 'Needs you', '新任务': 'New task',
   '全部': 'All', '在做': 'Working', '新交付': 'Delivered', '等你选': 'Needs you', '待跟进': 'Follow up', '空闲': 'Idle', '停住了': 'Stopped', '启动中': 'Starting',
   '你': 'You', '现在': 'Now', '交付': 'Delivered', '上一次交付': 'Last delivery', '还没给它派过活': 'No task yet',
+  '自动接着做': 'Auto-continue', '排队中': 'Queued', '读不到这个窗口的额度': "Can't read this window's usage", '你取消了这一次的自动续跑': 'You cancelled this one', '建议是一条终端命令': 'The suggestion is a shell command', '建议是 Claude Code 的内置命令': 'The suggestion is a Claude Code command', '建议太长被截断了': 'The suggestion was cut off', '没判断出来，先不自动发': "Couldn't decide, so not sending", '先不接着做': 'Holding off', '现在发': 'Send', '不发了': 'Cancel', '没自动接着做：': 'Not auto-continued: ', '在看要不要自动接着做…': 'Checking whether to auto-continue…', '自动续跑': 'Auto',
+  '（不是 Khalil 本人）接着做你上一轮自己提的下一步；要他本人听、看、点头、登录、付款、发布的事不做，停下写状态行': '(Not Khalil) Carry on with the next step you proposed last turn; anything he has to listen to, look at, approve, sign in, pay or publish: don\'t, stop and write the status line',
+  '会发：': 'Will send: ', '依据（它预判你下一句会说的，只用来判断，不会发出去）：': 'Based on (its guess at what you would say next; only used to decide, never sent): ', '建议替你下了结论（听完了 / 可以…）': 'The suggestion speaks for you (listened / OK…)',
   '填进输入框，改完再发': 'Fill the box, edit, then send', '接着说，回车发送': 'Reply, then hit return', '它在忙，发了会排队': 'Busy. Your message will queue.', '它在等你选，选完才能回话': 'Waiting for your choice first',
   '没对上它的终端标签，从菜单去终端里回': 'No matching terminal tab. Reply in the terminal.', '思考中': 'Thinking',
   '去终端': 'Open in terminal', '删除…': 'Delete…', '删除': 'Delete', '恢复': 'Restore', '恢复中': 'Restoring', '对话': 'Transcript', '取消': 'Cancel', '开工': 'Start',
@@ -476,14 +672,32 @@ const EN = {
   '只有点这里、或回它一句，才算处理过': 'Only this button or a reply marks it handled',
   '你点过「审完了」': 'you marked it reviewed', '无需处理的交付': 'a no-action delivery', '待审阅的交付': 'a delivery to review', '几十秒': 'under a minute', '要你：': 'Needs you: ',
   '重新载入': 'Reload', '在浏览器打开': 'Open in browser', '在默认浏览器里打开（也可以 ⌘ 点链接）': 'Open in your default browser (or ⌘-click the link)', '预览': 'Preview',
+  '图集': 'Gallery', '在访达中显示': 'Show in Finder', '在访达里打开这个文件夹': 'Open this folder in Finder', '回到图集（Esc）': 'Back to gallery (Esc)',
+  '同时播放': 'Play all', '全部暂停': 'Pause all', '全部继续': 'Resume all', '鼠标停在哪一格，就听哪一格': 'sound follows the pointer',
+  '所有视频从头一起播；鼠标停在哪一格，就听哪一格的声音': 'Play every video together from the start; you hear the one under the pointer',
+  '播放': 'Play', '点一下在这里播放 / 暂停': 'Click to play / pause here', '放大看': 'Enlarge',
+  '上一张': 'Previous', '上一张（←）': 'Previous (←)', '下一张': 'Next', '下一张（→）': 'Next (→)', '这些图都打不开了': 'None of these images could be opened',
   '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second', '文件太大，只显示了开头 1 MB。': 'File is large; showing the first 1 MB only.',
+  '最近一条回复用的': 'used by its latest reply', '开窗口时定的': 'set when the window was opened',
+  // 架构视图（11/16 khalil-a0）
+  '架构': 'Org', '谁归谁管：总管、各项目的负责人和它们带的窗口': 'Who reports to whom: the chief, each project lead and the windows they run',
+  '总管': 'Chief', '负责人': 'Lead', '前任': 'Former', '后台在跑': 'Background task', '你派的': 'from you', '没有事等你': 'nothing needs you', '刚刚': 'just now',
+  '总管，直接归你': 'Chief, reports to you', '项目负责人，归总管': 'Project lead, reports to the chief', '项目负责人，你直接带': 'Project lead, reports to you',
+  '分支': 'Branch', '分支负责人，归总管': 'Branch lead, reports to the chief', '分支负责人，你直接带': 'Branch lead, reports to you',
+  '没有窗口在管它，你自己在带': 'No window manages it; you lead it yourself',
+  // 一起退出、全部接回（P0-0）
+  '全部接回': 'Resume all', '停下': 'Stop', '接着接回': 'Continue', '正在一个一个接回': 'Resuming one at a time',
+  '对话都还在，可以一个一个接回来': 'Their conversations are kept and can be resumed one by one',
+  '和别的窗口一起退出了（多半是 tmux 或这台机器出了问题）。对话还在。': 'Exited together with other windows (most likely tmux or this machine had a problem). The conversation is kept.',
 };
 const RULES = [
+  [/^(\d+) 秒后发$/, 'in $1s'], [/^已经自动接着做了 (\d+) 轮，等你说一句$/, 'Auto-continued $1 times — waiting for you'], [/^这个号周额度用了 (\d+)%$/, 'This account is at $1% of its weekly limit'], [/^这个号 5 小时额度用了 (\d+)%$/, 'This account is at $1% of its 5-hour limit'],
+  [/^图集 · (\d+) 张$/, 'Gallery · $1'], [/^在总控台里一起看这 (\d+) 张图$/, 'View these $1 images together'], [/^共 (\d+) 个$/, '$1 items'], [/^只显示了前 (\d+) 个$/, 'Showing the first $1'],
   [/^运行中 · (\d+) 分钟没动静$/, 'Running · no activity for $1 min'], [/^运行中 · (.+)$/, 'Running · $1'],
   [/^停住了 · (.+)$/, (m, a) => 'Stopped · ' + (EN[a] || a)], [/^「(.*)」停住了：(.+)$/, (m, a, b) => '“' + a + '” stopped: ' + (EN[b] || b)], [/^(\d+) 个窗口停住了$/, '$1 windows stopped'],
   [/^在做 (.+)$/, 'Working · $1'],
   [/^(待跟进|待审阅|处理过|无需处理) · (.+)$/, (m, a, b) => EN[a] + ' · ' + b], [/^已处理「(.*)」$/, 'Handled “$1”'], [/^后台在跑 · (.+)$/, 'Background task · $1'],
-  [/^交付 · (.+) · 中间 (\d+) 步没显示$/, 'Delivered · $1 · $2 steps hidden'],
+  [/^交付 · (.+) · 中间 (\d+) 步没显示$/, 'Delivered · $1 · $2 steps hidden'], [/^最新交付 · (.+) · 中间 (\d+) 步没显示$/, 'Latest delivery · $1 · $2 steps hidden'], [/^最新交付 · (.+)$/, 'Latest delivery · $1'],
   [/^(交付|上一次交付) · (.+?)( · 后台任务还在跑)?$/, (m, a, b, c) => EN[a] + ' · ' + b + (c ? ' · background task still running' : '')],
   [/^这一轮还没有交付，已经做了 (\d+) 步$/, 'No delivery in this turn yet · $1 steps so far'],
   [/^你 · (.+)$/, 'You · $1'], [/^默认（当前登录 (.+)）$/, 'Default (signed in: $1)'], [/^(.+)（钥匙串里还没有 token）$/, '$1 (no token in Keychain yet)'], [/^默认（(.+)）$/, 'Default ($1)'], [/^归档 (\d+)$/, 'Archive $1'],
@@ -491,6 +705,7 @@ const RULES = [
   [/^已归档「(.*)」：(.*)，能接回来$/, (m, a, b) => 'Archived “' + a + '”: ' + trWhy(b) + ' — can be resumed'],[/^删了「(.*)」：(.*)（对话在暂存处放 30 天）$/, (m, a, b) => 'Deleted “' + a + '”: ' + trWhy(b) + ' (transcript kept 30 days)'],
   // 归档 / 自动收工的原因（服务的 tidyVerdict、tidyDue 拼的，带数字、用「，」连着几段），由 trWhy() 一段一段翻
   [/^改过 (\d+) 次文件$/, 'file edits: $1'], [/^用了 (\d+) 次工具$/, 'tool calls: $1'], [/^(几十秒|\d+ 分钟|\d+ 小时)没人理它$/, (m, a) => 'untouched for ' + T(a)], [/^(几十秒|\d+ 分钟|\d+ 小时)没点「审完了」$/, (m, a) => 'not marked reviewed for ' + T(a)],
+  [/^看过没有要你定的事$/, 'checked: nothing left for you to decide'],   // 11/15 tidyJudge：小模型看过、说做完了的 smart 线
   [/^(\d+) 分钟$/, '$1 min'], [/^(\d+) 小时$/, '$1 h'],
   [/^点「归档」：没留下东西的直接删（对话在暂存处放 (\d+) 天），其余停掉会话、对话留着，能恢复。$/, 'Archive: sessions that left nothing behind are deleted (transcript kept $1 days); the rest are stopped and kept, and can be restored.'],
   [/^自动删掉的（没留下东西；对话在暂存处放 (\d+) 天）$/, 'Deleted automatically (left nothing behind; transcript kept $1 days)'],
@@ -501,6 +716,22 @@ const RULES = [
   [/^归档 = 停掉会话、对话保留，可恢复。删除后对话记录保留 (\d+) 天。$/, 'Archive stops the session and keeps the conversation. Deleted transcripts are kept for $1 days.'],
   [/^(.+) · 第 (\d+) 步$/, (m, a, n) => T(a) + ' · step ' + n],
   [/^读 (.+)$/, 'Read $1'], [/^改 (.+)$/, 'Edit $1'], [/^派子任务：(.*)$/, 'Subagent: $1'], [/^搜索：(.*)$/, 'Search: $1'], [/^用技能 (.+)$/, 'Skill $1'], [/^给 (.+) 发消息$/, 'Message $1'],
+  // 架构视图（11/16 khalil-a0）：「你」那一行、职级旁边的数、组名、第三行、悬停时的依据
+  [/^(\d+) 个窗口$/, (m, n) => n + (n === '1' ? ' window' : ' windows')], [/^(\d+) 个在跑$/, '$1 running'], [/^(\d+) 件事等你$/, (m, n) => n + (n === '1' ? ' needs you' : ' need you')],
+  [/^第 (\d+) 代$/, 'gen $1'], [/^带 (\d+) 个$/, (m, n) => n + (n === '1' ? ' report' : ' reports')], [/^总管带 · (\d+)$/, 'Under the chief · $1'], [/^你直接带 · (\d+)$/, 'Directly under you · $1'],
+  [/^上下文 ([\d.]+) 万$/, (m, a) => Math.round(parseFloat(a) * 10) + 'k context'], [/^上下文 (\d+)$/, (m, a) => (+a >= 1000 ? Math.round(+a / 1000) + 'k' : a) + ' context'],
+  [/^(\d+) 个子 agent 在跑$/, (m, n) => n + (n === '1' ? ' subagent running' : ' subagents running')], [/^(.+) 派的$/, 'from $1'],
+  [/^(\d+) 天前$/, '$1 d ago'], [/^(\d+) 小时前$/, '$1 h ago'], [/^(\d+) 分钟前$/, '$1 min ago'],
+  [/^(.+) 开的窗口$/, 'Opened by $1'], [/^最近 (\d+) 条消息来自 (.+)，最近一条(.+)$/, (m, n, a, t) => 'Last ' + n + ' messages came from ' + a + ', the latest ' + T(t.trim())],
+  [/^原来听前任的，换代后跟着岗位归 (.+)$/, 'Used to report to the previous holder; moved to $1 with the seat'], [/^已交接给 (.+)$/, 'Handed over to $1'], [/^分支负责人，归 (.+)$/, 'Branch lead, reports to $1'],
+  [/^一直在向 (.+) 交东西（(\d+) 条，最近一条 (.+)）$/, (m, a, n, t) => 'Keeps delivering to ' + a + ' (' + n + (n === '1' ? ' message' : ' messages') + ', the latest ' + T(t) + ')'], [/^归 (.+) 管$/, 'Reports to $1'],
+  [/^(\d+) 个你直接带$/, '$1 directly under you'], [/^(\d+) 个有窗口在带$/, '$1 led by a window'],
+  // 一起退出的横幅（P0-0）
+  [/^(\d\d:\d\d) 有 (\d+) 个窗口一起退出了$/, '$2 windows exited together at $1'], [/^已接回 (\d+) \/ (\d+)$/, '$1 / $2 resumed'],
+  [/^负载 ([\d.]+)，等降到 (\d+) 以下再接$/, 'Load $1 — waiting until it drops below $2'], [/^负载一直没降，停在第 (\d+) 个$/, 'Load stayed high — stopped at window $1'], [/^停在第 (\d+) 个$/, 'Stopped at window $1'],
+  [/^接回了 (\d+) 个，(\d+) 个没接成$/, 'Resumed $1, $2 failed'], [/^(\d+) 个都接回了$/, (m, n) => (n === '1' ? 'Resumed' : 'All ' + n + ' resumed')],
+  // 这一轮改了哪些文件（11/16 P1-9）。撞车那一行的英文在 clashOf() 里直接拼
+  [/^这一轮改了 (\d+) 个文件(?: · 另有 (\d+) 个没列出)?$/, (m, n, k) => 'Changed ' + n + (n === '1' ? ' file' : ' files') + ' this turn' + (k ? ' · ' + k + ' more not listed' : '')],
 ];
 /* i18n:end */
 // 一句界面文字 → 当前语言。中文模式原样返回；用户自己的内容查不到就不动。
@@ -534,7 +765,7 @@ function localizeStatic() {
 }
 let done = store('ccb_done') || {};            // 你点过「审完了 / 先放着」、或回过它话的：会话 → 那一次交付的时间。看一眼、点开都不算
 let rows = store('ccb_rows') === 3 ? 3 : 2;
-let mode = store('ccb_mode') === 'wall' ? 'wall' : 'flow';
+let mode = ['wall', 'org'].includes(store('ccb_mode')) ? store('ccb_mode') : 'flow';
 let filter = 'all';
 let HOME = '', last = null;
 let order = [], cur = null, curAt = 0, navAt = 0, first = true, prevFresh = new Set();
@@ -551,10 +782,11 @@ const ICON = {
 
 // ── 安全的 Markdown：先整体转义，只放行认识的几种格式 ──
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let fileSink = null;                      // md() 渲染这一段正文时在这里收下认出的本机路径，渲染完看里面有几张图（见 md()）
 function inline(s) {
   const codes = [], files = [], links = [];
   const link = (t, u) => { links.push([t, u]); return '\u0003' + (links.length - 1) + '\u0003'; };
-  const file = (t, p) => { files.push([t, p]); return '\u0002' + (files.length - 1) + '\u0002'; };
+  const file = (t, p) => { if (fileSink) fileSink.push(p); files.push([t, p]); return '\u0002' + (files.length - 1) + '\u0002'; };
   s = s.replace(/`([^`\n]+)`/g, (m, c) => { codes.push(c); return '\u0001' + (codes.length - 1) + '\u0001'; });
   s = s.replace(/\[([^\]\n]+)\]\(<?((?:\/|~\/)[^)>\n]*)>?\)/g, (m, t, p) => file(t, p));
   s = s.replace(/\[([^\]\n]+)\]\(<?(file:\/\/[^\s)>]+)>?\)/g, (m, t, u) => file(t, fromFileUrl(u)));
@@ -569,6 +801,7 @@ function inline(s) {
   return s.replace(/\u0001(\d+)\u0001/g, (m, i) => { const c = codes[+i];
     if (/^https?:\/\/\S+$/.test(c)) return '<a href="' + esc(c) + '" target="_blank" rel="noopener noreferrer" title="' + esc(c) + '"><code>' + esc(c) + '</code></a>';
     const fp = /^file:\/\/\S+$/.test(c) ? fromFileUrl(c) : /^(~\/|\/Users\/|\/private\/|\/tmp\/|\/Volumes\/)/.test(c) ? c.trim() : '';   // 反引号里的路径可以带空格
+    if (fp && fileSink) fileSink.push(fp);
     return '<code' + (fp ? ' class="file" data-path="' + esc(fp) + '" title="点开"' : '') + '>' + esc(c) + '</code>'; });
 }
 // 本机路径（11/12 Khalil：「把资料直接把链接给我，我可以直接点进去」）：file:// 链接、~/… 和 /Users/… 开头的路径，点了交给服务打开或在访达里选中
@@ -580,7 +813,18 @@ const tilde = (p) => (HOME && p.startsWith(HOME + '/') ? '~' + p.slice(HOME.leng
 // 网址只认 ASCII 里合法的字符，碰到中文、空格就断；结尾的标点和没配对的右括号还给正文
 const URL_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/g;
 function trimUrl(u) { let t = ''; while (/[.,;:!?'\])]$/.test(u) && !(u.endsWith(')') && (u.match(/\(/g) || []).length >= (u.match(/\)/g) || []).length)) { t = u.slice(-1) + t; u = u.slice(0, -1); } return [u, t]; }
+// 正文里提到 2 张以上不同的图 / 视频时，正文最上面放一个「图集」小按钮（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」）。
+// 放最上面：卡片的正文区是滚动的，放在末尾要滚到底才看得到。路径是 inline() 认出来的那些，不另写一套识别规则；点一个文件夹的图集走服务的 /api/preview（见 openPreview）。
+const MEDIA_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|heic|heif|tiff?|svg|mp4|m4v|mov|webm)$/i;
+const ICON_GRID = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1.5" y="1.5" width="4" height="4" rx=".8"/><rect x="6.5" y="1.5" width="4" height="4" rx=".8"/><rect x="1.5" y="6.5" width="4" height="4" rx=".8"/><rect x="6.5" y="6.5" width="4" height="4" rx=".8"/></svg>';
 function md(src) {
+  const outer = fileSink, mine = fileSink = [];
+  try {
+    const html = mdBody(src), media = [...new Set(mine.filter((p) => MEDIA_EXT.test(p)))];
+    return media.length < 2 ? html : '<div class="gchip-row"><button type="button" class="gchip" data-gallery="' + esc(JSON.stringify(media)) + '" title="在总控台里一起看这 ' + media.length + ' 张图">' + ICON_GRID + '图集 · ' + media.length + ' 张</button></div>' + html;
+  } finally { fileSink = outer; }
+}
+function mdBody(src) {
   const L = String(src || '').replace(/\r/g, '').split('\n'); const out = []; let i = 0, para = [];
   const flush = () => { if (para.length) { out.push('<p>' + para.map(inline).join('<br>') + '</p>'); para = []; } };
   const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
@@ -631,6 +875,22 @@ function setMeta(me, mt) {
   const r = mt.slice(i + 3);
   me.innerHTML = '<span class="mw">' + esc(mt.slice(0, i)) + '</span><i class="ms"> · </i><span class="' + (IS_TIME.test(r) ? 'mt' : 'mr') + '">' + esc(r) + '</span>';
 }
+// 模型胶囊：模型 id → 「Fable 5.2」，后面接强度。claude-fable-5-2 → Fable 5.2；claude-sonnet-4-5-20250929 → Sonnet 4.5；老写法 claude-3-5-sonnet → Sonnet 3.5；
+// 认不出家族的（Codex 的 gpt-…）原样写。没有模型也没有强度就隐藏；只有强度（Codex 开窗口时只给了强度）就只写强度。
+// Claude 的数据来自它最近一条真回复，Codex 的是开窗口时定的，鼠标停上去写明是哪种。
+function modelName(id) {
+  const raw = String(id || '').replace(/^claude-/, '').replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, ''); if (!raw) return null;
+  const fam = raw.match(/(fable|opus|sonnet|haiku)/i); if (!fam) return { name: raw, ver: '' };
+  const nums = raw.split('-').filter((x) => /^\d+$/.test(x));
+  return { name: fam[1][0].toUpperCase() + fam[1].slice(1).toLowerCase(), ver: nums.join('.') };
+}
+function setModel(el, s) {
+  const m = modelName(s.model), ef = /^[a-z]{2,10}$/.test(s.effort || '') ? s.effort : '';
+  const key = m || ef ? [s.model, ef, s.provider].join('|') : '';
+  if (el.dataset.k === key) return; el.dataset.k = key; el.hidden = !key; if (!key) { el.textContent = ''; el.removeAttribute('title'); return; }
+  el.innerHTML = (m ? '<span class="mn">' + esc(m.name) + '</span>' + (m.ver ? '<span class="mv"> ' + esc(m.ver) + '</span>' : '') : '') + (ef ? '<span class="me">' + (m ? ' · ' : '') + esc(ef) + '</span>' : '');
+  el.title = [s.model ? T('模型') + ' ' + s.model : '', ef ? T('强度') + ' ' + ef : ''].filter(Boolean).join(' · ') + ' — ' + T(s.provider === 'codex' ? '开窗口时定的' : '最近一条回复用的');
+}
 const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const ms = (t) => (t ? Date.parse(t) || 0 : 0);
 
@@ -638,6 +898,12 @@ const ms = (t) => (t ? Date.parse(t) || 0 : 0);
 // 数据在 /api/state 的 limits（服务端 limits.mjs 汇总）：codex 一条或 null（config 没开 codex 就是 null）；claude 是数组，每个号一条，没人取数就是空。
 // 芯片上显示周额度（只有 5 小时窗口时显示那个）；鼠标停上去看每个窗口的已用、重置时间、数据多久前的。
 const WARN_AT = 85;
+// 数据超过 1 小时没更新（这个号最近没有窗口回过话），整格变灰、写上「N 小时前」：旧数字不当成现在的，也不再亮琥珀（额度用完以后，顶栏还写着前一天的旧数）
+const STALE_MS = 3600000;
+function agoShort(t, now) {
+  const h = Math.floor(Math.max(0, now - t) / 3600000), d = Math.floor(h / 24);
+  return d >= 2 ? (LANG === 'en' ? d + 'd ago' : d + ' 天前') : (LANG === 'en' ? h + 'h ago' : h + ' 小时前');
+}
 const LIMIT_NAME = { five_hour: ['5 小时额度', '5-hour limit'], week: ['周额度', 'Weekly limit'], other: ['额度', 'Limit'] };
 function leftText(t, now) {
   const m = Math.max(0, Math.round((t - now) / 60000)), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
@@ -663,11 +929,13 @@ function limitChip(it, now, many) {
     ? (codex ? "Codex's usage window has rolled over. It updates after the next Codex turn." : 'No Claude usage data yet. Add statusline-tap.mjs as the Claude Code status line (see README); it shows up after any session replies.')
     : (codex ? 'Codex 的额度窗口已过期，下次用 Codex 之后更新。' : '还没收到 Claude 的额度数据。把 statusline-tap.mjs 挂成 Claude Code 的状态栏（见 README），任一窗口回话之后就会出现。'));
   if (it.at) lines.push((LANG === 'en' ? 'Updated ' : '更新于 ') + when(it.at, now));
+  const stale = !!(it.at && ws.length && now - it.at > STALE_MS);
+  if (stale) lines.push(LANG === 'en' ? 'No session on this account has replied in over an hour, so these numbers may be out of date.' : '这个号超过 1 小时没有窗口回过话，数字可能已经变了。');
   const tip = lines.join('\n');
-  const warn = ws.some((w) => w.used >= WARN_AT);
+  const warn = !stale && ws.some((w) => w.used >= WARN_AT);
   const pc = main ? (main.key === 'five_hour' && !wk ? '5h ' : '') + Math.min(100, Math.round(main.used)) + '%' : '—';
-  return '<span class="lq' + (warn ? ' warn' : '') + (main ? '' : ' none') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="' + esc(it.id) + '" tabindex="0"><span>' + base + (tag ? '<span class="tg">' + esc(tag) + '</span>' : '') + '</span>'
-    + (main ? '<span class="mtr" aria-hidden="true"><i style="width:' + Math.min(100, main.used).toFixed(1) + '%"></i></span>' : '') + '<span class="pc">' + pc + '</span></span>';
+  return '<span class="lq' + (warn ? ' warn' : '') + (stale ? ' stale' : '') + (main ? '' : ' none') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="' + esc(it.id) + '" tabindex="0"><span>' + base + (tag ? '<span class="tg">' + esc(tag) + '</span>' : '') + '</span>'
+    + (main ? '<span class="mtr" aria-hidden="true"><i style="width:' + Math.min(100, main.used).toFixed(1) + '%"></i></span>' : '') + '<span class="pc">' + pc + '</span>' + (stale ? '<span class="ago">' + agoShort(it.at, now) + '</span>' : '') + '</span>';
 }
 function paintLimits(st) {
   const el = $('#limits'), lm = st.limits; if (!el) return;
@@ -724,6 +992,7 @@ const WHY_LONG = {
   flagged: '被安全检查拦了，这一轮停在这里。',
   error: '报错了，这一轮没做完。', interrupt: '这一轮被打断了，之后没有接着做。', unfinished: '这一轮没写完就停了，没有交付。',
   stall: '可能卡住了：还显示在运行，但已经很久没有新动静。', gone: '做到一半，它的进程退出了（终端被关、崩溃或重启）。对话还在。',
+  crash: '和别的窗口一起退出了（多半是 tmux 或这台机器出了问题）。对话还在。',
 };
 // 停住了以后怎么接着做，写在正文里（不用点开）。只写 Claude Code 自己的建议：11/12–11/13 被拦后不管是回话、/model 还是 /effort，5 分钟内又被拦的都有（18 次里 5 次），哪个办法都不稳
 const WHY_NEXT = { flagged: '去终端：按两下 Esc 改上一条消息，或用 /model 换个模型（Claude Code 的建议）。同一段对话可能再被拦。' };
@@ -748,12 +1017,55 @@ function bodyHTML(s, v) {
     h = '<div class="why">' + WHY_LONG[v.why] + '</div>' + (WHY_NEXT[v.why] ? '<p class="next">' + WHY_NEXT[v.why] + '</p>' : '') + (s.alert && s.alert.text ? '<pre class="screen">' + esc(s.alert.text) + '</pre>' : '') +
       (s.note ? '<div class="lbl" style="margin-top:10px">它最后说的是</div><div class="md">' + md(s.note) + '</div>' : '') + alertRow(v);
   }
+  if (v.need === 'review') h += wroteHTML(s);        // 待审阅：这一轮改了哪些文件，放在正文最上面（正文区是滚动的）
   if (s.result) {
     const d = s.digest || {}, rest = v.k === 'done' && d.skip ? s.result.slice(d.skip).replace(/^\s+/, '') : '';   // 开头那段已经当大字显示了，正文从下一段起
     h += (h ? '<div class="sep"></div>' : '') + '<div class="lbl num">' + (v.k === 'done' || v.bg ? '交付' : '上一次交付') + ' · ' + when(s.resultAt, Date.now()) +
       (s.status === 'shell' ? ' · 后台任务还在跑' : '') + '</div><div class="md">' + md(rest || s.result) + '</div>';
   } else if (!h) h = '<div class="empty">还没有交付内容。</div>';
   return h;
+}
+
+// ── 这一轮改了哪些文件（11/16 P1-9）、两个窗口同时在写一个仓库（P1-4）──
+// 服务给每个会话：wrote [{ path（~ 开头）, n }]（这一轮用 Edit / Write / MultiEdit / NotebookEdit / apply_patch 写过的，新的一轮开始才清）、wroteMore（没列出来的个数）、
+// collide [{ repo, with: [{ sid, name }] }]（30 分钟内墙上另一个窗口也往同一个 git 仓库里写过）。这里只照着画，不自己判断
+const wopen = new Set();                      // 点开着的：会话 + 那一次交付的时间（换了一次交付就重新收起）
+function wroteHTML(s) {
+  const ws = Array.isArray(s.wrote) ? s.wrote.filter((w) => w && typeof w.path === 'string' && w.path) : [];
+  if (!ws.length) return '';
+  const more = Math.max(0, Math.floor(Number(s.wroteMore)) || 0), open = wopen.has(s.sid + '|' + s.resultAt);
+  const row = (w) => {
+    const p = w.path, i = p.replace(/\/+$/, '').lastIndexOf('/'), name = i >= 0 ? p.slice(i + 1) : p, dir = i >= 0 ? p.slice(0, i + 1) : '', n = Math.floor(Number(w.n)) || 0;
+    return '<li><a class="file" data-path="' + esc(p) + '" title="' + esc(T('点开') + ' ' + p) + '"><span class="wb">' + esc(name) + '</span> <span class="wd">' + esc(dir) + '</span></a>' +
+      (n > 1 ? ' <span class="wn num">×' + n + '</span>' : '') + '</li>';   // 空格给读屏和复制用；排版靠 gap（flex 里空白不占位）
+  };
+  // 默认只露这一行（▸），点它展开 / 收起（▾）；文件少也一样，卡上先看到的是交付那句话
+  return '<div class="wrote' + (open ? ' open' : '') + '"><button type="button" class="lbl wl num" data-act="wmore" aria-expanded="' + open + '"><span class="wt">' + esc(T('这一轮改了 ' + (ws.length + more) + ' 个文件' + (more ? ' · 另有 ' + more + ' 个没列出' : ''))) + '</span><span class="wc" aria-hidden="true">' + (open ? '▾' : '▸') + '</span></button><ul>' + ws.map(row).join('') + '</ul></div>';
+}
+function toggleWrote(s, btn) {
+  const k = s.sid + '|' + s.resultAt, box = btn.closest('.wrote'), on = !wopen.has(k);
+  if (on) wopen.add(k); else wopen.delete(k);
+  box.classList.toggle('open', on); btn.setAttribute('aria-expanded', String(on));
+  const c = btn.querySelector('.wc'); if (c) c.textContent = on ? '▾' : '▸';
+}
+// 撞车那一行。窗口用短名称呼（shortName，和架构视图一样）；这一份 sessions 里认不出的用服务给的标题。坏数据一律不显示
+function clashOf(s, bySid) {
+  const ok = (w) => w && typeof w.sid === 'string' && w.sid;
+  const cs = Array.isArray(s && s.collide) ? s.collide.filter((c) => c && typeof c.repo === 'string' && c.repo && Array.isArray(c.with) && c.with.some(ok)) : [];
+  if (!cs.length) return null;
+  const who = (c) => {
+    const ns = c.with.filter(ok).map((w) => shortName(bySid.get(w.sid)) || cut(String(w.name || w.sid.slice(0, 8)), 20));
+    if (LANG === 'en') return ns.length === 1 ? ns[0] + ' is also writing' : ns.length === 2 ? ns[0] + ' and ' + ns[1] + ' are also writing' : ns[0] + ' and ' + (ns.length - 1) + ' others are also writing';
+    return '和 ' + (ns.length <= 2 ? ns.join('、') + ' ' : ns[0] + ' 等 ' + ns.length + ' 个窗口') + '同时在写';   // 名字后面空一格，「个窗口」后面不空
+  };
+  const more = cs.length < 2 ? '' : LANG === 'en' ? 'and ' + (cs.length - 1) + (cs.length === 2 ? ' more repo' : ' more repos') : '等 ' + cs.length + ' 个仓库';
+  return { line: who(cs[0]), repo: cs[0].repo, more, title: cs.map((c) => who(c) + ' ' + c.repo).join('\n') };   // 英文在这里直接拼好，不过 T()：名字可能带「、」「$&」
+}
+function paintClash(el, s, bySid) {
+  const cx = clashOf(s, bySid), k = cx ? JSON.stringify(cx) : '';
+  if (el.dataset.k === k) return;
+  el.dataset.k = k; el.hidden = !cx; el.title = cx ? cx.title : '';
+  el.innerHTML = cx ? '<b aria-hidden="true">⇄</b> <span class="cw">' + esc(cx.line) + '</span> <span class="cr">' + esc(cx.repo) + '</span>' + (cx.more ? ' <span class="cm">' + esc(cx.more) + '</span>' : '') : '';
 }
 
 // ── 附件：粘贴、拖进来，或点回形针选 ──
@@ -798,22 +1110,28 @@ document.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.
 const cards = new Map();
 function makeCard(sid) {
   const el = document.createElement('article'); el.className = 'card'; el.dataset.sid = sid;
-  el.innerHTML = L('<div class="chead"><span class="meta num"></span><span class="tag" hidden></span><span class="proj"></span><span class="grow"></span>' +
+  el.innerHTML = L('<div class="chead"><span class="meta num"></span><span class="tag" hidden></span><span class="proj"></span><span class="grow"></span><span class="mdl" hidden></span>' +
     '<button class="done" data-act="done" hidden title="只有点这里、或回它一句，才算处理过"></button>' +
     '<button class="go" data-act="focus" aria-label="去终端" title="去终端">' + ICON.term + '<span>去终端</span></button>' +
     '<button class="go" data-act="archive" aria-label="归档" title="归档：没留下东西的删掉，其余留着、能接回来">' + ICON.archive + '<span>归档</span></button>' +
     '<button class="ib" data-act="detail" aria-label="看对话" title="放大看（双击封面 / ⌘O）">' + ICON.open + '</button></div>' +
-    '<h2 class="title" title="双击放大（⌘O）"></h2><p class="head"></p><p class="ask" hidden></p>' +
+    '<h2 class="title" title="双击放大（⌘O）"></h2><p class="head"></p><p class="ask" hidden></p><p class="clash" hidden></p>' +
     '<p class="you"></p><div class="body"></div>' +
-    '<div class="sg" hidden></div>' +
+    '<div class="ap" hidden></div><div class="sg" hidden></div>' +
     '<div class="reply"><div class="atts"></div><textarea rows="1" aria-label="回它一句"></textarea><span class="ghost" aria-hidden="true" hidden><span class="gt"></span><kbd>Tab</kbd></span>' +
     '<button class="clip" aria-label="加附件" title="加图片或文件，也可以直接粘贴或拖进来">' + ICON.clip + '</button><button class="send" aria-label="发送">' + ICON.send + '</button></div>');
-  const ta = $('textarea', el), rp = $('.reply', el), h0 = () => (mode === 'flow' ? 37 : 32);
-  const hold = el._att = { atts: [] }; const mark = () => { rp.classList.toggle('has', !!ta.value.trim() || hold.atts.length > 0); syncGhost(el); };
-  ta.addEventListener('input', () => { ta.style.height = h0() + 'px'; ta.style.height = Math.min(mode === 'flow' ? 140 : 108, ta.scrollHeight) + 'px'; mark(); });
+  // 回话框的零件存在卡片上：预览 / 放大看开着时它们挪进弹层（dock()），不在卡片里，所以一律经 el._rp / _sg / _ap 取，不从卡片里查
+  const ta = $('textarea', el), rp = el._rp = $('.reply', el); el._sg = $('.sg', el); el._ap = $('.ap', el);
+  const big = () => mode === 'flow' || !el.contains(rp);                // 封面里、挪进弹层时用大一号的输入框
+  const fit = el._fit = () => { if (!ta.value) { ta.style.height = ''; return; }      // 空着就用样式表的高度（墙上 32、封面和弹层底部 37）；按内容量会矮 2 px
+    ta.style.height = (big() ? 37 : 32) + 'px'; ta.style.height = Math.min(big() ? 140 : 108, ta.scrollHeight) + 'px'; };
+  const hold = el._att = { atts: [] }; const mark = el._mark = () => { rp.classList.toggle('has', !!ta.value.trim() || hold.atts.length > 0); syncGhost(el); };
+  ta.addEventListener('input', () => { fit(); mark();
+    const cs = cards.get(sid), au = cs && cs.s && cs.s.auto;      // 他在这张卡上打字 = 他要自己说，倒数中的自动续跑不发了（每次交付只发一次取消）
+    if (ta.value && au && au.state === 'armed' && cs.apStop !== cs.s.resultAt) { cs.apStop = cs.s.resultAt; autoOp(sid, 'cancel'); } });
   wireAtts(hold, el, $('.atts', el), ta, $('.clip', el), mark);
   ta.addEventListener('keydown', (e) => {
-    const gt = $('.ghost', el).dataset.t;
+    const gt = $('.ghost', rp).dataset.t;
     if (e.key === 'Tab' && !e.shiftKey && !e.isComposing && !ta.value && gt) { e.preventDefault(); fillDraft(sid, gt); return; }     // 和终端一样：框是空的、有灰字，Tab 收下；收下以后还是草稿，回车才发
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(sid); }
   });
@@ -822,6 +1140,7 @@ function makeCard(sid) {
     if (el.classList.contains('side')) { go(sid, true); return; }
     const s = cards.get(sid).s; const act = e.target.closest('[data-act]'); const ans = e.target.closest('[data-ans]');
     if (e.target.closest('[data-path]')) return;
+    const apb = e.target.closest('[data-ap]'); if (apb) { autoOp(sid, apb.dataset.ap); return; }
     const chip = e.target.closest('[data-sg]'); if (chip) { pickChip(sid, +chip.dataset.sg); return; }
     if (ans && s.dialog && s.tmux) { const i = +ans.dataset.ans; api('/api/answer', { name: s.tmux, option: i, text: s.dialog.options[i] }).then((r) => { if (!r.ok) flash(sid, 'err', r.error); refresh(); }); return; }
     if (act && act.dataset.act === 'focus') { goTerminal(s); return; }
@@ -830,22 +1149,26 @@ function makeCard(sid) {
     if (act && act.dataset.act === 'archive') { doArchive(s, false); return; }
     if (act && act.dataset.act === 'done') { markDone(s); return; }
     if (act && act.dataset.act === 'detail') { openDetail(s.sid, s.title); return; }   // 点开不算处理过
+    if (act && act.dataset.act === 'wmore') { toggleWrote(s, act); return; }            // 这一轮改了哪些文件：展开 / 收起
   });
   return el;
 }
 // ── 输入框上的预判（11/13）：灰字 Tab 收下；1/2/3 填进输入框。都只是草稿，改完回车才发，不会自己发出去 ──
 function syncGhost(el) {                      // 灰字只盖在「空、没附件」的输入框上；灰字显示时让输入框自己的提示字透明，免得两行叠在一起
-  const gh = $('.ghost', el), ta = $('textarea', el), hold = el._att;
-  gh.hidden = !gh.dataset.t || !!ta.value || !!(hold && hold.atts.length); $('.reply', el).classList.toggle('gh', !gh.hidden);
+  const rp = el._rp, gh = $('.ghost', rp), ta = $('textarea', rp), hold = el._att;
+  const off = !gh.dataset.t || !!ta.value || !!(hold && hold.atts.length); if (gh.hidden !== off) gh.hidden = off; rp.classList.toggle('gh', !off);
 }
 function fillDraft(sid, text) {
-  const c = cards.get(sid), ta = c && $('textarea', c.el); if (!ta || ta.disabled) return false;
+  const c = cards.get(sid), ta = c && c.el._rp && $('textarea', c.el._rp); if (!ta || ta.disabled) return false;
   ta.value = text; ta.dispatchEvent(new Event('input')); ta.focus(); ta.setSelectionRange(text.length, text.length); return true;
 }
 function pickChip(sid, n) {                   // 第 1 条：终端里按 1 和按 Tab 是同一句，所以用灰字的完整句子；屏幕上第 2、3 条只有标签，就用标签
   const sg = (cards.get(sid) || {}).sg, o = sg && sg.options.find((x) => x.n === n); if (!o) return false;
   return fillDraft(sid, n === 1 && sg.ghost ? sg.ghost : o.label);
 }
+function autoOp(sid, op) { api('/api/auto', { sid, op }).then((r) => { if (!r.ok) toast(r.error); refresh(); }).catch(() => {}); }
+const AUTO_MARK = '【总控台自动续跑】';     // 和 autopilot.mjs 的 AUTO_MARK 同一串：自动发出去的话以它开头，「你」那一行改写成「自动续跑」
+const autoBody = (t) => { const x = String(t || '').trim(); return x.startsWith(AUTO_MARK) ? x.slice(AUTO_MARK.length).trim() : x; };   // 去掉记号，剩下真发的那句（11/17 起是固定的一句；之前的是「按你上一轮留下的建议……：灰字」）
 function goTerminal(s) { api('/api/focus', { sid: s.sid }).then((r) => { if (!r.ok) toast(r.error); }); }
 // 自动收工只认你明确点过「审完了」的：告诉服务哪些会话的哪一次交付你处理过（map 新增 / 更新，clear 撤销）。服务只存内存，所以页面每次载入把 ccb_done 全发一遍（只增不删，几个页面同时开着也不会互相清掉）。失败不要紧，服务回头靠安静时长兜底
 function syncDone(map, clear) { api('/api/processed', { map: map || {}, clear: clear || [] }).catch(() => {}); }
@@ -859,11 +1182,12 @@ function markDone(s) {                          // 你点「审完了 / 先放�
     if (mode === 'flow' && cards.has(s.sid)) { cur = s.sid; curAt = navAt = Date.now(); } paint(last); } });
 }
 function flash(sid, kind, text) {
-  const c = cards.get(sid); if (!c) return; let m = $('.note', c.el); if (!m) { m = document.createElement('div'); c.el.appendChild(m); }
+  const c = cards.get(sid); if (!c) return; const host = docked && docked.sid === sid ? docked.host : c.el;     // 回话框挪进弹层时，「已送达」也跟着出在弹层里
+  let m = $(':scope > .note', host); if (!m) { m = document.createElement('div'); host.appendChild(m); }
   m.className = 'note ' + kind; m.textContent = T(text); clearTimeout(c.ft); c.ft = setTimeout(() => m.remove(), kind === 'ok' ? 2200 : 7000);
 }
 async function send(sid) {
-  const c = cards.get(sid); const ta = $('textarea', c.el), bt = $('.send', c.el), rp = $('.reply', c.el), hold = c.el._att, box = $('.atts', c.el);
+  const c = cards.get(sid); if (!c || !c.el._rp) return; const rp = c.el._rp, ta = $('textarea', rp), bt = $('.send', rp), hold = c.el._att, box = $('.atts', rp);
   const text = ta.value.trim(), atts = hold.atts.slice();
   if ((!text && !atts.length) || bt.disabled) return;
   const typed = ta.value;
@@ -876,7 +1200,8 @@ async function send(sid) {
   try { const files = await uploadAtts(atts); r = await api('/api/send', { sid, text, files }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   ta.disabled = false;
-  if (r.ok && r.delivered) { sentAt[sid] = Date.now(); for (const x of atts) if (x.url) URL.revokeObjectURL(x.url); flash(sid, 'ok', '已送达'); }
+  if (r.ok && r.delivered) { sentAt[sid] = Date.now(); for (const x of atts) if (x.url) URL.revokeObjectURL(x.url); flash(sid, 'ok', '已送达');
+    if (detailSid === sid && $('#detail').open) openDetail(sid, '', true); }      // 大窗口开着：重读，刚说的这句出在最下面
   else {
     delete sentAt[sid];
     if (!r.ok) { ta.value = typed; hold.atts = atts; drawAtts(hold, box); rp.classList.toggle('has', !!typed.trim() || atts.length > 0); }   // 没发出去：字和附件都还给你
@@ -889,7 +1214,7 @@ async function send(sid) {
 
 // ── 封面视图：谁在最前面 ──
 const engaged = () => {
-  const c = cur && cards.get(cur); const ta = c && $('textarea', c.el);
+  const c = cur && cards.get(cur); const ta = c && c.el._rp && $('textarea', c.el._rp);
   return !!(ta && ta.value.trim()) || !!document.querySelector('dialog[open]') || !!menuFor || Date.now() - navAt < 12000;
 };
 function go(id, manual) { if (!cards.has(id) || id === cur) return; cur = id; curAt = Date.now(); if (manual) navAt = Date.now(); layout(); }
@@ -907,7 +1232,7 @@ function layout() {
     h.style.transform = el.style.transform; h.style.zIndex = el.style.zIndex; h.style.opacity = el.style.opacity;
     el.classList.add('haloed');
   };
-  if (mode !== 'flow') { for (const c of cards.values()) { c.el.classList.remove('side'); c.el.style.cssText = ''; halo(c, false); } return; }
+  if (mode !== 'flow') { for (const c of cards.values()) { const el = c.el; if (el.classList.contains('side')) el.classList.remove('side'); if (el.style.length) el.style.cssText = ''; if (c.halo || el.classList.contains('haloed')) halo(c, false); } return; }   // 只清真有的：以前每次轮询给每张卡重写一遍 class 和内联样式（71 张卡 = 每 1.5 秒 200 多次属性改动）
   const i0 = Math.max(0, order.indexOf(cur)); const cw = Math.min(760, innerWidth - (innerWidth <= 700 ? 28 : 120));
   // 旁边那张整张露出来、不压在中间那张上：窗口够宽就并排放，不够宽就缩小（最小 0.46 倍）；再往外的叠在它后面露一条边
   const s1 = Math.max(0.46, Math.min(0.74, (innerWidth / 2 - 30 - cw / 2) / cw)), x1 = cw / 2 + 18 + cw * s1 / 2;
@@ -916,6 +1241,13 @@ function layout() {
     el.classList.toggle('side', d !== 0);
     const sc = d === 0 ? 1 : s1 * [1, 0.84, 0.7][Math.min(ad, 3) - 1], x = d === 0 ? 0 : sg * (x1 + (ad - 1) * cw * s1 * 0.2);
     const blur = ad >= 2 ? (back ? 3 : 1.5) : 0;      // 紧挨着的那两张不糊：要一眼读得出标题
+    const pd = el._fd; el._fd = d;                     // 上一次排在第几格（相对当时最前那张）
+    if (pd !== undefined && Math.abs(pd) > 3 && ad <= 3 && !calm.matches) {
+      // 从看不见的那一堆里来（新交付站到最前、点底下的点跳过去）：以前从几千像素外横扫过整个屏幕，一闪而过；现在先放到同一侧最外面一格、透明，再滑进来（11/17 性能）
+      const x0 = (Math.sign(pd) || 1) * (x1 + 3 * cw * s1 * 0.2);
+      el.style.transition = 'none'; el.style.transform = 'translate3d(' + x0.toFixed(1) + 'px,0,0) scale(' + (s1 * 0.7).toFixed(3) + ')'; el.style.opacity = '0'; el.style.visibility = 'visible';
+      getComputedStyle(el).transform; el.style.transition = '';
+    }
     el.style.transform = 'translate3d(' + x.toFixed(1) + 'px,0,0) rotateY(' + (d === 0 || calm.matches ? 0 : -sg * 9) + 'deg) scale(' + sc.toFixed(3) + ')';
     el.style.filter = blur ? 'blur(' + blur + 'px)' : 'none';
     el.style.opacity = ad > 3 ? 0 : d === 0 ? 1 : ad === 1 ? (back ? 0.62 : 1) : ad === 2 ? (back ? 0.32 : 0.55) : 0.25;
@@ -945,14 +1277,20 @@ function laneOf(c) {                      // 一张卡在「按状态」里属�
   return { key: 's:' + k, name: STATUS_LANES[k] };
 }
 let folds = new Set(store('ccb_fold') || []), foldOn = new Set(), foldList = [], jumpGroup = null;
-function toggleFold(k) { if (folds.has(k)) { folds.delete(k); if (mode === 'flow') jumpGroup = k; } else folds.add(k); store('ccb_fold', [...folds]); paint(last); }
+function toggleFold(k) { if (folds.has(k)) { folds.delete(k); if (mode === 'flow') jumpGroup = k; else peek = k; } else folds.add(k); store('ccb_fold', [...folds]); paint(last); }   // 墙上展开 = 想看它：别的列固定了宽度、没地方了，也先给它让一格
+// 列宽（11/15 Khalil：「FretFlow 是我主要的开发……希望它能占两列」）：拖宽的那一列记住格数，存在本机 ccb_span，最近拖的排前面。
+// 窗口变窄、格子不够时，记住格数的列先拿；没记的列每列至少 1 格，再不够就挤成窄条（不再像以前那样并进「其他」，免得项目混在一起）。
+let spans = (store('ccb_span') || []).filter((x) => Array.isArray(x) && typeof x[0] === 'string' && x[1] >= 1);
+let peek = null;                                // 点了挤到旁边的窄条 / 刚展开的列：这次先给它让一格（不记，重开就没了）
+const pinOf = (k) => { const x = spans.find((p) => p[0] === k); return x ? x[1] : 0; };
+function setPin(k, n) { spans = spans.filter((p) => p[0] !== k); if (n > 0) spans.unshift([k, n]); spans = spans.slice(0, 16); store('ccb_span', spans); }
 function setGroups(ids) {
   const raw = (id) => { const c = cards.get(id); if (groupBy === 'status' && mode === 'wall') return laneOf(c); const o = c && (c.s || c.x || c.p), p = o && o.project; return p && p.key ? p : OTHER_P; };
   const n = new Map(); for (const id of ids) { const k = raw(id).key; n.set(k, (n.get(k) || 0) + 1); }
   const fold = new Set([...n].filter(([k, v]) => k.startsWith('dir:') && v < 2).map(([k]) => k));
-  // 墙上一个项目一列、一列至少 300px：放不下时，把卡最少的组并进「其他」，免得要横着滚
+  // 封面：组太多时，把卡最少的组并进「其他」，底下那排点放得下。墙上不并（11/15 起）：放不下的列由 placeWall() 挤成窄条，项目不混在一起
   const strips = [...n.keys()].filter((k) => folds.has(k)).length;      // 收起的列只占一条窄边
-  const lim = innerWidth > 700 ? slotsAcross() + strips : 99;            // 展开的项目最多和横向格子一样多
+  const lim = innerWidth > 700 && mode === 'flow' ? slotsAcross() + strips : 99;      // 架构视图和墙一样不并：一个项目一列
   const count = () => new Set([...n.keys()].map((k) => (fold.has(k) ? 'other' : k))).size;
   while (count() > lim) { const k = [...n].filter(([k]) => k !== 'other' && !fold.has(k) && !folds.has(k)).sort((x, y) => x[1] - y[1])[0]; if (!k) break; fold.add(k[0]); }
   const seen = new Set();
@@ -970,18 +1308,40 @@ function byProject(ids) {
 // 横向几格：和平铺的格子一致（样式表里 4 / 3 / 2 列的断点）
 const slotsAcross = () => (innerWidth > 1500 ? 4 : innerWidth > 1080 ? 3 : innerWidth > 700 ? 2 : 1);
 // 把横向的 S 格分给各个展开的项目（每个至少 1 格）：先看一屏能露出几张卡，再看和卡数成不成比例，再让排在前面（更要你处理）的项目多露几张
-function lanes(ns, S, rows) {
+function lanes(ns, S, rows, lo = ns.map(() => 1)) {          // lo：每列至少几格（记住了格数的列在封顶后用它当下限）
   const m = ns.length, N = ns.reduce((a, b) => a + b, 0) || 1; let best = null;
-  if (m > S) return ns.map(() => 1);
+  const need = (i) => lo.slice(i).reduce((a, b) => a + b, 0);
+  if (need(0) > S) return lo.slice();
   const better = (a, b) => { for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 1e-9) return a[i] > b[i]; return false; };
   const walk = (i, left, ks) => {
-    if (i === m - 1) { const k = [...ks, left], seen = k.map((x, j) => Math.min(ns[j], x * rows));
+    if (i === m - 1) { if (left < lo[i]) return; const k = [...ks, left], seen = k.map((x, j) => Math.min(ns[j], x * rows));
       const score = [seen.reduce((a, b) => a + b, 0), -k.reduce((a, x, j) => a + Math.abs(x - S * ns[j] / N), 0), ...seen];
       if (!best || better(score, best.score)) best = { k, score }; return; }
-    for (let x = 1; x <= left - (m - 1 - i); x++) walk(i + 1, left - x, [...ks, x]);
+    for (let x = lo[i]; x <= left - need(i + 1); x++) walk(i + 1, left - x, [...ks, x]);
   };
   if (m) walk(0, S, []);
   return best ? best.k : [];
+}
+// 定每列几格（0 = 挤成窄条）。open 是展开的列 [{ key, n }]，按排位排好。先后：
+// 刚点开的那一列（peek）先拿 1 格 → 记住格数的列（最近拖过的先拿，不够就封顶）→ 其余的列按排位每列 1 格，没地方了就挤成窄条。
+// 多出来的格子照 lanes() 的老办法分给没记格数的列；全都记了格数，就加给记了的（它们的格数当下限）。
+// 没记任何格数时结果和以前一样，只是放不下的列从「并进其他」改成「挤成窄条」。
+function allot(open, S, rows) {
+  const rank = (c) => (c.key === peek ? -1 : pinOf(c.key) ? spans.findIndex((p) => p[0] === c.key) : 99);
+  const ord = open.map((c, i) => ({ ...c, i, r: rank(c) })).sort((a, b) => a.r - b.r || a.i - b.i);
+  const K = new Map(), free = [], fixed = []; let cap = S;
+  for (const c of ord) {
+    if (cap < 1) { K.set(c.key, 0); continue; }
+    const want = c.key === peek ? pinOf(c.key) || 1 : pinOf(c.key);     // 点开的那一列记过格数，就按记的给（收起再展开不丢宽度）
+    if (want) { const x = Math.min(want, cap); K.set(c.key, x); cap -= x; fixed.push(c); }
+    else { K.set(c.key, 1); cap -= 1; free.push(c); }
+  }
+  if (cap > 0) {
+    const grp = free.length ? free : fixed;
+    const ks = lanes(grp.map((c) => c.n), grp.reduce((a, c) => a + K.get(c.key), 0) + cap, rows, grp.map((c) => K.get(c.key)));
+    grp.forEach((c, i) => K.set(c.key, ks[i]));
+  }
+  return K;
 }
 const gcols = new Map();                    // 墙上的列：项目 key → { el, head, body }
 const ICON_PLUS = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2v8M2 6h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
@@ -989,35 +1349,168 @@ const ICON_FOLD = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="
 // 墙上的动画：换位置、换列从旧位置滑过去；新出现的（新会话、筛选放出来的）淡入。用 Web Animations，不碰内联样式，
 // 所以 layout() 每次清内联样式不会把它打断（以前用内联 transform 做，这一步会把动画清掉，从没真动起来过）。
 let wallBefore = null;
+// 一张卡现在在哪、看不看得见：{ r: 位置, on: 有没有一部分落在它所在的列（或整页）露出来的那块里 }。列里滚出去的卡 on = false；
+// 不画的（收起的列里、display:none）返回 null。不用 offsetParent 判断「画没画」：WebKit 里改过 DOM 之后每读一次约 1 ms（11/17 实测 71 张卡 88 ms），宽高为 0 一样认得出
+function seen(el, clips) {
+  const r = el.getBoundingClientRect(); if (!r.width && !r.height) return null;
+  const p = el.parentElement, sc = p && p.classList.contains('gbody') ? p : $('main');
+  let cr = clips.get(sc); if (!cr) { cr = sc.getBoundingClientRect(); clips.set(sc, cr); }
+  return { r, on: r.bottom > Math.max(cr.top, 0) && r.top < Math.min(cr.bottom, innerHeight) && r.right > Math.max(cr.left, 0) && r.left < Math.min(cr.right, innerWidth) };
+}
+// 墙上所有看得见的卡的位置（换位置之前量）：只读，一次排版
+function wallRects() {
+  const clips = new Map(), m = new Map();
+  for (const [id, c] of cards) { if (!c.el.isConnected || c.el.hidden) continue; const x = seen(c.el, clips); if (x) m.set(id, x); }
+  return m;
+}
+// 性能（11/17 Khalil：「新窗口交付完，它弹到上面的时候，动画不是很流畅」）：
+// 以前边量边起动画，每起一个动画，下一张卡的量法就要重新排版——71 张卡的墙上，弹到顶那一下要排 78 次版，WebKit 里整页停住约 0.3 秒，动画还没开始就丢了。
+// 现在先把新位置全部量完（只读、一次排版），再统一起动画（只写）。另外：
+// · 换位置前后都在看不见的地方（列里滚出去的）：不动，省掉看不见的动画。
+// · 从看不见的地方来的（从列底下弹到顶）：就地浮出来，不从屏幕外两三千像素飞上来——那一段太快，看上去是一道闪。
+// · 从看得见的地方挪走的（被挤到列底下）：照常滑出去，列里不会先空一格再补上。
 function flipFrom(before) {
+  const clips = new Map(), jobs = [];
   for (const id of order) {
-    const el = cards.get(id).el; if (el.hidden || !el.isConnected || !el.offsetParent) continue; const b = before.get(id);   // 收起的列里的卡不画，不用动
-    if (!b) { el.animate([{ opacity: 0, transform: 'translateY(12px) scale(.97)' }, { opacity: 1, transform: 'none' }], { duration: 360, easing: 'cubic-bezier(.2,.8,.2,1)' }); continue; }
-    const a = el.getBoundingClientRect(), dx = b.left - a.left, dy = b.top - a.top, sx = b.width / (a.width || 1);
+    const el = cards.get(id).el; if (el.hidden || !el.isConnected) continue;
+    const a = seen(el, clips); if (a) jobs.push([el, before.get(id), a]);       // 收起的列里的卡不画，不用动
+  }
+  for (const [el, b, a] of jobs) {
+    if (!a.on && !(b && b.on)) continue;
+    if (!b || !b.on) { el.animate([{ opacity: 0, transform: 'translateY(14px) scale(.965)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.8,.2,1)' }); continue; }
+    const dx = b.r.left - a.r.left, dy = b.r.top - a.r.top, sx = b.r.width / (a.r.width || 1);
     if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < 0.01) continue;
     el.animate([{ transform: 'translate(' + dx + 'px,' + dy + 'px) scale(' + sx + ')', transformOrigin: '0 0' }, { transform: 'none', transformOrigin: '0 0' }], { duration: 460, easing: 'cubic-bezier(.2,.9,.25,1)' });
   }
 }
 function dropCols(stage) { for (const [k, col] of gcols) { col.el.remove(); gcols.delete(k); } document.body.classList.remove('cols'); }
+
+// ── 拖分隔条调列宽（11/15）──
+// 像 iPad 分屏的分隔条，但这里每列至少留一格，所以是「推开」：往右拖，左边那列变宽，右边最近的那列先变窄，到 1 格了就接着压再右边的；
+// 都压到 1 格了，最近的那列才继续让（再多拖过半格就变暗，松手就让出去，和吸附同一个标准）。往左拖对称。
+// 按下时量所有展开的列，换算成「一格多少像素」（都是 fr，总格数不变）；移动时各列的 fr 跟着手走、不带过渡；
+// 一行几张按当前宽度四舍五入，跨过半格就重排（卡片滑过去）。松手吸附到整格：变宽的那列记住格数，被压窄的回到自动。
+let drag = null, wallS = 0, wallTracks = [], wallOpen = [];
+// 推开。base：各展开列的格数（从左到右）；分隔条在第 i 列右边；dd > 0 往右拖（第 i 列变宽）。floor：最近那列最窄到多少（拖的时候 0.35，松手 0，方向键 1）
+function push(base, i, dd, floor) {
+  const f = base.slice(), grow = dd > 0 ? i : i + 1, side = dd > 0 ? f.map((_, j) => j).slice(i + 1) : f.map((_, j) => j).slice(0, i + 1).reverse();   // side：被压的那一边，最近的在前
+  let need = Math.abs(dd);
+  for (const j of side) { const g = Math.min(need, f[j] - 1); if (g > 0) { f[j] -= g; need -= g; } }
+  if (need > 0 && side.length) { const j = side[0], g = Math.min(need, Math.max(0, f[j] - floor)); f[j] -= g; need -= g; }
+  f[grow] += Math.abs(dd) - need;
+  return f;
+}
+// 松手吸附到整格：压窄的那边还有余量就按四舍五入挪；余量用完后又多拖过半格（最近那列剩不到半格），就让它整列让出去（0 格）
+function settle(base, i, dd) {
+  if (!dd) return base.slice();
+  const near = dd > 0 ? i + 1 : i, spare = (dd > 0 ? base.slice(i + 1) : base.slice(0, i + 1)).reduce((a, s) => a + s - 1, 0);
+  const D = push(base, i, dd, 0.35)[near] <= 0.5 ? spare + 1 : Math.min(spare, Math.round(Math.abs(dd)));
+  return push(base, i, Math.sign(dd) * D, 0);
+}
+// 分隔条两边的现状：展开的列（窄条不算）、各自几格、分隔条在第几列右边
+function splitAt(sp) {
+  const open = [...document.querySelectorAll('#stage > .gcol:not(.folded)')], keys = open.map((c) => c.dataset.key), i = keys.indexOf(sp.dataset.a), base = open.map((c) => +c.dataset.span);
+  return i < 0 || keys[i + 1] !== sp.dataset.b || base.some((x) => !x) ? null : { open, keys, i, base };
+}
+function dragPaint() {
+  const d = drag;
+  if (!d.keys.every((k) => gcols.has(k) && wallTracks.some((t) => t[0] === k && t[1] !== '44px'))) { endDrag(false); return; }   // 拖的时候列没了（归档、筛选）：算了
+  const f = push(d.base, d.i, d.dd, 0.35), fr = new Map(d.keys.map((k, j) => [k, f[j]]));
+  $('#stage').style.setProperty('--gtpl', wallTracks.map(([k, spec]) => (fr.has(k) ? 'minmax(0,' + fr.get(k).toFixed(3) + 'fr)' : spec)).join(' '));
+  const want = d.keys.map((k, j) => { const col = gcols.get(k); col.el.classList.toggle('yield', f[j] <= 0.5); return [col, String(Math.max(1, Math.min(d.n[j], Math.round(f[j]))))]; })
+    .filter(([col, kk]) => col.body.style.getPropertyValue('--k') !== kk);
+  if (want.length) {                               // 跨过半格：一行的张数变了，卡片从旧位置滑到新位置
+    const before = calm.matches ? null : wallRects();
+    for (const [col, kk] of want) col.body.style.setProperty('--k', kk);
+    if (before) flipFrom(before);
+  }
+  const s = settle(d.base, d.i, d.dd), g = d.guide;   // 松手会落在哪：一根细线标出变宽那一列的新边（有列要让出去时不画，那一下位置会跟着窄条变）
+  if (d.dd && s.every((x) => x > 0)) { g.hidden = false; g.style.left = (d.dd > 0 ? d.left[d.i] + s[d.i] * d.u + d.gap / 2 : d.right[d.i + 1] - s[d.i + 1] * d.u - d.gap / 2).toFixed(1) + 'px'; }
+  else g.hidden = true;
+}
+function endDrag(commit) {
+  const d = drag; if (!d) return; drag = null;
+  d.sp.classList.remove('on'); d.guide.remove(); document.body.classList.remove('resizing');
+  for (const k of d.keys) { const col = gcols.get(k); if (col) col.el.classList.remove('yield'); }
+  if (commit) commitSpans(d.keys, d.base, settle(d.base, d.i, d.dd), d.dd > 0 ? d.i : d.i + 1);
+  else paint(last);
+}
+// 记下新的格数：变宽的那一列（第 g 列）记住格数，被压窄的回到自动。
+// 被压到 0 格的那一列：按新的格数它本来就会挤成窄条（窄窗口里常见），就不收起，窗口拉宽了它自己回来；
+// 不会挤掉它（宽屏里还有空位）才收起它，不然松手后它又占回 1 格，和手上拖的对不上。
+function commitSpans(keys, base, s, g) {
+  if (s.every((x, j) => x === base[j])) { paint(last); return; }
+  keys.forEach((k, j) => { if (j !== g && s[j] < base[j]) setPin(k, 0); });
+  setPin(keys[g], s[g]);
+  if (keys.includes(peek)) peek = null;
+  const gone = keys.find((k, j) => s[j] === 0);
+  if (gone && allot(wallOpen, wallS, rows).get(gone) > 0) { folds.add(gone); store('ccb_fold', [...folds]); toast('收起了一列，点那根竖条就能展开'); }
+  paint(last);
+}
+function resetSpan(a, b) { setPin(a, 0); setPin(b, 0); peek = null; paint(last); }   // 恢复自动：也不再替点开过的窄条占格子
+document.addEventListener('pointerdown', (e) => {
+  const sp = e.target.closest('.gsplit'); if (!sp || e.button !== 0 || mode !== 'wall') return;
+  const at = splitAt(sp); if (!at) return;
+  e.preventDefault(); sp.focus();
+  const st = $('#stage').getBoundingClientRect(), rs = at.open.map((c) => c.getBoundingClientRect());
+  const guide = document.createElement('div'); guide.className = 'gsnap'; guide.hidden = true; $('#stage').appendChild(guide);
+  drag = { sp, keys: at.keys, i: at.i, base: at.base, dd: 0, x0: e.clientX, u: rs.reduce((a, r) => a + r.width, 0) / at.base.reduce((a, b) => a + b, 0),
+    left: rs.map((r) => r.left - st.left), right: rs.map((r) => r.right - st.left), gap: parseFloat(getComputedStyle($('#stage')).columnGap) || 24,
+    n: at.open.map((c) => c.querySelectorAll('.gbody > .card:not([hidden])').length), guide, raf: 0 };
+  sp.setPointerCapture(e.pointerId); sp.classList.add('on'); document.body.classList.add('resizing');
+});
+document.addEventListener('pointermove', (e) => {
+  const d = drag; if (!d) return;
+  d.dd = (e.clientX - d.x0) / d.u;
+  if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; if (drag === d) dragPaint(); });
+});
+document.addEventListener('pointerup', () => { if (drag) endDrag(true); });
+document.addEventListener('pointercancel', () => { if (drag) endDrag(false); });
+document.addEventListener('dblclick', (e) => { const sp = e.target.closest('.gsplit'); if (sp) resetSpan(sp.dataset.a, sp.dataset.b); });
+// 键盘：分隔条拿到焦点后 ← → 一次挪一格（照样推开，但不把哪一列推没），Enter 恢复自动，Esc 取消正在拖的
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drag) { endDrag(false); return; }
+  const sp = document.activeElement && document.activeElement.closest && document.activeElement.closest('.gsplit'); if (!sp || drag) return;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault(); const at = splitAt(sp); if (!at) return; const dd = e.key === 'ArrowRight' ? 1 : -1;
+    commitSpans(at.keys, at.base, push(at.base, at.i, dd, 1), dd > 0 ? at.i : at.i + 1);
+    requestAnimationFrame(() => { const n = document.querySelector('.gsplit[data-a="' + CSS.escape(sp.dataset.a) + '"]'); if (n) n.focus(); });
+  } else if (e.key === 'Enter') { e.preventDefault(); resetSpan(sp.dataset.a, sp.dataset.b); }
+});
 // 墙：两个以上项目有看得见的卡 → 一个项目一列；否则（只剩一个项目、或筛选后只剩一组）回到平铺的格子。
 // 正在某张卡里打字时不挪那一张（挪动会让输入框失焦）。
+// 墙上各列的先后（11/17 性能）：第一次画照旧按「组里排最前那张」排，之后已经在墙上的列不再互换位置，新出现的列按它的排位插进去。
+// 以前每来一条交付，那个项目可能整列跑到前面：WebKit 要把整列（FretFlow 30 多张卡）从 DOM 里拔出来重建，弹到顶那一下多停 100 ms 以上，
+// 两列的卡还交叉飞过整个屏幕。现在交付只在自己那一列里升到顶。换视图、换分列方式、重新载入时重新按排位排。
+let wallKeys = [];
+function stickyKeys(fresh) {
+  const keep = wallKeys.filter((k) => fresh.includes(k));
+  fresh.forEach((k, i) => { if (keep.includes(k)) return; const nx = fresh.slice(i + 1).find((x) => keep.includes(x)); keep.splice(nx ? keep.indexOf(nx) : keep.length, 0, k); });
+  return (wallKeys = keep);
+}
 function placeWall(stage, typing) {
-  const vis = new Map();
-  for (const id of order) { const c = cards.get(id); if (!c.el.hidden) vis.set(c.g.key, (vis.get(c.g.key) || 0) + 1); }
+  const vis0 = new Map();
+  for (const id of order) { const c = cards.get(id); if (!c.el.hidden) vis0.set(c.g.key, (vis0.get(c.g.key) || 0) + 1); }
+  const vis = new Map(stickyKeys([...vis0.keys()]).map((k) => [k, vis0.get(k)]));
   const hold = (el) => typing && el.contains(document.activeElement);
   if (vis.size < 2) {
     order.forEach((id, i) => { const el = cards.get(id).el; if (!hold(el) && stage.children[i] !== el) stage.insertBefore(el, stage.children[i] || null); });
     dropCols(stage); return;
   }
   document.body.classList.add('cols');
-  const open = [...vis.keys()].filter((k) => !foldOn.has(k)), K = new Map(), ks = lanes(open.map((k) => vis.get(k)), slotsAcross(), rows);
-  open.forEach((k, i) => K.set(k, ks[i]));
-  stage.style.setProperty('--gtpl', [...vis.keys()].map((k) => (foldOn.has(k) ? '44px' : 'minmax(0,' + K.get(k) + 'fr)')).join(' '));
+  const S = slotsAcross(), keys = [...vis.keys()], open = keys.filter((k) => !foldOn.has(k));
+  if (peek && !open.includes(peek)) peek = null;                                    // 点开的那一列不在了（筛选、归档），就不再替它占格子
+  const K = S < 2 ? new Map(open.map((k) => [k, 1])) : allot(open.map((k) => ({ key: k, n: vis.get(k) })), S, rows);   // 手机宽度各列叠着排，不分格子、不挤
+  const strip = (k) => foldOn.has(k) || !K.get(k);                                  // 收起的、挤到旁边的：都是 44px 的竖条
+  wallS = S; wallOpen = open.map((k) => ({ key: k, n: vis.get(k) })); wallTracks = keys.map((k) => [k, strip(k) ? '44px' : 'minmax(0,' + K.get(k) + 'fr)']);
+  stage.style.setProperty('--gtpl', wallTracks.map((t) => t[1]).join(' '));
   [...vis.keys()].forEach((k, i) => {
     let col = gcols.get(k);
-    if (!col) { const el = document.createElement('section'); el.className = 'gcol'; el.innerHTML = '<div class="ghead" role="heading" aria-level="2"></div><div class="gbody"></div>'; col = { el, head: el.firstChild, body: el.lastChild }; gcols.set(k, col); }
+    if (!col) { const el = document.createElement('section'); el.className = 'gcol'; el.dataset.key = k; el.innerHTML = '<div class="ghead" role="heading" aria-level="2"></div><div class="gbody"></div>'; col = { el, head: el.firstChild, body: el.lastChild }; gcols.set(k, col); }
     if (stage.children[i] !== col.el) stage.insertBefore(col.el, stage.children[i] || null);
-    if (K.has(k) && col.body.style.getPropertyValue('--k') !== String(K.get(k))) col.body.style.setProperty('--k', K.get(k));
+    const kk = String(Math.max(1, Math.min(K.get(k) || 1, vis.get(k))));            // 一行放几张：格数，但不多于卡数（一张卡占满两格宽，不留半列空白）
+    if (col.body.style.getPropertyValue('--k') !== kk && !(drag && (k === drag.a || k === drag.b))) col.body.style.setProperty('--k', kk);   // 正在拖的两列由 dragPaint() 管
+    const spn = String(K.get(k) || 0); if (col.el.dataset.span !== spn) col.el.dataset.span = spn; if (col.el.classList.contains('yield')) col.el.classList.remove('yield');
   });
   const at = new Map();
   for (const id of order) {
@@ -1027,13 +1520,31 @@ function placeWall(stage, typing) {
     if (!hold(c.el) && col.body.children[i] !== c.el) col.body.insertBefore(c.el, col.body.children[i] || null);
   }
   for (const k of vis.keys()) {                 // 列头：项目名 + 张数；展开的带「收起」按钮，收起的带两颗提示点
-    const col = gcols.get(k), ids = order.filter((id) => cards.get(id).g.key === k && !cards.get(id).el.hidden), g = cards.get(ids[0]).g, f = foldOn.has(k);
+    const col = gcols.get(k), ids = order.filter((id) => cards.get(id).g.key === k && !cards.get(id).el.hidden), g = cards.get(ids[0]).g, f = strip(k), sq = f && !foldOn.has(k);
     const dots = f ? '<span class="gdots">' + (ids.some((id) => dotOf(cards.get(id).v) === 'act') ? '<i class="act"></i>' : '') + (ids.some((id) => dotOf(cards.get(id).v) === 'review') ? '<i class="review"></i>' : '') + '</span>' : '';
     const t = esc(T(g.name)) + '<b class="num">' + vis.get(k) + '</b>' + dots + (f ? '' : '<button class="gnew" data-newin="' + esc(k) + '" data-newname="' + esc(g.name) + '" title="' + esc(T('在这一列里新建任务')) + '">' + ICON_PLUS + '<span>' + esc(T('新任务')) + '</span></button><button class="gfold" data-fold="' + esc(k) + '" aria-label="' + esc(T('收起这一列')) + '" title="' + esc(T('收起这一列')) + '">' + ICON_FOLD + '</button>');
     if (col.head.innerHTML !== t) col.head.innerHTML = t;
-    if (col.el.classList.contains('folded') !== f) { col.el.classList.toggle('folded', f); if (f) { col.el.dataset.fold = k; col.el.title = T('展开'); } else { delete col.el.dataset.fold; col.el.removeAttribute('title'); } }
+    const was = col.el.classList.contains('folded') ? (col.el.classList.contains('squeezed') ? 'sq' : 'fold') : '', now = f ? (sq ? 'sq' : 'fold') : '';
+    if (was !== now) {
+      col.el.classList.toggle('folded', f); col.el.classList.toggle('squeezed', sq); delete col.el.dataset.fold; delete col.el.dataset.peek; col.el.removeAttribute('title');
+      if (now === 'fold') { col.el.dataset.fold = k; col.el.title = T('展开'); }
+      if (now === 'sq') { col.el.dataset.peek = k; col.el.title = T('窗口放不下，挤到了旁边 · 点一下先看它'); }
+    }
   }
+  // 分隔条：每个展开的列和它右边最近的展开列之间一根，挂在左边那一列的右边缘（在列与列的空隙里，跟着列一起动）；中间夹着窄条也照样连
+  keys.forEach((k, i) => {
+    const col = gcols.get(k), nx = keys.slice(i + 1).find((x) => !strip(x)), on = S >= 2 && !!nx && !strip(k);
+    let sp = col.el.querySelector(':scope > .gsplit');
+    if (!on) { if (sp) sp.remove(); return; }
+    if (!sp) { sp = document.createElement('div'); sp.className = 'gsplit'; sp.tabIndex = 0; sp.setAttribute('role', 'separator'); sp.setAttribute('aria-orientation', 'vertical'); col.el.appendChild(sp); }
+    const lab = T('拖动调宽，松手吸附到整格 · 双击恢复自动');
+    if (sp.dataset.a !== k || sp.dataset.b !== nx) { sp.dataset.a = k; sp.dataset.b = nx; }
+    if (sp.title !== lab) { sp.title = lab; sp.setAttribute('aria-label', lab); }
+    const av = [String(K.get(k)), '1', String(K.get(k) + K.get(nx) - 1)];
+    ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].forEach((a, j) => { if (sp.getAttribute(a) !== av[j]) sp.setAttribute(a, av[j]); });
+  });
   for (const [k, col] of gcols) if (!vis.has(k)) { col.el.remove(); gcols.delete(k); }
+  if (drag) dragPaint();                         // 正在拖：轮询重画了也保持手上的宽度
 }
 
 function match(v) { return filter === 'all' || (filter === 'busy' && v.live) || (filter === 'reply' && v.need === 'reply') || (filter === 'review' && v.need === 'review') || (filter === 'ask' && v.k === 'ask') || (filter === 'stop' && v.alert); }
@@ -1041,52 +1552,70 @@ const dotOf = (v) => (!v ? 'calm' : v.k === 'ask' || v.alert || v.need === 'repl
 const cardTitle = (c) => (c.s ? c.s.title : c.x ? c.x.title : c.p ? T('新任务') : '') || '';
 
 
-let prevHot = new Set();                   // 上一次画的时候「停住了要你跟进」的那些，用来发现新停住的
+let prevHot = new Set(), badgeN = -1;                   // 上一次画的时候「停住了要你跟进」的那些，用来发现新停住的
 function paint(st) {
   if (!st) return; last = st; HOME = st.home || HOME;
   paintLimits(st);
+  try { paintCrash(st); } catch (e) { console.error('crash', e); }
   // 墙上的旧位置要在这一轮改任何东西（筛选藏卡、换内容）之前量，不然量到的已经是新位置，什么都动不起来
-  const pre = mode === 'wall' && !first && !calm.matches ? new Map([...cards].filter(([, c]) => c.el.isConnected && !c.el.hidden && c.el.offsetParent).map(([id, c]) => [id, c.el.getBoundingClientRect()])) : null;
+  const pre = mode === 'wall' && !first && !calm.matches ? wallRects() : null;
   const stage = $('#stage'); const list = []; let nBusy = 0, nReply = 0, nReview = 0, nAsk = 0, nStop = 0, shown = 0; const hot = new Map();
+  const bySid = new Map(st.sessions.map((x) => [x.sid, x]));     // 撞车那一行按 sid 找对方的短名
   for (const s of st.sessions) {
     let c = cards.get(s.sid); if (!c) { c = { el: makeCard(s.sid) }; cards.set(s.sid, c); }
     if (sentAt[s.sid] && (s.status === 'busy' || ms(s.promptAt) >= sentAt[s.sid] - 3000)) { if (s.status !== 'busy' && s.done && ms(s.resultAt) > sentAt[s.sid]) delete sentAt[s.sid]; }
     c.s = s; const v = view(s); c.v = v; if (v.live) nBusy++; if (v.need === 'reply') nReply++; if (v.need === 'review') nReview++; if (v.k === 'ask') nAsk++;
     if (v.alert) { nStop++; hot.set(s.sid + '|' + s.alert.key, { title: s.title, why: v.why }); }
     const el = c.el; const cls = 'card s-' + v.k + (v.need ? ' s-' + v.need : v.quiet ? ' s-' + v.quiet : '') + (v.alert ? ' alert' : '') + (v.bg ? ' bg' : '') + (el.classList.contains('side') ? ' side' : ''); if (el.className !== cls) el.className = cls;
-    el.dataset.back = v.back ? '1' : '0';
+    const bk = v.back ? '1' : '0'; if (el.dataset.back !== bk) el.dataset.back = bk;
     const vis = mode === 'flow' || match(v); if (el.hidden === vis) el.hidden = !vis; if (vis) shown++;
     const tt = $('.title', el); if (tt.textContent !== s.title) tt.textContent = s.title;
     const tg = $('.tag', el); const tgv = s.provider === 'codex' ? 'Codex' : ''; if (tg.textContent !== tgv) { tg.textContent = tgv; tg.hidden = !tgv; }
     const mt = T(v.bg ? '后台在跑 · ' + dur(s.statusAt || s.resultAt, st.now) : v.k === 'busy' ? (v.why === 'stall' ? '运行中 · ' + Math.round((s.quiet || 0) / 60000) + ' 分钟没动静' : '运行中 · ' + dur(s.turnAt || s.promptAt, st.now))
       : v.k === 'stopped' ? '停住了 · ' + WHY[v.why] : v.k === 'done' ? v.label + ' · ' + when(s.resultAt, st.now, true) : v.label);
     setMeta($('.meta', el), mt);
+    setModel($('.mdl', el), s);
     const you = $('.you', el); const yk = s.prompt || '';
-    if (you.dataset.k !== yk) { you.dataset.k = yk; you.innerHTML = '<span class="who">' + T('你') + '</span>' + (s.prompt ? esc(cut(s.prompt, 400)) : T('还没给它派过活')); }
+    if (you.dataset.k !== yk) { you.dataset.k = yk; const auto = yk.startsWith(AUTO_MARK), said = auto ? T(autoBody(yk)) || yk : yk;
+      you.innerHTML = '<span class="who">' + T(auto ? '自动续跑' : '你') + '</span>' + (s.prompt ? esc(cut(said, 400)) : T('还没给它派过活')); }
     const cv = coverOf(s, v), hd = $('.head', el), ak = $('.ask', el), dn = $('.done', el);
     if (hd.textContent !== cv.head) hd.textContent = cv.head;
     if (ak.dataset.k !== cv.ask) { ak.dataset.k = cv.ask; ak.hidden = !cv.ask; ak.innerHTML = cv.ask ? '<b>↩</b>' + esc(cv.ask) : ''; }
+    paintClash($('.clash', el), s, bySid);
     const dl = v.need ? T(v.need === 'reply' ? '先放着' : '审完了') : ''; if (dn.textContent !== dl) dn.textContent = dl; if (dn.hidden === !!v.need) dn.hidden = !v.need;
-    const key = [v.k, s.status, s.resultAt, s.noteAt, s.ask ? JSON.stringify(s.ask) : '', s.screen || '', s.dialog ? JSON.stringify(s.dialog.options) : '', v.why, s.alert ? s.alert.key : '', v.alert].join('|');
+    const key = [v.k, s.status, s.resultAt, s.noteAt, s.ask ? JSON.stringify(s.ask) : '', s.screen || '', s.dialog ? JSON.stringify(s.dialog.options) : '', v.why, s.alert ? s.alert.key : '', v.alert,
+      v.need === 'review' && Array.isArray(s.wrote) && s.wrote.length ? JSON.stringify([s.wrote, s.wroteMore]) : ''].join('|');
     const body = $('.body', el);
     if (body.dataset.k !== key) { const keep = body.dataset.k && body.dataset.k.split('|')[0] === v.k ? body.scrollTop : 0; body.dataset.k = key; body.innerHTML = L(bodyHTML(s, v)); body.scrollTop = keep; }
     const tick = $('.tick', body);
     if (tick) { const tk = T(s.tool || '思考中') + (LANG === 'en' ? ' · step ' + s.steps : ' · 第 ' + s.steps + ' 步'); if (tick.textContent !== tk) tick.textContent = tk; }
-    const ta = $('textarea', el), bt = $('.send', el); const can = !!s.channel && v.k !== 'ask';
+    const rp = el._rp, ta = $('textarea', rp), bt = $('.send', rp); const can = !!s.channel && v.k !== 'ask';
     const ph = T(v.k === 'ask' ? '它在等你选，选完才能回话' : !s.channel ? '没对上它的终端标签，从菜单去终端里回' : v.k === 'busy' ? '它在忙，发了会排队' : '接着说，回车发送');
     if (ta.placeholder !== ph) ta.placeholder = ph;
     // 预判只给空闲、能回话的卡；刚回车发出去的 8 秒内不给（服务端的屏幕读数慢一两拍，别把上一轮的建议又摆出来）
     const sg = s.suggest && (s.status === 'idle' || s.status === 'shell') && can && !(sentAt[s.sid] && Date.now() - sentAt[s.sid] < 8000) ? s.suggest : null; c.sg = sg;
-    const sgEl = $('.sg', el), sgKey = sg ? JSON.stringify(sg.options) : '';
+    const sgEl = el._sg, sgKey = sg ? JSON.stringify(sg.options) : '';
     if (sgEl.dataset.k !== sgKey) {
       sgEl.dataset.k = sgKey; sgEl.hidden = !sgKey || !sg.options.length;
       sgEl.innerHTML = sg ? sg.options.map((o) => '<button class="chip" data-sg="' + o.n + '" title="' + esc(T('填进输入框，改完再发')) + '"><kbd>' + o.n + '</kbd><span>' + esc(o.label) + '</span></button>').join('') : '';
     }
-    const gh = $('.ghost', el), gtext = sg ? sg.ghost : '';
+    const au = can && s.auto && (s.status === 'idle' || s.status === 'shell') ? s.auto : null, apEl = el._ap;
+    const apSec = au && au.state === 'armed' ? Math.ceil(au.fireIn / 1000) : 0;
+    const apKey = au ? au.state + '|' + (au.text || au.why || '') + '|' + (au.basis || '') + '|' + apSec : '';
+    if (apEl.dataset.k !== apKey) {
+      apEl.dataset.k = apKey; apEl.hidden = !au;
+      // 重开前 ② v2（11/17 cc-board-9e 定）：一行里不放那句话。修法 f 以后每张卡发的都是同一句固定的话，写在行里不带信息，卡片宽度下还只露得出几个字；
+      // 会变的只有秒数和依据。会发的整句和依据放在整行的提示里（标签、秒数上都能触发）
+      apEl.title = au && au.state === 'armed' ? T('会发：') + T(autoBody(au.text)) + '\n' + T('依据（它预判你下一句会说的，只用来判断，不会发出去）：') + (au.basis || '') : '';
+      apEl.innerHTML = !au ? '' : au.state === 'armed'
+        ? '<span class="apw">' + T('自动接着做') + '</span><span class="apt">' + T(apSec > 0 ? apSec + ' 秒后发' : '排队中') + '</span><button data-ap="now">' + T('现在发') + '</button><button data-ap="cancel">' + T('不发了') + '</button>'
+        : '<span class="aph">' + esc(au.state === 'judging' ? T('在看要不要自动接着做…') : T('没自动接着做：') + T(au.why || '')) + '</span>';
+    }
+    const gh = $('.ghost', rp), gtext = sg ? sg.ghost : '';
     if ((gh.dataset.t || '') !== gtext) { gh.dataset.t = gtext; $('.gt', gh).textContent = gtext; }
     syncGhost(el);
-    if (document.activeElement !== ta) ta.disabled = !can;
-    bt.disabled = !can; $('.clip', el).disabled = !can;
+    if (document.activeElement !== ta && ta.disabled === can) ta.disabled = !can;
+    if (bt.disabled === can) bt.disabled = !can; const cl = $('.clip', rp); if (cl.disabled === can) cl.disabled = !can;
     list.push({ id: s.sid, el, rank: v.rank, t: v.t, i: list.length });
   }
   for (const p of st.pending || []) {
@@ -1099,7 +1628,7 @@ function paint(st) {
     c.v = { k: ask ? 'ask' : 'busy', label: ask ? '等你选' : '启动中' };
     const vis = mode === 'flow' || filter === 'all' || (ask ? filter === 'ask' : filter === 'busy'); if (vis) shown++;
     const key = (ask ? 'd:' + JSON.stringify(p.dialog.options) + p.dialog.question : 'boot:' + p.screen);
-    c.el.hidden = !vis; c.el.dataset.back = ask ? '0' : '1';
+    if (c.el.hidden === vis) c.el.hidden = !vis; const bk = ask ? '0' : '1'; if (c.el.dataset.back !== bk) c.el.dataset.back = bk;
     if (c.el.dataset.k !== key) { c.el.dataset.k = key; c.el.className = 'card ' + (ask ? 's-ask' : 's-busy') + (c.el.classList.contains('side') ? ' side' : '');
       c.el.innerHTML = L('<div class="chead"><span class="meta">' + (ask ? '等你选' : '启动中') + '</span>' + (p.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '</div><h2 class="title" style="cursor:default">' + esc(/^恢复/.test(p.prompt) ? cut(p.prompt, 40) : '新任务') + '</h2><p class="head">' + (ask ? '开工前要你先选一下' : '正在后台启动，几秒后出现在这里。') + '</p>' +
         '<p class="you" style="cursor:default"><span class="who">你</span>' + esc(p.prompt || '没写任务，空会话') + '</p><div class="body">' +
@@ -1117,15 +1646,15 @@ function paint(st) {
     c.x = x; nStop++; hot.set(id, { title: x.title, why: 'gone' });
     c.v = { k: 'stopped', label: '停住了', alert: true, why: 'gone' };
     const vis = mode === 'flow' || filter === 'all' || filter === 'stop'; if (vis) shown++;
-    c.el.hidden = !vis; c.el.dataset.back = '0'; const key = 'gone:' + x.lostAt;
+    if (c.el.hidden === vis) c.el.hidden = !vis; if (c.el.dataset.back !== '0') c.el.dataset.back = '0'; const key = 'gone:' + x.lostAt + (x.crash ? ':' + x.crash : ''); const gw = x.crash ? WHY_LONG.crash : WHY_LONG.gone;   // 一起退出的（闲着的也在）不说「做到一半」
     if (c.el.dataset.k !== key) { c.el.dataset.k = key; c.el.className = 'card s-stopped alert' + (c.el.classList.contains('side') ? ' side' : '');
-      c.el.innerHTML = L('<div class="chead"><span class="meta">停住了 · 进程退出</span>' + (x.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '</div><h2 class="title" style="cursor:default">' + esc(x.title || '') + '</h2><p class="head">' + WHY_LONG.gone + '</p>' +
-        '<p class="you" style="cursor:default"><span class="who">你</span>' + esc(cut(x.prompt || '没有记录到你说的话', 400)) + '</p><div class="body"><div class="why">' + WHY_LONG.gone + '</div>' +
+      c.el.innerHTML = L('<div class="chead"><span class="meta">停住了 · 进程退出</span>' + (x.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '</div><h2 class="title" style="cursor:default">' + esc(x.title || '') + '</h2><p class="head">' + gw + '</p>' +
+        '<p class="you" style="cursor:default"><span class="who">你</span>' + esc(cut(x.prompt || '没有记录到你说的话', 400)) + '</p><div class="body"><div class="why">' + gw + '</div>' +
         '<div class="row"><button class="bordered" data-x="revive">接回来</button><button class="plain" data-x="detail">看对话</button><button class="plain" data-x="ack">知道了</button></div></div>'); }
     list.push({ id, el: c.el, rank: 1, t: x.lostAt, i: list.length });
   }
   const keep = new Set(list.map((x) => x.id));
-  for (const [id, c] of cards) if (!keep.has(id)) { if (c.halo) c.halo.remove(); c.el.remove(); cards.delete(id); }
+  for (const [id, c] of cards) if (!keep.has(id)) { if (docked && docked.sid === id) undock(); if (c.halo) c.halo.remove(); c.el.remove(); cards.delete(id); }   // 弹层里正借着它的回话框：先收回，弹层底栏跟着收起
 
   // 排序：谁完成了谁到前面。正在卡片里打字时先不挪，免得字打一半卡片跑了。
   const typing = document.activeElement && document.activeElement.tagName === 'TEXTAREA' && document.activeElement.closest('.card');
@@ -1136,6 +1665,9 @@ function paint(st) {
   const moved = next.join() !== order.join(); order = next;
   if (mode === 'wall') {
     placeWall(stage, typing); if (pre) wallBefore = pre;              // 换位置、换列都滑过去（FLIP）：旧位置在 paint 开头量好了；新位置要等 layout() 清掉封面留下的内联样式之后再量
+  } else if (mode === 'org') {                                         // 架构视图：卡片照常算（状态、排位、顶栏计数都从它们来），只是收在看不见的 #stage 里；图在 paintOrg() 里画
+    for (const id of order) { const el = cards.get(id).el; if (el.parentNode !== stage) stage.appendChild(el); }
+    dropCols(stage);
   } else {
     for (const id of order) { const el = cards.get(id).el; if (el.parentNode !== stage) { el.classList.add('side'); stage.appendChild(el); } }   // 从墙的列里拿出来
     dropCols(stage);
@@ -1160,7 +1692,8 @@ function paint(st) {
   layout();
   if (wallBefore) { flipFrom(wallBefore); wallBefore = null; }
   if (focusNew && mode === 'wall') { const hit = st.sessions.find((x) => x.tmux === focusNew); if (hit) { wantFocus = hit.sid; focusNew = null; } }
-  if (wantFocus && cards.has(wantFocus)) { const ta = $('textarea', cards.get(wantFocus).el); if (ta && !ta.disabled) { ta.focus({ preventScroll: mode === 'flow' }); wantFocus = null; } }
+  followDetail();
+  if (wantFocus && cards.has(wantFocus)) { const wf = cards.get(wantFocus).el, ta = wf._rp && $('textarea', wf._rp); if (ta && !ta.disabled) { ta.focus({ preventScroll: mode === 'flow' }); wantFocus = null; } }
   let blank = $('.blank');
   if (!shown) { if (!blank) { blank = document.createElement('div'); blank.className = 'blank'; $('main').appendChild(blank); }
     blank.textContent = T(list.length ? '这个筛选下现在没有会话。' : '还没有会话。⌘N 开一个新任务，⌘T 直接开一个空会话。'); } else if (blank) blank.remove();
@@ -1176,13 +1709,39 @@ function paint(st) {
   const fk = JSON.stringify([segs, filter, mode]); const fe = $('#filters');
   if (fe.dataset.k !== fk) { fe.dataset.k = fk; fe.innerHTML = segs.map(([k, t, n, c]) => '<button data-f="' + k + '" class="' + c + '" aria-pressed="' + (mode === 'wall' && filter === k) + '"' + (mode === 'flow' && k !== 'all' && !n ? ' disabled' : '') + '>' + T(t) + '<b class="num">' + n + '</b></button>').join(''); }
   const ab = T('归档') + (st.archived ? ' ' + st.archived : ''); if ($('#archBtn').textContent !== ab) $('#archBtn').textContent = ab;
-  $('#hint').textContent = st.ghostty ? '' : T('Ghostty 没连上，暂时不能回你标签里的会话');
+  const hint = st.ghostty ? '' : T('Ghostty 没连上，暂时不能回你标签里的会话'); if ($('#hint').textContent !== hint) $('#hint').textContent = hint;
   const nTodo = nReply + nReview + nAsk + nStop;                  // 要你处理的：待跟进 + 待审阅 + 等你选 + 停住了
-  document.title = (nTodo ? '(' + nTodo + ') ' : '') + T('总控台');
-  tell({ type: 'badge', n: nTodo });
+  const ttl = (nTodo ? '(' + nTodo + ') ' : '') + T('总控台'); if (document.title !== ttl) document.title = ttl;
+  if (badgeN !== nTodo) { badgeN = nTodo; tell({ type: 'badge', n: nTodo }); }        // Dock 角标只在数变了时告诉外壳
   for (const n of st.notices || []) toast(n.text);
+  if (mode === 'org') { try { paintOrg(st); } catch (e) { console.error('org', e); } }   // 架构图出错不能拖垮整页（顶栏、标题、Dock 角标照常）；记成 error，界面测试的「页面没有报错」抓得到
   first = false;
 }
+// ── 一起退出（P0-0）：10 秒内 ≥ 3 个窗口一起退出时，墙顶一条横幅。「全部接回」交给服务端排队一个一个接（看负载、每个隔一阵），这里只照 st.crash 画状态 ──
+let crashK = '';
+function crashLine(c) {                  // → [主句, 小字, 按钮]；按钮 = [动作, 字, 样式]
+  const prog = '已接回 ' + c.done + ' / ' + c.n;
+  if (c.state === 'running') return ['正在一个一个接回', prog, [['stop', '停下', 'plain']]];
+  if (c.state === 'waiting') return ['负载 ' + c.load + '，等降到 ' + c.max + ' 以下再接', prog, [['stop', '停下', 'plain']]];
+  if (c.state === 'stopped') return [(c.why === 'load' ? '负载一直没降，停在第 ' : '停在第 ') + c.next + ' 个', prog, [['restore', '接着接回', 'bordered'], ['dismiss', '先不管', 'plain']]];
+  if (c.state === 'done') return [c.fail ? '接回了 ' + c.done + ' 个，' + c.fail + ' 个没接成' : c.n + ' 个都接回了', '', [['dismiss', '知道了', 'plain']]];
+  return [hm(c.at) + ' 有 ' + c.n + ' 个窗口一起退出了', '对话都还在，可以一个一个接回来', [['restore', '全部接回', 'bordered'], ['dismiss', '先不管', 'plain']]];
+}
+function paintCrash(st) {
+  const el = $('#crash'), c = st.crash;
+  if (!c) { if (!el.hidden) { el.hidden = true; el.innerHTML = ''; } crashK = ''; return; }
+  const [main, sub, btns] = crashLine(c), k = c.id + '|' + main + '|' + sub;
+  el.hidden = false; el.dataset.id = c.id; el.dataset.state = c.state;
+  if (k === crashK) return; crashK = k;
+  el.innerHTML = L('<span class="cx-i' + (c.state === 'running' || c.state === 'waiting' || c.state === 'done' ? ' ok' : '') + '" aria-hidden="true"></span><span class="cx-t"><b>' + esc(main) + '</b>' + (sub ? '<span class="cx-s">' + esc(sub) + '</span>' : '') + '</span>' +
+    '<span class="cx-b">' + btns.map(([a, t, cl]) => '<button class="' + cl + '" data-cx="' + a + '">' + t + '</button>').join('') + '</span>');
+}
+$('#crash').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-cx]'); if (!b) return; b.disabled = true;
+  let r; try { r = await api('/api/crash', { id: $('#crash').dataset.id, action: b.dataset.cx }); } catch (x) { r = { ok: false, error: '总控台服务没应答' }; }
+  if (!r.ok) { b.disabled = false; toast(r.error || '没成功'); }
+  crashK = ''; refresh();
+});
 let pollT, polling = false, synced = false;
 async function poll() {
   if (polling) return; polling = true; clearTimeout(pollT);
@@ -1260,10 +1819,10 @@ $('#aBody').addEventListener('click', async (e) => {
 // ── ⌘O 放大看一张卡（11/13 Khalil：「我放一个快捷键，比如 Command O，就可以直接把这个窗口放大看」）──
 // 放大看 = 点卡片右上角的「看对话」：同一个 openDetail()。再按一次 ⌘O、按 Esc、点窗口外面都收回。
 let hoverId = null;                                   // 鼠标停在哪张卡上；不在任何卡上时是 null
-document.addEventListener('mouseover', (e) => { const c = e.target.closest && e.target.closest('.card'); hoverId = c ? c.dataset.sid : null; });
+document.addEventListener('mouseover', (e) => { const c = e.target.closest && e.target.closest('.card, .onode'); hoverId = c ? c.dataset.sid : null; });   // 架构图里的方块也算：⌘O 放大鼠标停着的那个窗口
 // 按 ⌘O 时放大哪一张：返回那张卡的 id（cards 里的键），一张都不合适就返回 null
 function zoomTarget() {
-  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('.card');
+  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('.card, .dock[data-sid]');
   if (typing) return typing.dataset.sid;                 // 正在哪张卡里打字，就放大那张（手在键盘上，眼睛也在这里）
   if (hoverId && cards.has(hoverId)) return hoverId;     // 否则放大鼠标停着的那张
   return mode === 'flow' ? cur : null;                   // 封面里鼠标不在卡上：放大最前面那张
@@ -1273,25 +1832,87 @@ function zoomTarget() {
 // 大窗口：双击标题栏或空白处收回；双击正文里的字照旧选词（双击后选中了字就不收）。封面里双击两边的卡：第一下翻到前面，第二下放大。
 document.addEventListener('dblclick', (e) => {
   const d = $('#detail');
-  if (d.open) { if (e.target.closest('button')) return; if (e.target.closest('.dhead') || !String(getSelection()).trim()) d.close(); return; }
+  // 底部的回话框里双击照旧选词（textarea 里选中的字 getSelection() 读不到，不排除就会把大窗口关掉）；预览盖在上面时双击的不是大窗口
+  if (d.open) { if (e.target.closest('button, .dock') || $('#preview').open || Date.now() - orgZoomAt < 700) return; if (e.target.closest('.dhead') || !String(getSelection()).trim()) d.close(); return; }   // 架构图里单击就打开：双击的第二下落在大窗口外面，不能当成「收回」
   if (document.querySelector('dialog[open]') || e.target.closest('button, a, textarea, [data-path]')) return;
-  const card = e.target.closest('.card'); if (!card || !e.target.closest('.chead, .title, .head, .ask, .you')) return;
+  const card = e.target.closest('.card'); if (!card || !e.target.closest('.chead, .title, .head, .ask, .clash, .you')) return;
   if (zoomCard(card.dataset.sid)) getSelection().removeAllRanges();
 });
 function zoomCard(id) {
   const c = id && cards.get(id), o = c && (c.s || c.x); if (!o) return false;   // 「启动中」的卡还没有对话可看
   openDetail(o.sid, o.title); return true;
 }
-async function openDetail(sid, title) {
-  $('#dTitle').textContent = title; $('#dBody').innerHTML = L('<div class="empty">读取中…</div>'); const d = $('#detail'); if (!d.open) d.showModal();
+// 打开时从哪里看起（11/15 Khalil：「默认是从下面到结尾，但是我不知道从哪里开始」）：
+// 以前一律滚到最底，落在最后一条交付的中间、或几条交付连在一起的尾巴上，分不出新的从哪句起。
+// 现在：滚到最新那条交付（最后一轮里最后一条）的第一行，贴着窗口顶；那一轮还没有交付，就从那一轮「你说的话」看起。
+// 不垫空白：它后面不够长、顶不上去时（常见：最后一条只是一句【进展】），浏览器自己把位置夹在最底，上面照常露出前文，
+// 起点靠青色标签和左边的青线认。垫过空白试过（顶得上去），但短交付会变成一个几乎全空的大窗口，11/15 看截图后撤了。
+// quiet：大窗口开着时重读一遍（回了一句、它交付了新的），不先清成「读取中…」，标题不动
+async function openDetail(sid, title, quiet) {
+  const b = $('#dBody'), d = $('#detail'), req = ++detailReq, c0 = cards.get(sid);
+  detailSid = sid; detailAt = c0 && c0.s ? c0.s.resultAt || 0 : 0;
+  if (!quiet) { $('#dTitle').textContent = title; b.innerHTML = L('<div class="empty">读取中…</div>'); }
+  const typing = !d.open && !!(c0 && c0.el._rp && c0.el._rp.contains(document.activeElement));     // 正在这张卡里打字时按 ⌘O：showModal 会把焦点挪到关闭键上，挪进来以后放回框里
+  if (!d.open) d.showModal(); syncDock();
+  if (typing && docked && docked.sid === sid) { const ta = $('textarea', c0.el._rp); if (!ta.disabled) ta.focus({ preventScroll: true }); }
   let r; try { r = await api('/api/turns?n=15&sid=' + encodeURIComponent(sid)); } catch (e) { r = {}; }
-  const turns = r.turns || [], now = Date.now();
-  $('#dBody').innerHTML = L(turns.length ? turns.map((t) =>
-    '<section class="turn"><div class="m num" style="margin-top:0">你 · ' + when(t.at, now) + '</div><div class="q">' + esc(t.prompt) + '</div>' +
-    (t.results.length ? t.results.map((a) => '<div class="m num">交付 · ' + when(a.at, now) + (t.steps ? ' · 中间 ' + t.steps + ' 步没显示' : '') + '</div><div class="md">' + md(a.text) + '</div>').join('')
+  if (req !== detailReq || !d.open) return;        // 晚到的旧应答（中间又开了别的、或已经关了）不覆盖
+  const turns = r.turns || [], now = Date.now(), last = turns.length - 1;
+  b.innerHTML = L(turns.length ? turns.map((t, i) =>
+    '<section class="turn"' + (i === last && !t.results.length ? ' data-start' : '') + '><div class="m num" style="margin-top:0">你 · ' + when(t.at, now) + '</div><div class="q">' + esc(t.prompt) + '</div>' +
+    (t.results.length ? t.results.map((a, j) => { const nw = i === last && j === t.results.length - 1;      // nw = 最新那条交付
+      return '<div class="m num' + (nw ? ' new" data-start="' : '') + '">' + (nw ? '最新交付' : '交付') + ' · ' + when(a.at, now) + (t.steps ? ' · 中间 ' + t.steps + ' 步没显示' : '') + '</div><div class="md' + (nw ? ' new' : '') + '">' + md(a.text) + '</div>'; }).join('')
       : '<div class="m">这一轮还没有交付' + (t.steps ? '，已经做了 ' + t.steps + ' 步' : '') + '</div>') + '</section>').join('')
     : '<div class="empty">' + esc(r.error || '这段记录里没有找到你说的话。') + '</div>');
-  $('#dBody').scrollTop = $('#dBody').scrollHeight;
+  const start = b.querySelector('[data-start]'); if (!start) return;
+  b.scrollTop = Math.max(0, start.getBoundingClientRect().top - b.getBoundingClientRect().top + b.scrollTop - 10);   // 它在滚动内容里的位置，上面留 10px 呼吸；超过能滚的最大值时浏览器自己夹住
+}
+
+// ── 弹层里回话（11/17 Khalil：「预览的时候，还有把窗口放大的时候，我回复不了……我希望一边预览，一边回复」）──
+// 预览和放大看都是 showModal()：页面其余部分不能点，卡片上的回话框被挡在后面。
+// 做法：弹层开着时，把来源那张卡自己的回话框整个挪进弹层底部（自动续跑那一行 .ap、预判三条 .sg、输入框 .reply），关掉再还回卡片。
+// 不另做一个输入框：草稿、附件、灰字 Tab、打字取消自动续跑、发送和没发出去退回，都是卡片上那一套；弹层里写一半关掉，字还在卡片上。
+// 两个弹层叠着（大窗口里点了一个文件）时，回话框在最上面那个里；预览关掉，回到大窗口底部。
+let detailSid = null, detailAt = 0, detailReq = 0, previewSid = null, docked = null;     // docked = { sid, host }
+const canDock = (sid) => { const c = sid && cards.get(sid); return !!(c && c.s && c.el._rp); };    // 启动中、进程退出的卡没有回话框；归档列表里的会话不在墙上
+function undock() {
+  if (!docked) return; const { sid, host } = docked; docked = null;
+  const c = cards.get(sid), el = c && c.el, ae = document.activeElement, had = el && el._rp.contains(ae);
+  if (had) ae.blur();
+  if (el) { $('.body', el).after(el._ap, el._sg, el._rp); el._fit(); }      // 放回卡片里原来的位置：正文之后
+  for (const n of host.querySelectorAll(':scope > .note')) n.remove();
+  host.hidden = true; delete host.dataset.sid;
+}
+function syncDock() {
+  const p = $('#preview'), d = $('#detail');
+  const want = p.open ? (canDock(previewSid) ? { sid: previewSid, host: $('#pDock') } : null)
+    : d.open && canDock(detailSid) ? { sid: detailSid, host: $('#dDock') } : null;
+  if (docked && want && docked.sid === want.sid && docked.host === want.host) return;
+  const was = docked && cards.get(docked.sid), focused = !!(was && was.el._rp.contains(document.activeElement));
+  undock(); if (!want) return;
+  const c = cards.get(want.sid), el = c.el, h = want.host;
+  const to = $('.dto b', h); if (to) to.textContent = cardTitle(c);                      // 预览的标题是文件名：写明回给哪个窗口
+  h.append(el._ap, el._sg, el._rp); h.dataset.sid = want.sid; h.hidden = false; docked = want; el._fit();
+  if (focused && was === c) { const ta = $('textarea', el._rp); if (!ta.disabled) ta.focus({ preventScroll: true }); }   // 刚才正在这张卡里打字：换个弹层接着打
+}
+// 挪进弹层的东西点不到卡片上的点击处理：自动续跑的两个按钮、预判三条在这里接
+for (const h of [$('#dDock'), $('#pDock')]) {
+  h.addEventListener('click', (e) => {
+    if (!docked || docked.host !== h) return; const sid = docked.sid;
+    const apb = e.target.closest('[data-ap]'); if (apb) { autoOp(sid, apb.dataset.ap); return; }
+    const chip = e.target.closest('[data-sg]'); if (chip) pickChip(sid, +chip.dataset.sg);
+  });
+  h.addEventListener('drop', (e) => {                    // 文件拖到弹层底部：和拖到卡片上一样成附件
+    if (!docked || docked.host !== h) return; const el = cards.get(docked.sid).el, ta = $('textarea', el._rp);
+    const fs = [...((e.dataTransfer && e.dataTransfer.files) || [])]; if (!fs.length || ta.disabled) return;
+    e.preventDefault(); e.stopPropagation(); addFiles(el._att, $('.atts', el._rp), fs, el._mark); ta.focus();
+  });
+}
+$('#detail').addEventListener('close', () => { detailSid = null; detailReq++; syncDock(); });
+// 大窗口开着、它交付了新的一条：重读，翻到这条新交付（回了它一句以后，不用关了再开就看得到它的回答）
+function followDetail() {
+  if (!detailSid || !$('#detail').open) return; const c = cards.get(detailSid), at = c && c.s ? c.s.resultAt || 0 : 0;
+  if (at && at !== detailAt) openDetail(detailSid, '', true);
 }
 
 // ── 新任务：交给谁、用哪个模型、多大强度 ──
@@ -1360,12 +1981,21 @@ function clearPreview() {
   $('#pFrame').src = 'about:blank';
   for (const m of [$('#pVid'), $('#pAud')]) { m.pause(); m.removeAttribute('src'); m.load(); }
   $('#pImg').removeAttribute('src'); $('#pText').textContent = '';
+  if (gal) galStopAll(); gal = null; $('#pGal').hidden = true; $('#pGal').textContent = '';      // 图集整个拆掉：格子里、放大里的视频跟着没了，不在背后接着放
+  $('#pSync').hidden = true;
+}
+// 顶栏右边两个按钮跟着内容走：网页等是「在浏览器打开」；文件夹的图集改成「在访达中显示」；一批图拼成的图集没有对应的文件夹，两个都不要
+function setChrome(isGal, folder) {
+  const o = $('#pOpen'), rl = $('#pReload'); o.hidden = rl.hidden = isGal && !folder;
+  o.textContent = T(isGal ? '在访达中显示' : '在浏览器打开'); o.title = T(isGal ? '在访达里打开这个文件夹' : '在默认浏览器里打开（也可以 ⌘ 点链接）');
 }
 // 服务说能预览就按类型显示：网页、PDF 用 iframe；图、音视频用自己的元素；文本、Markdown 用服务读来的内容排版。说不能（文件夹、Word 这类）或不在了，就交给 /api/open
 async function openPreview(p) {
   let r; try { r = await api('/api/preview', { path: p }); } catch { toast('总控台服务没应答'); return; }
   if (!r.ok) { if (r.reason === 'not-ready') toast(r.error); else openPath(p); return; }
   clearPreview(); previewAt = p;
+  if (r.kind === 'gallery') { renderGallery(r, p); return; }       // 文件夹里多半是图 / 视频：排成格子墙，不跳去访达
+  setChrome(false);
   $('#pTitle').textContent = r.name; $('#pDir').textContent = tilde(r.dir); $('#pDir').title = r.dir; $('#pBody').dataset.kind = r.kind;
   const show = { page: '#pFrame', pdf: '#pFrame', image: '#pImg', video: '#pVid', audio: '#pAud', text: '#pText', markdown: '#pText' }[r.kind] || '#pFrame';
   for (const id of ['#pFrame', '#pImg', '#pVid', '#pAud', '#pText']) $(id).hidden = id !== show;
@@ -1376,22 +2006,440 @@ async function openPreview(p) {
     $('#pText').innerHTML = (r.kind === 'markdown' ? md(r.text) : '<pre class="raw">' + esc(r.text) + '</pre>') + (r.truncated ? L('<div class="cut">文件太大，只显示了开头 1 MB。</div>') : '');
     $('#pText').scrollTop = 0; wait.hidden = true;
   } else { const m = $(show); m.src = r.url; wait.hidden = true; }      // 音视频：给出控制条就算好了，不自动播放
-  const d = $('#preview'); if (!d.open) d.showModal();
+  const d = $('#preview'); if (!d.open) d.showModal(); syncDock();
 }
+// ── 图集（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」「打开预览的时候，我不想切到外面去看」）──
+// 两条路进来：点一个多半是图 / 视频的文件夹（openPreview 收到 kind: gallery）；点正文最上面的「图集」小按钮（openGallery，把这条交付里的图路径一起交给服务）。
+// 格子墙上点一张放大，← → 翻页；放大时按一下 Esc 先回格子墙，再按一下才关预览。
+let gal = null;                                              // { items, i }：i 是放大看的那一张，-1 = 在格子墙上
+const SVG_CH = (d) => '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+function renderGallery(r, folder) {
+  gal = { items: r.items, i: -1 };
+  const n = r.total || r.items.length;
+  $('#pBody').dataset.kind = 'gallery'; setChrome(true, folder);
+  for (const id of ['#pFrame', '#pImg', '#pVid', '#pAud', '#pText']) $(id).hidden = true;
+  $('#pWait').hidden = true;
+  $('#pTitle').textContent = folder ? r.name : T('图集');
+  $('#pDir').textContent = (folder ? tilde(r.dir) + ' · ' : '') + T('共 ' + n + ' 个'); $('#pDir').title = folder ? r.dir : '';
+  const g = $('#pGal'); g.hidden = false;
+  g.innerHTML = '<div class="ggrid">' + r.items.map((it, i) => it.kind === 'video' ? galVidTile(it, i) : '<button type="button" class="gi" data-gi="' + i + '" title="' + esc(it.name) + '"><span class="gt">' +
+    '<img loading="lazy" decoding="async" alt="" src="' + esc(it.url) + '"></span><span class="gn">' + esc(it.name) + '</span></button>').join('') + (r.truncated ? '<div class="cut">' + esc(T('只显示了前 ' + r.items.length + ' 个')) + '</div>' : '') + '</div>';
+  gal.dir = $('#pDir').textContent; galPaint();
+  const d = $('#preview'); if (!d.open) d.showModal(); syncDock();
+}
+// 视频格：整块是「播放 / 暂停」按钮（视频不带原生控制条：各家引擎点画面时行为不一样，自己管才可预期），底边一条进度，右上角另一个按钮才放大。两个按钮并排、不嵌套
+const SVG_SND = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2h2.4L7.6 2.6v8.8L4.4 8.8H2z"/><path d="M10 4.6a3.4 3.4 0 0 1 0 4.8"/></svg>';
+function galVidTile(it, i) {
+  return '<div class="gi gv" data-gv="' + i + '"><button type="button" class="gt" data-gp="' + i + '" aria-label="' + esc(T('播放') + ' ' + it.name) + '" title="' + esc(T('点一下在这里播放 / 暂停')) + '">' +
+    '<video playsinline preload="metadata" src="' + esc(it.url) + '#t=0.1"></video><span class="gsnd">' + SVG_SND + '</span><span class="gplay">▶</span><span class="gbar"><i></i></span></button>' +
+    '<button type="button" class="gz" data-gi="' + i + '" aria-label="' + esc(T('放大看')) + '" title="' + esc(T('放大看')) + '">' + SVG_CH('M8.5 2h3.5v3.5M5.5 12H2V8.5M12 2 8 6M2 12l4-4') + '</button>' +
+    '<span class="gn">' + esc(it.name) + '</span></div>';
+}
+// 正文里的「图集」小按钮：整条交付里提到的图路径一起问服务，服务按文件夹发钥匙，不在了的、不是图的自己跳过
+async function openGallery(paths) {
+  let r; try { r = await api('/api/preview', { paths }); } catch { toast('总控台服务没应答'); return; }
+  if (!r.ok) { toast(r.error || '这些图都打不开了'); return; }
+  clearPreview(); previewAt = ''; renderGallery(r, '');
+}
+// 放大看第 i 张。不出格子墙：放大层盖在上面，格子墙的滚动位置原样留着，回去时不用再找
+function galShow(i) {
+  if (!gal) return; galStopAll();      // 格子里在播的先停：放大层盖住它们，声音不该在底下接着放
+  const n = gal.items.length; gal.i = Math.max(0, Math.min(n - 1, i)); const it = gal.items[gal.i];
+  let lb = $('#pGal .lb'); if (!lb) { lb = document.createElement('div'); lb.className = 'lb'; $('#pGal').appendChild(lb); }
+  lb.innerHTML = '<div class="lbar"><button type="button" class="tbtn" data-gback title="' + esc(T('回到图集（Esc）')) + '">' + esc(T('图集')) + '</button>' +
+    '<span class="lcap"><b class="num">' + (gal.i + 1) + ' / ' + n + '</b>' + esc(it.name) + '</span>' +
+    '<button type="button" class="ib" data-gstep="-1" aria-label="' + esc(T('上一张')) + '" title="' + esc(T('上一张（←）')) + '"' + (gal.i === 0 ? ' disabled' : '') + '>' + SVG_CH('M8.5 2.5 4 7l4.5 4.5') + '</button>' +
+    '<button type="button" class="ib" data-gstep="1" aria-label="' + esc(T('下一张')) + '" title="' + esc(T('下一张（→）')) + '"' + (gal.i === n - 1 ? ' disabled' : '') + '>' + SVG_CH('M5.5 2.5 10 7l-4.5 4.5') + '</button></div>' +
+    '<div class="lstage">' + (it.kind === 'video' ? '<video controls playsinline preload="metadata" src="' + esc(it.url) + '"></video>' : '<img alt="" src="' + esc(it.url) + '">') + '</div>';
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();      // 焦点别留在被盖住的格子上：回车 / 空格会点到它
+}
+function galBack() {
+  if (!gal || gal.i < 0) return; const at = gal.i; gal.i = -1;
+  const lb = $('#pGal .lb'); if (lb) { for (const m of lb.querySelectorAll('video')) { m.pause(); m.removeAttribute('src'); m.load(); } lb.remove(); }
+  const t = $('#pGal [data-gi="' + at + '"]'); if (t) { t.focus({ preventScroll: true }); t.scrollIntoView({ block: 'nearest' }); }   // 回到刚才那一张上，键盘接着走
+}
+$('#pGal').addEventListener('click', (e) => {
+  const gp = e.target.closest('[data-gp]');
+  if (gp) { if (!e.target.closest('.gbar')) { const v = gp.querySelector('video'); if (v.paused || v.ended) v.play().catch(() => {}); else v.pause(); } return; }   // 进度条那一下是拖进度，不算点播放
+  const gi = e.target.closest('[data-gi]'); if (gi) { galShow(+gi.dataset.gi); return; }
+  const st = e.target.closest('[data-gstep]'); if (st) { if (gal) galShow(gal.i + +st.dataset.gstep); return; }
+  if (e.target.closest('[data-gback]') || e.target.classList.contains('lstage')) galBack();           // 「图集」按钮，或点放大图旁边的空白
+});
+// ── 图集里的视频在格子里播（11/17 Khalil：「这么大的已经够了，我可以直接看……甚至你可以加入这个同时播放」）──
+// 一个一个播：点一格就播它、别的格停下（各自带声，叠在一起听不清）。
+// 「同时播放」（gal.link）：全部从头一起播，只有一格出声；鼠标停在哪一格（或键盘聚焦哪一格）就换成哪一格出声。出声的那一格是领头，
+// 别的每 250 ms 和它对一次时间（差 0.15 秒以上才挪），换着听时停在同一处：对比音色时这一下就是 A/B。
+// 联动时停一格 = 全停、播一格 = 全播；短的先放完不算停（长的接着播）；全部放完回到「同时播放」，再点从头开始。
+const galVids = () => [...$('#pGal').querySelectorAll('.ggrid video')];
+const atEnd = (v) => v.currentTime >= v.duration;      // duration 还是 NaN 时为 false
+function galPaint() {
+  if (!gal) return; const vs = galVids(), k = gal.link;
+  for (const v of vs) { const t = v.closest('.gv'); t.classList.toggle('play', !v.paused); t.classList.toggle('aud', !!k && k.lead === v); t.querySelector('.gplay').textContent = v.paused ? '▶' : '❚❚'; }
+  const b = $('#pSync'); b.hidden = vs.length < 2; if (b.hidden) return;
+  b.textContent = T(!k ? '同时播放' : vs.some((v) => !v.paused) ? '全部暂停' : '全部继续');
+  $('#pDir').textContent = gal.dir + (k ? ' · ' + T('鼠标停在哪一格，就听哪一格') : '');
+}
+function galUnlink() { if (gal && gal.link) { clearInterval(gal.link.tick); gal.link = null; } }
+function galStopAll() { galUnlink(); for (const v of galVids()) v.pause(); galPaint(); }
+function galAlign() {
+  const k = gal && gal.link; if (!k || k.lead.paused || k.lead.ended) return; const t = k.lead.currentTime;
+  for (const v of galVids()) if (v !== k.lead && !v.paused && !v.ended && t < v.duration && Math.abs(v.currentTime - t) > 0.15) v.currentTime = t;
+}
+// 拖进度：联动时所有够长的一起挪（正在播就把挪回范围里的那几格也接着播）
+function galSeek(v, t) {
+  const k = gal && gal.link, on = k && galVids().some((o) => !o.paused);
+  for (const o of k ? galVids() : [v]) if (!(t > o.duration)) { o.currentTime = t; if (on && o.paused) o.play().catch(() => {}); }
+}
+$('#pSync').addEventListener('click', () => {
+  const vs = galVids(); if (!gal || vs.length < 2) return;
+  if (!gal.link) {
+    const lead = vs.includes(gal.hover) ? gal.hover : vs[0];       // 先出声的：最后指过的那一格，没指过就是第一格
+    gal.link = { lead, tick: setInterval(galAlign, 250) };
+    for (const v of vs) { v.preload = 'auto'; v.muted = v !== lead; v.currentTime = 0; v.play().catch(() => {}); }   // 都在这一次点击里 play()：引擎认这是他按的，后面换出声的格子不会被拦
+  } else if (vs.some((v) => !v.paused)) { for (const v of vs) v.pause(); }
+  else for (const v of vs) if (!atEnd(v)) v.play().catch(() => {});
+  galPaint();
+});
+const galV = (e) => (e.target instanceof HTMLVideoElement && e.target.closest('.ggrid') ? e.target : null);   // 只管格子里的；放大层里的视频有自己的控制条
+$('#pGal').addEventListener('play', (e) => {
+  const v = galV(e); if (!v || !gal) return;
+  if (gal.link) { for (const o of galVids()) if (o !== v && o.paused && !atEnd(o)) o.play().catch(() => {}); }
+  else { v.muted = false; for (const o of galVids()) if (o !== v) o.pause(); }
+  galPaint();
+}, true);                                                     // 媒体事件不冒泡，在捕获阶段接
+$('#pGal').addEventListener('pause', (e) => {
+  const v = galV(e); if (!v || !gal) return;
+  if (gal.link && !v.ended && !atEnd(v)) for (const o of galVids()) o.pause();     // 放完了也会先发一个 pause：那一格放完不算「停」
+  galPaint();
+}, true);
+$('#pGal').addEventListener('ended', (e) => {
+  const v = galV(e); if (!v || !gal) return;
+  if (gal.link && galVids().every((o) => o.paused)) galUnlink();
+  galPaint();
+}, true);
+$('#pGal').addEventListener('timeupdate', (e) => {
+  const v = galV(e); if (!v) return; const i = v.parentNode.querySelector('.gbar i');
+  if (i) i.style.transform = 'scaleX(' + (v.duration > 0 && isFinite(v.duration) ? Math.min(1, v.currentTime / v.duration) : 0) + ')';
+}, true);
+function galLead(e) {
+  const t = e.target.closest && e.target.closest('.gv'); if (!t || !gal) return; const v = t.querySelector('video'); gal.hover = v;
+  const k = gal.link; if (!k || k.lead === v) return;
+  k.lead = v; for (const o of galVids()) o.muted = o !== v; galPaint();
+}
+$('#pGal').addEventListener('pointerover', galLead); $('#pGal').addEventListener('focusin', galLead);
+$('#pGal').addEventListener('pointerdown', (e) => {
+  const bar = e.target.closest('.gbar'); if (!bar || !gal) return;
+  const v = bar.parentNode.querySelector('video');
+  const go = (x) => { const r = bar.getBoundingClientRect(); if (v.duration > 0) galSeek(v, Math.max(0, Math.min(1, (x - r.left) / r.width)) * v.duration); };
+  bar.setPointerCapture(e.pointerId); go(e.clientX);
+  bar.onpointermove = (m) => { if (m.buttons & 1) go(m.clientX); };
+  bar.onpointerup = bar.onpointercancel = () => { bar.onpointermove = bar.onpointerup = bar.onpointercancel = null; };
+});
+// Esc：放大时先回格子墙，不关预览。keydown 里拦（capture）；有的引擎拦不住 keydown 的默认动作、直接发 cancel，所以 cancel 里再接一次
+// galEsc 只在「这一次按键」所在的任务里为真（setTimeout 0 清掉）：同一次按键触发的 cancel 要拦，下一次按键的不能拦，否则回到格子墙后马上再按 Esc 关不掉
+let galEsc = false;
+document.addEventListener('keydown', (e) => {
+  if (!gal || gal.i < 0 || !$('#preview').open || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); galEsc = true; setTimeout(() => { galEsc = false; }, 0); galBack(); }
+  else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.target.closest('textarea')) { e.preventDefault(); galShow(gal.i + (e.key === 'ArrowRight' ? 1 : -1)); }   // 在底部回话框里打字时 ← → 是挪光标
+}, true);
+$('#preview').addEventListener('cancel', (e) => { if (gal && (gal.i >= 0 || galEsc)) { e.preventDefault(); galBack(); } });
 $('#pReload').addEventListener('click', () => { if (previewAt) openPreview(previewAt); });
 $('#pOpen').addEventListener('click', () => openPath(previewAt));
-$('#preview').addEventListener('close', clearPreview);   // 关掉就卸载：里面的音视频、动画不在背后接着放
+$('#preview').addEventListener('close', () => { clearPreview(); syncDock(); });   // 关掉就卸载：里面的音视频、动画不在背后接着放；回话框还给大窗口或卡片
 // 焦点在预览页里时 Esc 到不了这里：预览端口发 HTML 时加了一小段脚本，把页面没用掉的 Esc 发过来。只认这个 iframe 发的
 addEventListener('message', (e) => { if (e.source === $('#pFrame').contentWindow && e.data && e.data.ccb === 'preview-esc' && $('#preview').open) $('#preview').close(); });
 
+// ── 视图三：架构（11/16 khalil-a0）──
+// 11/15 的需求：把窗口之间的上下级画成一张关系图（各个窗口的职级、谁归谁管），一眼看清每个窗口在干嘛。
+// 谁归谁管只看服务端的 org（org.mjs 定）：这里照着画，不自己推上下级。org 没有、nodes 是空的、某个会话不在 nodes 里 → 都按「你直接带」画。
+// 形状：你 → 总管 → 每个项目一列（项目的分法、名字、顺序和墙上一样，卡片的 g）；列里：负责人和它下面的树 → 总管带 → 你直接带。
+// 每 1.2 秒轮询一次：方块按 sid 复用（.onode 包在 li.oli 里，下级在它的 ul.okids 里），位置不对才挪、字变了才改，悬停、滚动、正在飞的点都不被打断。
+// 线画在 SVG 里：一列一整条 path（一次描完，交叉处不会叠深），悬停时另一条 path 只描它往上到「你」的那一串。
+const ORG_ROLE = { chief: '总管', lead: '负责人', head: '分支', former: '前任' };
+const onodes = new Map(), ocols = new Map();      // sid → { li, box, kids, pt }；项目 key → 一列的元素
+let orgM = null, orgPrev = null, orgHot = null, orgZoomAt = 0;
+const setText = (el, t) => { if (el && el.textContent !== t) el.textContent = t; };
+// 窗口的短名：登记名末尾括号里的那个（「总指挥 · Fable（khalil-a5）」→ khalil-a5）；没有就用短的登记名，再没有用标题
+function shortName(s) {
+  if (!s) return '';
+  const r = String(s.regName || '').trim(), m = r.match(/[（(]([^（）()]{1,24})[）)]\s*$/);
+  return m ? m[1] : r && r.length <= 24 ? r : cut(s.title || r || String(s.sid || '').slice(0, 8), 20);
+}
+const agoText = (t, now) => { const s = Math.max(0, (now - t) / 1000); return s < 90 ? '刚刚' : s < 3600 ? Math.round(s / 60) + ' 分钟前' : s < 86400 ? Math.round(s / 3600) + ' 小时前' : Math.round(s / 86400) + ' 天前'; };
+const ctxText = (n) => '上下文 ' + (n >= 1e4 ? (n / 1e4).toFixed(1).replace(/\.0$/, '') + ' 万' : String(Math.round(n)));      // 英文由 RULES 换成 275k context
+// 把 /api/state 整理成要画的样子。不改 org 的结论，只决定画在哪：上级是总管的不画在总管下面（总管在最上面），分到各列的「负责人」「总管带」
+function orgModel(st) {
+  const O = st && st.org && typeof st.org === 'object' ? st.org : {}, N = O.nodes && typeof O.nodes === 'object' ? O.nodes : {};
+  const S = new Map((st.sessions || []).map((s) => [s.sid, s]));
+  const nd = (sid) => (N[sid] && typeof N[sid] === 'object' ? N[sid] : {});
+  const chief = typeof O.chief === 'string' && S.has(O.chief) ? O.chief : null;
+  const role = (sid) => (sid === chief ? 'chief' : ['lead', 'head', 'former'].includes(nd(sid).role) ? nd(sid).role : 'member');
+  const boss = (sid) => { const b = nd(sid).boss; return sid !== chief && typeof b === 'string' && b !== sid && S.has(b) ? b : null; };
+  const up = new Map();                              // 画在谁下面
+  for (const sid of S.keys()) { const b = boss(sid); if (b && b !== chief) up.set(sid, b); }
+  for (const sid of [...up.keys()]) { const seen = new Set([sid]); let x = sid; while (up.has(x)) { const b = up.get(x); if (seen.has(b)) { up.delete(x); break; } seen.add(b); x = b; } }   // 服务端拆过圈，这里再兜一次底
+  const top = (sid) => { let x = sid; while (up.has(x)) x = up.get(x); return x; };
+  const sec = (sid) => (role(sid) === 'lead' ? 'lead' : chief && boss(sid) === chief ? 'chief' : 'you');
+  // 同一个上级下面的先后（11/16 第二轮）：前任最后；其余按状态分档——要你动手的（琥珀）→ 在跑 → 待审阅 → 其余，同一档按开的先后。
+  // 分支负责人（11/17 Khalil：「固定在我们架构里比较靠上方的位置」）排在最前面，不跟着状态挪：它是总指挥下面固定的一条分支，他常点它派活
+  // 「N 件事等你」那几件要在各组最上面一眼看到；状态没变时顺序不变（档位只跟着状态变），所以不会每次轮询都跳
+  const tier = (sid) => { const v = (cards.get(sid) || {}).v, d = dotOf(v); return d === 'act' ? 0 : d === 'busy' ? 1 : d === 'review' ? 2 : 3; };
+  const rank = (a, b) => (role(b) === 'head') - (role(a) === 'head') || (role(a) === 'former') - (role(b) === 'former') || tier(a) - tier(b) || (S.get(a).startedAt || 0) - (S.get(b).startedAt || 0) || (a < b ? -1 : 1);
+  const kids = new Map(), under = new Map(), colOf = new Map(), cols = new Map();
+  for (const [k, b] of up) { if (!kids.has(b)) kids.set(b, []); kids.get(b).push(k); }
+  for (const l of kids.values()) l.sort(rank);
+  for (const sid of S.keys()) { const b = boss(sid); if (b) under.set(b, (under.get(b) || 0) + 1); }
+  const inOrder = new Set(order), ids = order.filter((id) => S.has(id)).concat([...S.keys()].filter((id) => !inOrder.has(id)));
+  for (const id of ids) {
+    if (id === chief) continue;
+    const c0 = cards.get(top(id)), g = (c0 && c0.g) || OTHER_P;          // 下级跟着它的根走，树不拆开
+    colOf.set(id, g.key);
+    if (!cols.has(g.key)) cols.set(g.key, { key: g.key, name: g.name, n: 0, lead: [], chief: [], you: [] });
+    const c = cols.get(g.key); c.n++; if (!up.has(id)) c[sec(id)].push(id);
+  }
+  for (const c of cols.values()) for (const k of ['lead', 'chief', 'you']) c[k].sort(rank);
+  return { S, nd, chief, gen: chief && Number.isFinite(O.gen) ? O.gen : null, role, boss, up, kids, under, sec, top, colOf, cols: [...cols.values()] };
+}
+// 「消息飞过去」：和上一次轮询比，哪个窗口的哪个发信人的最近一条变新了。第一次载入（a 是 null）、上一次还不在的窗口都不算（它们的旧消息不是刚到的）
+function orgFlights(a, b) {
+  const out = [], seen = new Set(); if (!a || !b) return out;
+  const nodes = (x) => (x && x.org && x.org.nodes && typeof x.org.nodes === 'object' ? x.org.nodes : {}), A = nodes(a), B = nodes(b), since = (Number(a.now) || 0) - 10000;   // 新出现的发信人：比上一次轮询早 10 秒以内的才算（服务读记录慢一两拍）
+  for (const [to, x] of Object.entries(B)) {
+    const p = A[to]; if (!p || typeof p !== 'object' || !x || !Array.isArray(x.from)) continue;
+    const was = new Map((Array.isArray(p.from) ? p.from : []).filter((f) => Array.isArray(f) && typeof f[0] === 'string').map((f) => [f[0], Number(f[2]) || 0]));
+    for (const f of x.from) {
+      if (!Array.isArray(f) || typeof f[0] !== 'string' || !f[0] || f[0] === to || seen.has(f[0] + '>' + to)) continue;
+      const t = Number(f[2]) || 0, w = was.get(f[0]);
+      if (w === undefined ? t > since : t > w) { seen.add(f[0] + '>' + to); out.push({ from: f[0], to }); }
+    }
+  }
+  return out;
+}
+function orgNode(sid) {
+  let x = onodes.get(sid); if (x) return x;
+  const li = document.createElement('li'); li.className = 'oli'; li.dataset.sid = sid;
+  li.innerHTML = '<div class="onode" tabindex="0" role="button"><div class="o1"><span class="meta" aria-hidden="true"></span><span class="ot"></span><span class="orole" hidden></span><span class="obr"></span></div>' +
+    '<div class="o2"><b class="ow"></b><span class="os"></span></div><div class="o3"></div></div><ul class="okids"></ul>';
+  x = { li, box: li.firstChild, kids: li.lastChild, pt: 0 }; x.box.dataset.sid = sid; onodes.set(sid, x); return x;
+}
+// 让 ul 里正好是这几个窗口、按这个顺序；位置对的不动（挪动会打断悬停和焦点）
+function orgPlace(ul, sids) {
+  const els = sids.map((sid) => orgNode(sid).li);
+  els.forEach((el, i) => { if (ul.children[i] !== el) ul.insertBefore(el, ul.children[i] || null); });
+  while (ul.children.length > els.length) ul.lastElementChild.remove();
+}
+// 悬停时的依据：一句人话
+function orgWhy(sid, M, st) {
+  const x = M.nd(sid), role = M.role(sid), b = M.boss(sid), bn = b ? shortName(M.S.get(b)) : '';
+  if (role === 'chief') return T('总管，直接归你');
+  if (role === 'lead') return T(b ? '项目负责人，归总管' : '项目负责人，你直接带');
+  if (role === 'head') return T(!b ? '分支负责人，你直接带' : b === M.chief ? '分支负责人，归总管' : '分支负责人，归 ' + bn);
+  if (!b) return T('没有窗口在管它，你自己在带');
+  if (role === 'former') return T('已交接给 ' + bn);
+  if (x.handed) return T('原来听前任的，换代后跟着岗位归 ' + bn);
+  if (x.via === 'spawn') return T(bn + ' 开的窗口');
+  // msg：n / last 是上级发给它的；report（服务端 7c622fb 起单独标）：规则第 3 步的兜底，它一直在向负责人交东西，n / last 是它发给上级的。界面不再自己拿 from 去猜
+  if (x.via === 'msg' && x.n > 0 && x.last > 0) return T('最近 ' + x.n + ' 条消息来自 ' + bn + '，最近一条 ' + agoText(x.last, st.now));
+  if (x.via === 'report' && x.n > 0 && x.last > 0) return T('一直在向 ' + bn + ' 交东西（' + x.n + ' 条，最近一条 ' + agoText(x.last, st.now) + '）');
+  return T('归 ' + bn + ' 管');
+}
+// 第三行：短名（和标题不一样时：「khalil-p2 派的」、悬停的依据都用短名称呼窗口）· 模型 · 上下文 · 几个子 agent 在跑 · 这一轮谁派的（只在跑的时候写）
+function orgMeta(s, v, M) {
+  const m = modelName(s.model), f = M.nd(s.sid).for, sn = shortName(s), t = String(s.title || '');
+  return [sn && !t.includes(sn) ? sn : '', s.provider === 'codex' ? ['Codex', m ? m.name : ''].filter(Boolean).join(' ') : m ? m.name + (m.ver ? ' ' + m.ver : '') : '',
+    typeof s.ctx === 'number' && s.ctx > 0 ? T(ctxText(s.ctx)) : '',
+    s.sub > 0 ? T(s.sub + ' 个子 agent 在跑') : '',
+    !v.live ? '' : f === 'you' ? T('你派的') : typeof f === 'string' && f !== s.sid && M.S.has(f) ? T(shortName(M.S.get(f)) + ' 派的') : ''].filter(Boolean).join(' · ');
+}
+// 一个窗口的方块。状态的 class 和墙上卡片同一套（s-busy、alert、bg…），点和颜色、呼吸动画都照搬墙上的样式
+function orgBox(sid, M, st) {
+  const x = orgNode(sid), b = x.box, s = M.S.get(sid), c = cards.get(sid), v = (c && c.v) || view(s), role = M.role(sid);
+  const cls = 'onode s-' + v.k + (v.need ? ' s-' + v.need : v.quiet ? ' s-' + v.quiet : '') + (v.alert ? ' alert' : '') + (v.bg ? ' bg' : '') + (role === 'former' ? ' former' : '') +
+    (b.classList.contains('hot') ? ' hot' : '') + (b.classList.contains('ping') ? ' ping' : '');
+  if (b.className !== cls) b.className = cls;
+  setText($('.ot', b), s.title || '');
+  const tag = ORG_ROLE[role] || '', rl = $('.orole', b); setText(rl, tag ? T(tag) : ''); if (rl.hidden === !!tag) rl.hidden = !tag;
+  const nk = M.under.get(sid) || 0;
+  setText($('.obr', b), [role === 'chief' && M.gen ? T('第 ' + M.gen + ' 代') : '', nk ? T('带 ' + nk + ' 个') : ''].filter(Boolean).join(' · '));
+  const cv = coverOf(s, v); setText($('.ow', b), T(v.label)); setText($('.os', b), (v.need === 'reply' && cv.ask) || cv.head || '');
+  setText($('.o3', b), orgMeta(s, v, M));
+  const why = orgWhy(sid, M, st); if (b.dataset.why !== why) b.dataset.why = why;
+  const al = [s.title, tag ? T(tag) : '', T(v.label), why].filter(Boolean).join(' · '); if (b.getAttribute('aria-label') !== al) b.setAttribute('aria-label', al);
+}
+function orgCol(c) {
+  let x = ocols.get(c.key);
+  if (!x) {
+    const el = document.createElement('section'); el.className = 'ocol'; el.dataset.key = c.key;
+    el.innerHTML = '<svg class="olines" width="1" height="1" aria-hidden="true"><path class="eb"/><path class="eh"/><path class="sb"/><path class="sh"/></svg><div class="ghead" role="heading" aria-level="2"></div><div class="obody"></div>';
+    x = { el, svg: el.children[0], head: el.children[1], body: el.children[2], g: {} }; [x.base, x.hot, x.sb, x.sh] = x.svg.children;
+    for (const k of ['lead', 'chief', 'you']) { const g = document.createElement('div'); g.className = 'ogrp'; g.dataset.g = k; g.innerHTML = (k === 'lead' ? '' : '<div class="olab num"></div>') + '<ul class="otree"></ul>'; x.g[k] = { el: g, lab: g.querySelector('.olab'), ul: g.querySelector('.otree') }; }
+    ocols.set(c.key, x);
+  }
+  const h = esc(T(c.name)) + '<b class="num">' + c.n + '</b>'; if (x.head.innerHTML !== h) x.head.innerHTML = h;
+  const gs = ['lead', 'chief', 'you'].filter((k) => c[k].length).map((k) => x.g[k].el);
+  gs.forEach((el, i) => { if (x.body.children[i] !== el) x.body.insertBefore(el, x.body.children[i] || null); });
+  while (x.body.children.length > gs.length) x.body.lastElementChild.remove();
+  if (c.chief.length) setText(x.g.chief.lab, T('总管带 · ' + c.chief.length));
+  if (c.you.length) setText(x.g.you.lab, T('你直接带 · ' + c.you.length));
+  for (const k of ['lead', 'chief', 'you']) orgPlace(x.g[k].ul, c[k]);
+  return x;
+}
+function orgSkel() {
+  const O = $('#org'); if (O.firstChild) return O;
+  O.innerHTML = '<div class="otop"><div class="oyou"><b></b><span class="oyn num"></span><span class="oyn2 num"></span></div><i class="ovl o1l"></i><ul class="ochief"></ul><i class="ovl o2l"></i></div>' +
+    '<div class="oscroll"><div class="orow"><svg class="obus" width="1" height="1" aria-hidden="true"><path class="base"/><path class="hot"/></svg></div></div>' +
+    '<div class="ofx" aria-hidden="true"></div><div id="otip" role="tooltip" hidden></div>';
+  $('.oyou b', O).textContent = T('你');
+  $('.oscroll', O).addEventListener('scroll', () => { orgLines(); orgTip(); }, { passive: true });   // 横着滚：总线跟着 trunk 的位置重画
+  return O;
+}
+// 「你」第一行（11/16 第二轮）：在跑的数青色、等你的数琥珀色（状态色，不是新颜色）；数是 0 时不包那一层，不着色
+function orgYouLine(n, run, act) {
+  const num = (t, cls, k) => (k > 0 ? esc(T(t)).replace(/^(\d+)/, '<b class="' + cls + '">$1</b>') : esc(T(t)));
+  return [esc(T(n + ' 个窗口')), num(run + ' 个在跑', 'orun', run), act > 0 ? num(act + ' 件事等你', 'oact', act) : esc(T('没有事等你'))].join(' · ');
+}
+function paintOrg(st) {
+  const O = orgSkel(), M = orgM = orgModel(st);
+  for (const [sid, x] of onodes) if (!M.S.has(sid)) { clearTimeout(x.pt); x.li.remove(); onodes.delete(sid); }
+  if (orgHot && !M.S.has(orgHot)) orgHot = null;
+  // 你：一句平常话。在跑 = 墙上的「运行中」（含后台在跑），等你 = 要你处理的那一类（等你选、停住了、待跟进：琥珀色的那些），和墙上「按状态」的第一列同一个判断
+  let nRun = 0, nAct = 0; for (const sid of M.S.keys()) { const v = (cards.get(sid) || {}).v; if (!v) continue; if (v.live) nRun++; if (dotOf(v) === 'act') nAct++; }
+  const y1 = $('.oyou .oyn', O), yl = orgYouLine(M.S.size, nRun, nAct); if (y1.dataset.k !== yl) { y1.dataset.k = yl; y1.innerHTML = yl; }
+  let nDirect = 0; for (const sid of M.S.keys()) if (!M.boss(sid)) nDirect++;            // 没有窗口在管的（总管、没有总管时的负责人也算）；两个数加起来是窗口数
+  setText($('.oyou .oyn2', O), T(nDirect + ' 个你直接带') + ' · ' + T((M.S.size - nDirect) + ' 个有窗口在带'));
+  for (const sid of M.S.keys()) orgBox(sid, M, st);
+  O.classList.toggle('nochief', !M.chief); O.classList.toggle('nocols', !M.cols.length);
+  orgPlace($('.ochief', O), M.chief ? [M.chief] : []);
+  const row = $('.orow', O), els = [$('.obus', row), ...M.cols.map((c) => orgCol(c).el)];
+  for (const [k, c] of ocols) if (!M.cols.some((x) => x.key === k)) { c.el.remove(); ocols.delete(k); }
+  els.forEach((el, i) => { if (row.children[i] !== el) row.insertBefore(el, row.children[i] || null); });
+  for (const sid of M.S.keys()) orgPlace(onodes.get(sid).kids, M.kids.get(sid) || []);
+  orgMark(); orgFit();
+  const fl = orgFlights(orgPrev, st); orgPrev = { now: st.now, org: st.org };
+  for (const f of fl) orgFly(f.from, f.to);
+}
+// 悬停 / 聚焦的那个窗口往上到「你」的一串：途经的方块、它在哪一列、要不要经过总管和列上面那条总线
+function orgChain() {
+  const M = orgM, r = { on: new Set(), path: false, viaChief: false, col: null, sec: null, root: null };
+  if (!M || !orgHot || !M.S.has(orgHot)) return r;
+  let x = orgHot; r.on.add(x); while (M.up.has(x)) { x = M.up.get(x); r.on.add(x); }
+  if (x === M.chief) { r.viaChief = true; return r; }                       // 悬停的就是总管：只有它到你这一段
+  r.root = x; r.sec = M.sec(x); r.col = M.colOf.get(x); r.path = r.sec !== 'you';       // 你直接带的：不经过总管那条线
+  r.viaChief = r.path && !!M.chief && M.boss(x) === M.chief; if (r.viaChief) r.on.add(M.chief);
+  return r;
+}
+function orgMark() {
+  const O = $('#org'); if (!orgM || !O.firstChild) return;
+  const ch = orgChain();
+  for (const [sid, n] of onodes) n.box.classList.toggle('hot', ch.on.has(sid));
+  $('.oyou', O).classList.toggle('hot', ch.on.size > 0);
+  $('.ovl.o1l', O).classList.toggle('hot', ch.viaChief); $('.ovl.o2l', O).classList.toggle('hot', ch.path);
+  for (const [k, c] of ocols) for (const g of ['chief', 'you']) c.g[g].lab.classList.toggle('hot', ch.col === k && ch.sec === g);
+}
+function orgLines() {
+  const O = $('#org'), M = orgM; if (mode !== 'org' || !M || !O.firstChild) return;
+  const R = 5, px = (n) => Math.round(n) + 0.5, ch = orgChain(), hotKid = new Set([...ch.on].filter((k) => M.up.has(k)));
+  for (const [key, c] of ocols) {
+    if (!c.el.isConnected) continue;
+    const cr = c.el.getBoundingClientRect(); let base = '', hot = '';
+    for (const [p, ks] of M.kids) {
+      if (M.colOf.get(p) !== key || !ks.length) continue;
+      const pr = onodes.get(p).box.getBoundingClientRect(), x = px(pr.left - cr.left + 11), y0 = Math.round(pr.bottom - cr.top);       // 肘形线：从上级方块底边往下，拐到下级第一行的高度
+      const pts = ks.map((k) => { const r = onodes.get(k).box.getBoundingClientRect(); return [k, px(r.top - cr.top + 17), Math.round(r.left - cr.left)]; });
+      const [, yl, xl] = pts[pts.length - 1];
+      base += 'M' + x + ' ' + y0 + 'V' + (yl - R) + 'Q' + x + ' ' + yl + ' ' + (x + R) + ' ' + yl + 'H' + xl;
+      for (const [, y, cx] of pts.slice(0, -1)) base += 'M' + x + ' ' + y + 'H' + cx;
+      for (const [k, y, cx] of pts) if (hotKid.has(k)) hot += 'M' + x + ' ' + y0 + 'V' + (y - R) + 'Q' + x + ' ' + y + ' ' + (x + R) + ' ' + y + 'H' + cx;
+    }
+    if (c.base.getAttribute('d') !== base) c.base.setAttribute('d', base);
+    if (c.hot.getAttribute('d') !== hot) c.hot.setAttribute('d', hot);
+    // 列头那根竖线（11/16 第二轮）：和总线的落线是同一根（同一个 x），从列顶往下：一小段横线接进列名，再接到负责人和「总管带」的每个方块（标题那一行）。「你直接带」不接：线只画真实的汇报关系
+    const rx = c.el.parentNode.getBoundingClientRect().left, sx = px(cr.left - rx + 11) - (cr.left - rx), hr = c.head.getBoundingClientRect();
+    const col = M.cols.find((x) => x.key === key), seat = col ? [...col.lead, ...col.chief] : [];
+    const stops = [[px(hr.top - cr.top + hr.height / 2), 18, null], ...seat.map((sid) => { const r = onodes.get(sid).box.getBoundingClientRect(); return [px(r.top - cr.top + 17), Math.round(r.left - cr.left), sid]; })];
+    const [ly, lx] = stops[stops.length - 1], el = (y, x) => 'V' + (y - R) + 'Q' + sx + ' ' + y + ' ' + (sx + R) + ' ' + y + 'H' + x;
+    let sb = 'M' + sx + ' 0' + el(ly, lx), sh = '';
+    for (const [y, x] of stops.slice(0, -1)) sb += 'M' + sx + ' ' + y + 'H' + x;
+    const hs = ch.path && ch.col === key && stops.find((p) => p[2] === ch.root);
+    if (hs) sh = 'M' + sx + ' 0' + el(hs[0], hs[1]);
+    if (c.sb.getAttribute('d') !== sb) c.sb.setAttribute('d', sb);
+    if (c.sh.getAttribute('d') !== sh) c.sh.setAttribute('d', sh);
+  }
+  // 上面的线落到一条横着的总线上，每列一根短竖线落到列头（总线跟着上面那根线的位置走：列多了横着滚时它不动）
+  const row = $('.orow', O), bus = $('.obus', row), cols = [...row.children].filter((el) => el.classList.contains('ocol'));
+  let bd = '', hd = '';
+  if (cols.length && getComputedStyle(bus).display !== 'none') {
+    const rr = row.getBoundingClientRect(), tv = $('.ovl.o2l', O).getBoundingClientRect(), tx = px(tv.left - rr.left), xs = cols.map((el) => px(el.getBoundingClientRect().left - rr.left + 11));
+    bd = 'M' + Math.min(xs[0], tx) + ' 0.5H' + Math.max(xs[xs.length - 1], tx) + xs.map((x) => 'M' + x + ' 0V22').join('');
+    const i = ch.path ? cols.findIndex((el) => el.dataset.key === ch.col) : -1;
+    if (i >= 0) hd = 'M' + tx + ' 0.5H' + xs[i] + 'M' + xs[i] + ' 0V22';
+  }
+  if (bus.firstChild.getAttribute('d') !== bd) bus.firstChild.setAttribute('d', bd);
+  if (bus.lastChild.getAttribute('d') !== hd) bus.lastChild.setAttribute('d', hd);
+}
+// 列宽：一屏放得下就把各列撑开到最宽 380 px；放不下每列至少 248 px，列区域横着滚
+function orgFit() {
+  const O = $('#org'); if (mode !== 'org' || !O.firstChild) return;
+  const n = Math.max(1, $('.orow', O).querySelectorAll(':scope > .ocol').length), w = Math.max(248, Math.min(380, Math.floor(($('.oscroll', O).clientWidth - 32 - (n - 1) * 28) / n))) + 'px';
+  if ($('.orow', O).style.getPropertyValue('--ocw') !== w) $('.orow', O).style.setProperty('--ocw', w);
+  orgLines(); orgTip();
+}
+// 悬停 / 聚焦时的依据，贴在方块下面（放不下就放上面）；样子和卡片里的提示条一样（--raised + --shadow-pop）
+function orgTip() {
+  const tip = $('#otip'); if (!tip) return;
+  const n = orgHot && onodes.get(orgHot);
+  if (!n || !n.box.isConnected || !n.box.dataset.why) { if (!tip.hidden) tip.hidden = true; return; }
+  const why = n.box.dataset.why;       // 折行时不把短名从连字符处拆开（khalil- / 18）：带连字符的词整个不折，字本身一个不改
+  if (tip.dataset.k !== why) { tip.dataset.k = why; tip.innerHTML = esc(why).replace(/[A-Za-z0-9][\w.]*(?:-[\w.]+)+/g, '<span class="nw">$&</span>'); }
+  tip.hidden = false;
+  // 骑在被悬停方块的下边线上、靠右（11/16 第二轮：以前贴在方块下面，盖住下一个方块的标题或组名）：竖直方向以下边线为中心，
+  // 往下最多 10 px（= 两个方块之间的空隙），所以碰不到下一个方块；写不下时折成两行，多出来的往上长，盖的是它自己右下角
+  const or = $('#org').getBoundingClientRect(), r = n.box.getBoundingClientRect(), mw = Math.max(140, Math.round(r.width - 20)) + 'px';
+  if (tip.style.maxWidth !== mw) tip.style.maxWidth = mw;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.round(Math.max(8, r.right - 10 - w - or.left)) + 'px';
+  tip.style.top = Math.round(r.bottom + Math.min(h / 2, 10) - h - or.top) + 'px';
+}
+function orgSetHot(sid) { if (orgHot === sid) return; orgHot = sid; orgMark(); orgLines(); orgTip(); }
+const orgSeen = (el) => { const r = el.getBoundingClientRect(), m = $('main').getBoundingClientRect(); return r.bottom > m.top && r.top < m.bottom && r.right > m.left && r.left < m.right; };
+// 一条消息飞过去：青色小点从发信人飞到收信人（一次性，约 700ms），到了收信人的描边亮一下。发信人不在画面里、或减少动态效果时不飞，只亮
+function orgFly(from, to) {
+  const t = onodes.get(to); if (!t || !t.box.isConnected) return;
+  const ping = () => { t.box.classList.add('ping'); clearTimeout(t.pt); t.pt = setTimeout(() => t.box.classList.remove('ping'), 900); };
+  const f = onodes.get(from), O = $('#org');
+  if (calm.matches || !f || !f.box.isConnected || !orgSeen(f.box)) { ping(); return; }
+  const or = O.getBoundingClientRect(), at = (r) => 'translate(' + Math.round(r.left + r.width / 2 - or.left) + 'px,' + Math.round(r.top + r.height / 2 - or.top) + 'px)';
+  const dot = document.createElement('i'); dot.className = 'ofly'; $('.ofx', O).appendChild(dot);
+  const an = dot.animate([{ transform: at(f.box.getBoundingClientRect()) }, { transform: at(t.box.getBoundingClientRect()) }], { duration: 700, easing: 'cubic-bezier(.45,0,.2,1)' });
+  an.onfinish = () => { dot.remove(); ping(); }; an.oncancel = () => dot.remove();
+}
+function orgReset() {
+  const O = $('#org'); for (const x of onodes.values()) clearTimeout(x.pt);
+  O.textContent = ''; O.className = ''; onodes.clear(); ocols.clear(); orgM = null; orgPrev = null; orgHot = null;
+}
+{
+  const O = $('#org');
+  O.addEventListener('mouseover', (e) => { const b = e.target.closest('.onode'); if (b) orgSetHot(b.dataset.sid); });
+  O.addEventListener('mouseout', (e) => { const to = e.relatedTarget; if (to && to.closest && to.closest('#org .onode')) return; const f = document.activeElement; orgSetHot(f && O.contains(f) && f.classList.contains('onode') ? f.dataset.sid : null); });
+  O.addEventListener('focusin', (e) => { const b = e.target.closest('.onode'); if (b) orgSetHot(b.dataset.sid); });
+  O.addEventListener('focusout', (e) => { const to = e.relatedTarget; if (!(to && to.closest && to.closest('#org .onode'))) orgSetHot(null); });
+  O.addEventListener('click', (e) => { const b = e.target.closest('.onode'); if (!b) return; orgZoomAt = Date.now(); zoomCard(b.dataset.sid); });     // 点一个窗口 = 放大看它（和墙上 ⌘O / 双击封面同一个大窗口）
+  O.addEventListener('keydown', (e) => { const b = e.target.closest && e.target.closest('.onode'); if (!b || (e.key !== 'Enter' && e.key !== ' ')) return; e.preventDefault(); orgZoomAt = Date.now(); zoomCard(b.dataset.sid); });
+}
+
 // ── 全局 ──
+// 预览是从哪张卡打开的：点在卡片上就是那张；点在大窗口里是大窗口那张；点在预览自己里面（Markdown 里的路径）沿用原来那张
+const fromSid = (t) => { const c = t.closest('.card'); if (c) return c.dataset.sid; if (t.closest('#preview')) return previewSid; return t.closest('#detail') ? detailSid : null; };
 document.addEventListener('click', (e) => {
   const f = e.target.closest('[data-path]');
-  if (f) { e.preventDefault(); const p = f.dataset.path; if (!e.metaKey && !p.endsWith('/')) openPreview(p); else openPath(p); return; }
+  if (f) { e.preventDefault(); const p = f.dataset.path; if (!e.metaKey) { previewSid = fromSid(e.target); openPreview(p); } else openPath(p); return; }     // 文件夹也先问服务：多半是图 / 视频的当图集看，其余服务回 no-preview，照旧交给访达
+  const gc = e.target.closest('[data-gallery]'); if (gc) { e.preventDefault(); let ps = []; try { ps = JSON.parse(gc.dataset.gallery); } catch {} if (ps.length) { previewSid = fromSid(e.target); openGallery(ps); } return; }
   const c = e.target.closest('[data-close]'); if (c) { c.closest('dialog').close(); return; }
-  if (e.target.tagName === 'DIALOG') { e.target.close(); return; }             // 点弹层外面关掉
+  if (e.target.tagName === 'DIALOG') { if (Date.now() - orgZoomAt > 700) e.target.close(); return; }             // 点弹层外面关掉（架构图里双击一个窗口时，第二下不算）
   const nw = e.target.closest('[data-newin]'); if (nw) { openNew({ key: nw.dataset.newin, name: nw.dataset.newname }); return; }
   const fd = e.target.closest('[data-fold]'); if (fd) { toggleFold(fd.dataset.fold); return; }
+  const pk = e.target.closest('[data-peek]'); if (pk) { peek = pk.dataset.peek; paint(last); return; }     // 挤到旁边的窄条：这次先给它让一格
   const dg = e.target.closest('[data-go]'); if (dg) { go(dg.dataset.go, true); return; }
   const fb = e.target.closest('[data-f]');
   if (fb && !fb.disabled) {
@@ -1417,7 +2465,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   const typing = /^(TEXTAREA|INPUT|SELECT)$/.test((document.activeElement || {}).tagName || '');
-  if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.isComposing && /^[1-3]$/.test(e.key) && !document.querySelector('dialog[open]')) {     // 在输入框里打字时数字就是数字（中文输入法还要拿它选字）
+  if (mode !== 'org' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.isComposing && /^[1-3]$/.test(e.key) && !document.querySelector('dialog[open]')) {     // 在输入框里打字时数字就是数字（中文输入法还要拿它选字）；架构图里没有输入框，不填
     const id = zoomTarget(); if (id && pickChip(id, +e.key)) { e.preventDefault(); return; }
   }
   if (mode === 'flow' && !document.querySelector('dialog[open]') && (!typing || e.altKey)) {
@@ -1433,15 +2481,17 @@ $('main').addEventListener('wheel', (e) => {
   wheelAcc += horiz ? e.deltaX : e.deltaY;
   if (Math.abs(wheelAcc) > 70) { step(wheelAcc > 0 ? 1 : -1); wheelAcc = 0; wheelAt = now; }
 }, { passive: false });
-addEventListener('resize', () => layout());
+addEventListener('resize', () => { layout(); if (mode === 'wall' && last && !drag && slotsAcross() !== wallS) paint(last); if (mode === 'org') orgFit(); });   // 横向格数变了（窗口拉宽拉窄）：马上重新分格子，不等下一次轮询
 document.addEventListener('mousedown', (e) => { if (native && e.button === 0 && e.target.closest('[data-drag]') && !e.target.closest('button,a,input,textarea,nav,.seg')) tell({ type: e.detail === 2 ? 'zoom' : 'drag' }); });
-function setBy(k) { groupBy = k === 'status' ? 'status' : 'project'; store('ccb_by', groupBy); document.body.classList.toggle('bystatus', groupBy === 'status'); document.querySelectorAll('#by button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.by === groupBy))); if (last) paint(last); }
+function setBy(k) { groupBy = k === 'status' ? 'status' : 'project'; store('ccb_by', groupBy); wallKeys = []; document.body.classList.toggle('bystatus', groupBy === 'status'); document.querySelectorAll('#by button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.by === groupBy))); if (last) paint(last); }
 function setRows(n) { rows = n === 3 ? 3 : 2; store('ccb_rows', rows); document.documentElement.style.setProperty('--rows', rows); document.querySelectorAll('#rows button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.rows === rows))); }
 function setMode(m) {
-  mode = m === 'wall' ? 'wall' : 'flow'; store('ccb_mode', mode); document.body.className = mode; filter = 'all';
+  mode = m === 'wall' || m === 'org' ? m : 'flow'; store('ccb_mode', mode); filter = 'all';
+  document.body.className = mode + (groupBy === 'status' ? ' bystatus' : '');   // 整个重写（顺手清掉 grouped / cols，下面重画时再加）；bystatus 照 groupBy 补回去，不然重开或换一次视图，「按状态」时卡上的项目名就不显示了（11/16）
+  orgReset();                                                     // 架构图每次切进来重新画；上一次的状态不留（第一次载入不算「刚收到消息」）
   document.querySelectorAll('#modes button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
-  for (const c of cards.values()) { c.el.classList.remove('side'); c.el.style.cssText = ''; c.el.hidden = false; }
-  order = []; first = true; if (last) paint(last);
+  for (const c of cards.values()) { c.el.classList.remove('side'); c.el.style.cssText = ''; c.el.hidden = false; c.el._fd = undefined; }
+  order = []; first = true; wallKeys = []; if (last) paint(last);
 }
 window.ccbNew = () => openNew();
 localizeStatic(); setRows(rows); setBy(groupBy); setMode(mode);

@@ -8,12 +8,13 @@
 
 // ───────────── 档位表：模型和强度的唯一出处 ─────────────
 // 开窗口的一方（比如 Fable 的总指挥窗口）只说「这活属于哪一档」，不再自己拼模型和强度；以后换模型只改这一张表。
-// 数值照 11/15 总指挥手选的三条线定：界面 opus/high、识谱 fable/high、图片转谱 opus/high。
-// 强度最高只到 high。xhigh / max 要调用方显式传 effort，档位不替他选最贵的。
+// 11/15 定（三个选项里选了「三档都加一档」）：每一档的强度比「够用」高一档。
+// 之前（11/15 下午，额度用光之后）是 heavy / standard 用 high、light 用 medium，护栏写的是「档位不给 xhigh / max」；现在护栏收到只剩 max：
+// 档位最高给到 xhigh，max 要调用方显式传 effort，档位不替他选最贵的一档。省额度靠的是按难度把活派给便宜一档的模型，不靠压强度。
 export const TIERS = {
-  heavy:    { claude: { model: 'fable',  effort: 'high' },   codex: { effort: 'high' },   use: '设计判断、算法难点、没有现成答案的调查、审修复本身' },
-  standard: { claude: { model: 'opus',   effort: 'high' },   codex: { effort: 'medium' }, use: '写代码、改界面、补测试、合入补丁、验收别人的交付、接手一条线' },
-  light:    { claude: { model: 'sonnet', effort: 'medium' }, codex: { effort: 'low' },    use: '读文件做汇总、盘点状态、照写死的步骤跑一遍并报结果、改文案' },
+  heavy:    { claude: { model: 'fable',  effort: 'xhigh' },  codex: { effort: 'high' },   use: '设计判断、算法难点、没有现成答案的调查、审修复本身' },
+  standard: { claude: { model: 'opus',   effort: 'xhigh' },  codex: { effort: 'medium' }, use: '写代码、改界面、补测试、合入补丁、验收别人的交付、接手一条线' },
+  light:    { claude: { model: 'sonnet', effort: 'high' },   codex: { effort: 'low' },    use: '读文件做汇总、盘点状态、照写死的步骤跑一遍并报结果、改文案' },
 };
 export const TIER_NAMES = Object.keys(TIERS);
 
