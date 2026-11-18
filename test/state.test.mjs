@@ -105,7 +105,7 @@ mk('intr', 'idle', [R.human('重构播放器'), R.tool(), R.result(), R.interrup
 mk('intrIdle', 'idle', [R.human('查一下日志'), R.final('日志里没有报错。'), R.interrupt()]);
 mk('compact', 'busy', [R.human('做发布片'), R.tool(), R.result(), R.compact(), R.tool()]);
 mk('unfin', 'idle', [R.human('修那个缺陷'), R.note('我看一下。'), as(R.tool(), 'claude-sonnet-5-5', 'medium'), R.result()]);   // 窄卡里胶囊最长的真实组合：Sonnet · medium（15 个字符）；11/15 线上 Sonnet · xhigh 被截断，夹具里没有这么长的才没测出来
-mk('recover', 'idle', [R.human('跑回归'), R.tool(), R.apiErr('rate_limit', LIMIT), R.notif(), R.tool(), R.result(), R.final('回归全过。')]);
+mk('recover', 'idle', [{ type: 'repl-mode', replMode: true }, R.human('跑回归'), R.tool(), R.apiErr('rate_limit', LIMIT), R.notif(), R.tool(), R.result(), as(R.final('回归全过。'), 'claude-opus-5-5', 'xhigh')]);   // Code Mode 窗口（11/17）：卡片的模型胶囊前面多一段「Code」（`--ui` 也有，界面测试用它）
 mk('relimit', 'idle', [R.human('整理素材'), R.tool(), R.apiErr('rate_limit', LIMIT), R.notif(), R.apiErr('rate_limit', LIMIT)]);
 mk('hint', 'busy', [R.human('做个小工具\n\n<system-reminder>这条任务是从总控台新建的，工作目录是主目录。</system-reminder>'), R.tool()], { tmux: 'ccb-hint01' });   // 开在 tmux 里：架构场景里它是负责人 peerDone 开出来的（spawn.json）
 mk('bg', 'shell', [R.human('跑一遍回归'), R.tool(), R.result(), R.final('回归在后台跑，跑完我再报。')]);
@@ -229,6 +229,39 @@ if (process.argv.includes('--ui')) {
   insertRecs('tidyWork', 3, [W('Edit', CO('demo', 'ui.html')), R.result(), W('Write', CO('demo', 'test', 'ui-check.mjs')), R.result()]);
   insertRecs('run', 3, [W('Edit', CO('demo', 'server.mjs')), R.result()]);
 }
+// ── Code Mode（11/17）专用的会话（`--ui` 不放：界面测试按卡数断言；界面用的是 recover）──
+// test/codemode.jsonl：一份真实 Code Mode 记录（Claude Code 2.1.327，三段脚本 + 一轮后台脚本 + 一轮不带工具）去掉内容后的样子，test/codemode-fixture.mjs 生成。
+// @CM@ 换成假主目录里的 cm 文件夹；时间整体挪到 T 附近（先后、虚拟调用比前一条早几毫秒的那几处原样保留）。第 0–64 条 = 三段脚本做完、交付；第 0–59 条 = 第三段脚本跑完、还没交付
+const CMDIR = path.join(FH, 'cm');
+function cmRecs(from, to) {
+  const L = fs.readFileSync(path.join(HERE, 'codemode.jsonl'), 'utf8').trim().split('\n').slice(from, to).map((l) => JSON.parse(l.split('@CM@').join(CMDIR)));
+  const ts0 = L.filter((d) => d.timestamp).map((d) => Date.parse(d.timestamp)), shift = T + 1500 - Math.min(...ts0);
+  for (const d of L) if (d.timestamp) d.timestamp = new Date(Date.parse(d.timestamp) + shift).toISOString();
+  T = Math.max(...ts0) + shift; return L;
+}
+const RM = (on) => ({ type: 'repl-mode', replMode: on });
+if (!process.argv.includes('--ui')) {
+  mk('cmReal', 'idle', cmRecs(0, 65), { claude: true });         // 三段脚本：4 次模型调用（REPL ×3 + Poll）+ 15 次脚本里的工具（Write 新建、Edit、Write 覆盖）；交付了
+  mk('cmBusy', 'busy', cmRecs(0, 60));                             // 同上，停在第三段脚本跑完、还没交付：卡片上的当前工具是第三段 REPL 的说明，不是 Poll、不是脚本里最后那个 Read
+  const v = cmRecs(0, 81).filter((d) => d.isVirtual);              // 交付以后才写进来的一条虚拟调用（写的先后和时间的先后不一定一致）：卡片照旧是交付
+  mk('cmLate', 'idle', [RM(true), R.human('看一下'), R.final('看过了，没问题。'), { ...v[4], timestamp: ts() }, { ...v[5], timestamp: ts() }]);
+  mk('cmOff', 'idle', [RM(true), R.human('改个东西'), R.tool('Edit'), R.result(), RM(true), R.final('改好了。'), RM(false)], { claude: true });   // 中途在 Claude Code 里关掉：最后一条是 false
+  mk('cmQuote', 'idle', [R.human('存一下设置'), X('mcp__x__save', { record: { type: 'repl-mode', replMode: true } }), R.result(), R.tool('Edit'), R.result(), R.final('存好了。')], { claude: true });   // 别的记录里嵌着一个 repl-mode 对象：不算
+  mk('cmBad', 'idle', [RM(true), R.human('改'), R.tool('Edit'), R.result(), R.final('改好了。')], { claude: true });   // 是 Code Mode，但接回之前把记录改成读不了：落到「不带」
+  // 下面三组是评审（11/17 23:5x）补的守卫。服务一块读 64 字节（env 的 CCBOARD_REPL_CHUNK），[7m] 的接回都走跨块那几步
+  // cmEdge：最后一条 repl-mode（true）后面补一行（服务不认的类型，apply 跳过），这一行连换行共 54 字节 → 从文件尾往前第一个 64 字节的边界
+  // 正好切在 repl-mode 那一行结尾前 10 字节处（「…"replMo|de":true}」）：前一块拿到的是半行，要接上后一块开头那半行才读得出 true
+  mk('cmEdge', 'idle', [RM(true), R.human('改个东西'), R.tool('Edit'), R.result(), R.final('改好了。'), RM(true)], { claude: true });
+  { const pad0 = JSON.stringify({ type: 'x-pad', p: '' }); fs.appendFileSync(S.cmEdge.file, JSON.stringify({ type: 'x-pad', p: 'x'.repeat(53 - pad0.length) }) + '\n'); }
+  // cmNest：真的 repl-mode true 在前，后面一条工具调用的 input 里嵌着 { type: 'repl-mode', replMode: false }：嵌着的不算，仍是 Code Mode
+  mk('cmNest', 'idle', [RM(true), R.human('存一下设置'), X('mcp__x__save', { record: { type: 'repl-mode', replMode: false } }), R.result(), R.tool('Edit'), R.result(), R.final('存好了。')], { claude: true });
+  // vA：Code Mode 脚本里跑的 git commit（虚拟 Bash，照夹具里一条真的虚拟 Bash 改 input 和 cwd）；vB 普通 Edit 写同一个仓库 → 两边撞车
+  fs.mkdirSync(PJ('repoV', '.git'), { recursive: true });
+  const vb = JSON.parse(JSON.stringify(v.find((d) => d.type === 'assistant' && d.message.content[0].name === 'Bash')));
+  vb.message.content[0].input = { command: 'cd ' + PJ('repoV') + ' && git add -A && git commit -m x' }; vb.cwd = CWD;
+  mk('vA', 'idle', [RM(true), R.human('提交一下'), X('REPL', { code: 'await Bash({ command: "git commit" })', description: 'Commit' }), { ...vb, timestamp: ts() }, R.result(), R.final('提交好了。')]);
+  mk('vB', 'idle', [R.human('改 repoV'), W('Edit', PJ('repoV', 'v.js')), R.result(), R.final('改好了。')]);
+}
 // 一个已经退出的进程的号：它发过的消息认不出是哪个活会话，服务把它做成 gone 项（'gone:<pid>'）
 const DEAD_PID = spawnSync('/usr/bin/true').pid;
 // ── 架构场景（`--ui` 也放，界面测试和之后的「架构」界面都用它）：只在现有会话的记录里补消息、在 tmux 名上记谁开的，卡片的标题、状态、交付都不变 ──
@@ -305,7 +338,7 @@ process.stdin.on('data', (b) => { const k = b.toString();
 setTimeout(() => process.exit(0), 25000);
 `);
 // 第一行先把这次启动收到的全部参数追加进 argv.all（每个参数以 \0 结尾，一次启动以 \036\0 收尾）：[9]「不改脑子」按它逐次核对。放在最前面，下面 exec 去向导 / 信任框 / --resume 的也记得到
-fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV.all"; done; printf \'\\036\\0\' >> "$T_ARGV.all"\ncase "$*" in *ONBOARD*|*LOGINSCREEN*|*--resume*) exec "' + NODE + '" "' + path.join(BIN, 'onboard.mjs') + '" "$@";; esac\ncase "$*" in *TRUSTME*|*OTHERDIALOG*) exec "' + NODE + '" "' + path.join(BIN, 'dialog.mjs') + '" "$@";; esac\n/bin/pwd > "$T_ARGV.cwd"\nprintf "%s|%s" "$CLAUDE_CODE_OAUTH_TOKEN" "$CCBOARD_ACCOUNT" > "$T_ARGV.env"\n/usr/bin/env | /usr/bin/grep -E "^(CLAUDE|CCBOARD|TMUX=)" > "$T_ARGV.cenv"\nprintf "%s|%s|%s" "${CLAUDE_CODE_CHILD_SESSION-unset}" "${CLAUDE_PID-unset}" "${CCBOARD_DATA-unset}" > "$T_ARGV.child"\n: > "$T_ARGV"\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV"; done\ncase "$*" in *PW-*) /bin/sleep 90;; *) /bin/sleep 25;; esac\n', { mode: 0o755 });
+fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV.all"; done; printf \'\\036\\0\' >> "$T_ARGV.all"\nf=$(/usr/bin/mktemp "$T_ARGV.cm.XXXXXX") && printf \'%s\\0\' "${CLAUDE_CODE_EXPERIMENTAL_CODE_MODE-unset}" "$@" > "$f"\ncase "$*" in *ONBOARD*|*LOGINSCREEN*|*--resume*) exec "' + NODE + '" "' + path.join(BIN, 'onboard.mjs') + '" "$@";; esac\ncase "$*" in *TRUSTME*|*OTHERDIALOG*) exec "' + NODE + '" "' + path.join(BIN, 'dialog.mjs') + '" "$@";; esac\n/bin/pwd > "$T_ARGV.cwd"\nprintf "%s|%s" "$CLAUDE_CODE_OAUTH_TOKEN" "$CCBOARD_ACCOUNT" > "$T_ARGV.env"\n/usr/bin/env | /usr/bin/grep -E "^(CLAUDE|CCBOARD|TMUX=)" > "$T_ARGV.cenv"\nprintf "%s|%s|%s" "${CLAUDE_CODE_CHILD_SESSION-unset}" "${CLAUDE_PID-unset}" "${CCBOARD_DATA-unset}" > "$T_ARGV.child"\n: > "$T_ARGV"\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV"; done\ncase "$*" in *PW-*) /bin/sleep 90;; *) /bin/sleep 25;; esac\n', { mode: 0o755 });
 // 假的 security：钥匙串里只有 ccboard-account-good（token 是 tok-good）。服务和会话里那层 zsh 都经 CCBOARD_SECURITY 用它，真钥匙串碰不到
 fs.writeFileSync(path.join(BIN, 'security'), '#!/bin/sh\nsvc=; w=0\nwhile [ $# -gt 0 ]; do case "$1" in -s) svc="$2"; shift;; -w) w=1;; esac; shift; done\n[ "$svc" = ccboard-account-good ] || exit 44\n[ $w = 1 ] && echo tok-good\nexit 0\n', { mode: 0o755 });
 // 假的判断命令（CCBOARD_JUDGE）：读 stdin，记下参数和收到的原文（J_LOG 一行一次），按原文里的记号答，格式和 claude -p --output-format json 一样
@@ -337,7 +370,7 @@ fs.writeFileSync(path.join(BIN, 'lsof-fast'), '#!/bin/sh\nprintf "p100000\\nf3\\
 fs.writeFileSync(path.join(BIN, 'ps-slow'), '#!/bin/sh\n/bin/sleep 0.3\necho $(( $4 + 1 ))\n', { mode: 0o755 });
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
-const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'TMUX' && k !== 'TMUX_PANE')), CCBOARD_TMUX_SOCKET: TSOCK, CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_PID: '424242', HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_LIMITS_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), CCBOARD_TIDY_SMART_MS: String(H / 4), CCBOARD_JUDGE: path.join(BIN, 'judge'), J_LOG: JLOG, PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV, CCBOARD_SECURITY: path.join(BIN, 'security'), CCBOARD_CHIEF_MS: '1000',
+const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'TMUX' && k !== 'TMUX_PANE')), CCBOARD_TMUX_SOCKET: TSOCK, CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_PID: '424242', HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_LIMITS_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), CCBOARD_TIDY_SMART_MS: String(H / 4), CCBOARD_JUDGE: path.join(BIN, 'judge'), J_LOG: JLOG, PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV, CCBOARD_SECURITY: path.join(BIN, 'security'), CCBOARD_CHIEF_MS: '1000', CCBOARD_REPL_CHUNK: '64',
   CCBOARD_AUTO_JUDGE: path.join(BIN, 'autojudge'), AJ_LOG: AJLOG, CCBOARD_AUTO_DELAY_MS: '3000', CCBOARD_AUTO_SETTLE_MS: '300', CCBOARD_AUTO_GAP_MS: '500', CCBOARD_AUTO_CFG_MS: '300',
   // 一起退出、全部接回（P0-0）：快照里的 log show 换成假命令；负载读这个文件；接回的间隔 2 秒、负载每 0.5 秒看一次、最多等 3 秒
   CCBOARD_LOGSHOW: path.join(BIN, 'logshow'), CCBOARD_LOADAVG_FILE: path.join(ROOT, 'loadavg'), CCBOARD_RESTORE_GAP_MS: '2000', CCBOARD_LOAD_POLL_MS: '500', CCBOARD_LOAD_WAIT_MS: '3000',
@@ -717,6 +750,22 @@ try {
   append('wPeer', R.peer('win-w7', '再改 p3'), W('Edit', PJ('repoP', 'p3.js')), R.result(), R.final('p3 改好了。\n\n【待审阅】p3 改好了'));
   s1 = await until(async () => { const r = await get('/api/state'); return /p3\.js/.test(wl(r, 'wPeer')) ? r : null; }, 8000) || await get('/api/state');
   ok(wl(s1, 'wPeer') === 'repoP/p3.js×1', 'wPeer：交付之后别的窗口又发来一条 = 新的一轮，只列 p3.js', wr(s1, 'wPeer'));
+
+  console.log('\n[1e] Code Mode（11/17）：codeMode 取记录里最后一条 repl-mode；脚本里真正跑的工具（<synthetic> + isVirtual）进步数和「这一轮改了哪些文件」，不改这一轮的状态和卡片上的当前工具');
+  st = await get('/api/state');
+  const cm = (n) => by(st, n) || {};
+  ok(cm('cmReal').codeMode === true && cm('cmBusy').codeMode === true && cm('cmLate').codeMode === true && cm('recover').codeMode === true, 'codeMode：记录里有 repl-mode true 的四个会话是 true（真实记录 cmReal / cmBusy，手搭的 cmLate、recover）', JSON.stringify(['cmReal', 'cmBusy', 'cmLate', 'recover'].map((n) => cm(n).codeMode)));
+  ok(cm('cmOff').codeMode === false && cm('cmQuote').codeMode === false && cm('done').codeMode === false && cm('cmBad').codeMode === true, 'codeMode：中途关掉的（最后一条 false）是 false；别的记录里嵌着的 repl-mode 对象不算；普通会话 false', JSON.stringify(['cmOff', 'cmQuote', 'done', 'cmBad'].map((n) => cm(n).codeMode)));
+  ok(cm('cmNest').codeMode === true && cm('cmEdge').codeMode === true, 'codeMode：真的 repl-mode true 后面有一条记录里嵌着 replMode: false 的对象（cmNest）→ 仍是 true；最后一条 repl-mode 后面还有别的记录（cmEdge）→ true', JSON.stringify(['cmNest', 'cmEdge'].map((n) => cm(n).codeMode)));
+  ok(cTo(st, 'vA', '~/Projects/repoV') === 'vB:w-vB' && cTo(st, 'vB', '~/Projects/repoV') === 'vA:w-vA' && wl(st, 'vA') === '' && cm('vA').steps === 2,
+    'vA：Code Mode 脚本里跑的 git commit（虚拟 Bash）进撞车，和普通 Edit 的 vB 撞在 repoV；Bash 的写照旧不进「这一轮改了哪些文件」；步数 2 = REPL + 脚本里的 Bash', JSON.stringify([cl(st, 'vA'), cl(st, 'vB'), wl(st, 'vA'), cm('vA').steps]));
+  ok(cm('cmReal').steps === 19, 'cmReal：步数 19 = 模型发的 4 次（REPL ×3 + Poll）+ 脚本里真正跑的 15 次（以前只数到 4）', String(cm('cmReal').steps));
+  ok(wl(st, 'cmReal') === '~/cm/summary.txt×2 ~/cm/c.txt×1', 'cmReal：这一轮改了哪些文件 = 脚本里的 Write 两次（新建、覆盖）和 Edit 一次（以前是空的）', wr(st, 'cmReal'));
+  ok(cm('cmReal').done === true && cm('cmReal').tool === null && /a\.md 有 2 行/.test(cm('cmReal').result || ''), 'cmReal：照旧是交付（虚拟调用的 stop_sequence 不被当成又一次交付或又开始干活）', JSON.stringify({ done: cm('cmReal').done, tool: cm('cmReal').tool, result: (cm('cmReal').result || '').slice(0, 20) }));
+  ok(cm('cmBusy').tool === 'Fix off-by-one in summary.txt' && cm('cmBusy').steps === 19 && cm('cmBusy').done === false && cm('cmBusy').result === null, 'cmBusy：当前工具是第三段 REPL 自己写的说明，不是后面的 Poll、也不是脚本里最后那个 Read；步数照样 19', JSON.stringify({ tool: cm('cmBusy').tool, steps: cm('cmBusy').steps, done: cm('cmBusy').done }));
+  ok(cm('cmLate').done === true && cm('cmLate').tool === null && cm('cmLate').result === '看过了，没问题。' && cm('cmLate').steps === 1, 'cmLate：交付以后才写进来的一条虚拟调用只加步数，卡片照旧是交付（不变成「在做」、不出当前工具）', JSON.stringify({ done: cm('cmLate').done, tool: cm('cmLate').tool, steps: cm('cmLate').steps }));
+  const tu1e = await get('/api/turns?sid=' + S.cmReal.sid), lt1e = (tu1e.turns || []).slice(-1)[0] || {};
+  ok(lt1e.steps === 19 && (lt1e.results || []).length === 1, '放大看（/api/turns）：这一轮的步数也是 19，交付只有一条（虚拟调用不算交付）', JSON.stringify({ steps: lt1e.steps, results: (lt1e.results || []).length }));
 
   console.log('\n[2] 显示在运行、但一直没有新记录 → 可能卡住了（阈值调成 3 秒）');
   await sleep(4500); st = await get('/api/state');
@@ -1114,6 +1163,51 @@ try {
   ok(rs7.ok && rs7.resumed && tr7h === 'Yes, I trust this folder' && keysNow() === OB_KEYS, '恢复归档：恢复出来的窗口（claude --resume）也替他过向导和信任框，以前只有新任务点', JSON.stringify({ rs7, tr7h, keys: keysNow() }));
   ok(obLines(rs7.name).length === 3 && new RegExp('trust .* ' + rs7.name + ' yes').test(log()), '恢复归档：日志里是这个窗口，3 行 onboard 加 1 行 trust', obLines(rs7.name).join(' | '));
   ok(rs7.ok && fs.existsSync(sockW(rs7.name)) && tmw(rs7.name, 'has-session', '-t', rs7.name).status === 0 && tml('has-session', '-t', rs7.name).status !== 0, '恢复归档：接回来的窗口也是自己一台 tmux（tmux/<名字>.sock），不落在老的 ccboard.sock 上', rs7.name);
+
+  console.log('\n[7m] Code Mode 开窗口和接回（11/17 作者 本人要的）：勾了开关的那一个窗口、记录里最后一次是 Code Mode 的接回窗口，环境里带 CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1，claude 的参数不变；别的一律不带');
+  // 假 claude 每次启动写一个 argv.cm.XXXXXX：第一段是它看到的这个变量（没有写 unset），后面是它收到的参数（\0 分隔）
+  const cmLaunch = () => fs.readdirSync(ROOT).filter((f) => f.startsWith('argv.cm.')).map((f) => { const p = fs.readFileSync(path.join(ROOT, f), 'utf8').split('\0').slice(0, -1); return { env: p[0], args: p.slice(1) }; });
+  const cmWait = async (pred, ms = 8000) => { for (let t = 0; t < ms; t += 200) { const hit = cmLaunch().filter(pred); if (hit.length) { await sleep(300); return cmLaunch().filter(pred); } await sleep(200); } return []; };
+  const cmLog = () => log().split('\n').filter((l) => l.startsWith('codemode '));
+  const has7 = (p) => (x) => x.args.some((a) => a.startsWith(p));
+  let r7m = await post('/api/new', { prompt: 'CMODE-ON 找坏链接', cwd: '~', provider: 'claude', codeMode: true }), L7m = await cmWait(has7('CMODE-ON 找坏链接'));
+  ok(r7m.body.ok && r7m.body.codeMode === true && L7m.length === 1 && L7m[0].env === '1', '勾了 Code Mode：开出来的窗口环境里 CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1，应答带 codeMode: true', JSON.stringify({ body: r7m.body, env: L7m.map((x) => x.env) }));
+  ok(L7m.length === 1 && L7m[0].args.length === 1 && L7m[0].args[0].startsWith('CMODE-ON 找坏链接'), 'claude 收到的参数和不勾时一样：只有任务原文（变量是外面套的 /usr/bin/env 给的，不是参数）', JSON.stringify(L7m.map((x) => x.args.map((a) => a.slice(0, 24)))));
+  ok(cmLog().filter((l) => l.endsWith(' ' + r7m.body.name + ' new on')).length === 1, '服务日志一行 codemode <时间> <窗口> new on', cmLog().join(' | '));
+  r7m = await post('/api/new', { prompt: 'CMODE-OFF 普通任务', cwd: '~', provider: 'claude', codeMode: false }); L7m = await cmWait(has7('CMODE-OFF 普通任务'));
+  const r7n = await post('/api/new', { prompt: 'CMODE-NONE 不传', cwd: '~', provider: 'claude' }), L7n = await cmWait(has7('CMODE-NONE 不传'));
+  ok(r7m.body.ok && r7m.body.codeMode === false && L7m.length === 1 && L7m[0].env === 'unset' && r7n.body.ok && r7n.body.codeMode === false && L7n.length === 1 && L7n[0].env === 'unset', 'codeMode: false 和不传：环境里没有这个变量，应答 codeMode: false', JSON.stringify([r7m.body.codeMode, L7m.map((x) => x.env), r7n.body.codeMode, L7n.map((x) => x.env)]));
+  try { fs.unlinkSync(ARGV + '.env'); } catch {}
+  r7m = await post('/api/new', { prompt: 'CMODE-ON 用旧号', cwd: '~', provider: 'claude', codeMode: true, account: 'good', model: 'opus' }); L7m = await cmWait(has7('CMODE-ON 用旧号'));
+  let env7m = null; for (let i = 0; i < 40 && env7m === null; i++) { await sleep(150); try { env7m = fs.readFileSync(ARGV + '.env', 'utf8'); } catch {} }
+  ok(r7m.body.ok && L7m.length === 1 && L7m[0].env === '1' && env7m === 'tok-good|good' && L7m[0].args.slice(0, 2).join(' ') === '--model opus', '选了账号再勾 Code Mode：读钥匙串的那层 zsh 里面照样带上变量，token 照旧设好，参数照旧', JSON.stringify({ env: L7m.map((x) => x.env), env7m, args: L7m.map((x) => x.args.slice(0, 2)) }));
+  const n7x = cmLaunch().length, bad7 = [];
+  for (const v of ['yes', 1, 'true', {}]) bad7.push((await post('/api/new', { prompt: 'CMODE-BAD ' + JSON.stringify(v), cwd: '~', provider: 'claude', codeMode: v })).body);
+  await sleep(1500);
+  ok(bad7.every((b) => b.ok === false && /codeMode/.test(b.error || '')) && cmLaunch().length === n7x, 'codeMode 写成 "yes"、1、"true"、{}：报错、不开窗口（只有 true 才开，不猜）', JSON.stringify(bad7));
+  const cx7 = await post('/api/new', { prompt: 'x', cwd: '~', provider: 'codex', codeMode: true, model: 'bad model!' });   // 写坏的模型名：万一放过去了也在起进程之前被拦下（不真开 Codex）
+  ok(cx7.body.ok === false && /Code Mode 只有 Claude Code 有/.test(cx7.body.error || ''), 'Codex + codeMode：报错「Code Mode 只有 Claude Code 有」，不悄悄忽略', JSON.stringify(cx7.body));
+  const CM4 = ['cmReal', 'cmOff', 'cmQuote', 'cmBad'], CMX = ['cmEdge', 'cmNest'], ar7 = {}, un7 = {}, rs7m = {};   // CMX：评审补的两个守卫（跨块、嵌着 false），和这四个一起归档、接回
+  for (const n of [...CM4, ...CMX]) ar7[n] = (await post('/api/archive', { sid: S[n].sid })).body;
+  ok(CM4.every((n) => ar7[n].ok && ar7[n].keep === true) && /改过 3 次文件/.test(ar7.cmReal.why || ''), '归档：四个都留着（能接回）；cmReal 的理由是「改过 3 次文件」（脚本里的 Write / Edit 也算，以前是「用了 4 次工具」）', JSON.stringify(ar7));
+  await sleep(9500);                                                     // 等过 8 秒的反悔时间，真停了才是「接回」而不是撤销
+  fs.chmodSync(S.cmBad.file, 0o000);
+  try {
+    for (const n of [...CM4, ...CMX]) un7[n] = (await post('/api/unarchive', { sid: S[n].sid })).body;
+    for (const n of [...CM4, ...CMX]) rs7m[n] = (await cmWait((x) => x.args[0] === '--resume' && x.args[1] === S[n].sid)).map((x) => x.env).join(',');
+  } finally { try { fs.chmodSync(S.cmBad.file, 0o644); } catch {} }
+  ok(CM4.every((n) => un7[n].ok && un7[n].resumed), '四个都接回来了（claude --resume）', JSON.stringify(un7));
+  ok(rs7m.cmReal === '1', '接回：记录里最后一条 repl-mode 是 true 的（cmReal）照样带上变量', JSON.stringify(rs7m));
+  ok(rs7m.cmOff === 'unset' && rs7m.cmQuote === 'unset', '接回：中途关掉的（最后一条 false）、只是记录里嵌着一个 repl-mode 对象的，不带', JSON.stringify(rs7m));
+  ok(rs7m.cmBad === 'unset', '接回：记录读不了（权限 000）→ 不带（宁可少开）', JSON.stringify(rs7m));
+  const cl7 = cmLog(), k8 = (n) => S[n].sid.slice(0, 8);
+  ok(cl7.filter((l) => l.includes(' resume ' + k8('cmReal') + ' on')).length === 1 && cl7.filter((l) => l.includes(' ' + k8('cmBad') + ' ') && /读不了对话记录.*接回不带 Code Mode/.test(l)).length === 1 && !cl7.some((l) => l.includes(k8('cmOff')) || l.includes(k8('cmQuote'))),
+    '服务日志：cmReal 接回一行 on；cmBad 恰好一行「读不了对话记录…接回不带 Code Mode」；cmOff、cmQuote 一行都没有（关了、没开过都不是出错）', cl7.join(' | '));
+  const kx = (n) => cl7.filter((l) => l.includes(' ' + k8(n) + ' ')).length;
+  ok(CMX.every((n) => ar7[n].ok && un7[n].ok && un7[n].resumed) && rs7m.cmEdge === '1' && cl7.filter((l) => l.includes(' resume ' + k8('cmEdge') + ' on')).length === 1 && kx('cmEdge') === 1,
+    '接回（一块 64 字节、块的边界切在最后那条 repl-mode 中间）：前一块那半行接上后一块开头那半行，读出 true、带上变量，日志只有 on 那一行（不报「那一行坏了」）', JSON.stringify({ ar: ar7.cmEdge, un: un7.cmEdge, env: rs7m.cmEdge, log: cl7.filter((l) => l.includes(k8('cmEdge'))) }));
+  ok(rs7m.cmNest === '1' && cl7.filter((l) => l.includes(' resume ' + k8('cmNest') + ' on')).length === 1 && kx('cmNest') === 1,
+    '接回：真的 repl-mode true 后面有一条记录里嵌着 replMode: false 的对象 → 嵌着的跳过，照样带上变量', JSON.stringify({ env: rs7m.cmNest, log: cl7.filter((l) => l.includes(k8('cmNest'))) }));
 
   console.log('\n[7f] 顶栏的订阅额度：/api/state 的 limits（Codex 从假主目录的 rollout 读，Claude 从取数文件读）');
   st = await get('/api/state'); const lm = st.limits || {};
@@ -1791,6 +1885,12 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
   }
   ok(launches.length >= 20 && launches.some((L) => L.includes('--model')) && launches.some((L) => L.includes('--resume')), '对照：记到了这一趟的启动（' + launches.length + ' 次），其中有带 --model 的、有恢复归档的 --resume（记录本身没坏）', String(launches.length));
   ok(launches.length > 0 && bad9.length === 0, '每一次启动都只有 --model / --effort / --resume 和至多一段任务原文，没有往说明里塞东西的旗子', JSON.stringify(bad9.slice(0, 5)));
+  // 核环境（Code Mode，11/17 唯一的例外）：参数白名单管不到环境变量，所以另核一遍。「有」「无」两种都要这一趟里真起过
+  const cm9 = fs.readdirSync(ROOT).filter((f) => f.startsWith('argv.cm.')).map((f) => { const p = fs.readFileSync(path.join(ROOT, f), 'utf8').split('\0').slice(0, -1); return { env: p[0], args: p.slice(1) }; });
+  const on9 = (L) => L.args.some((a) => a.startsWith('CMODE-ON ')) || (L.args[0] === '--resume' && [S.cmReal.sid, S.cmEdge.sid, S.cmNest.sid].includes(L.args[1]));
+  const bad9e = cm9.filter((L) => (on9(L) ? L.env !== '1' : L.env !== 'unset')).map((L) => L.env + ' ' + L.args.map((a) => a.slice(0, 20)).join(' '));
+  ok(cm9.length === launches.length && cm9.filter(on9).length >= 3 && cm9.filter((L) => !on9(L)).length >= 20 && bad9e.length === 0,
+    '核环境：这一整趟 ' + cm9.length + ' 次启动里，勾了 Code Mode 的和接回 Code Mode 会话的 ' + cm9.filter(on9).length + ' 次环境里是 CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1，其余 ' + cm9.filter((L) => !on9(L)).length + ' 次一个都没有', JSON.stringify({ n: cm9.length, all: launches.length, bad: bad9e.slice(0, 5) }));
   const brain1 = brainFiles(), diff9 = [...new Set([...Object.keys(BRAIN0), ...Object.keys(brain1)])].filter((k) => BRAIN0[k] !== brain1[k]);
   ok(Object.keys(BRAIN0).length > 0 && diff9.length === 0, '服务跑完整趟：假主目录里 ' + Object.keys(BRAIN0).length + ' 个说明 / 设置文件一个没加、没改、没删', JSON.stringify(diff9));
 } catch (e) { if (e.message !== 'ui-fixture-done') throw e; } finally {

@@ -105,6 +105,10 @@ const sockPath = (name) => path.join(TMUX_DIR, name + '.sock');
 // 起 tmux 的环境：去掉 CLAUDE*（11/16 总控台 App 是从一个 Claude 会话里拉起来的，服务环境里一直带着那个早已不在的会话的变量；
 // tmux 服务器起来时把它们带进全局环境，新窗口继承 CLAUDE_CODE_CHILD_SESSION=1 就被当成子会话：不存对话记录、不登记，总控台看不到）。TMUX / TMUX_PANE 同理不往下传
 const TMUX_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|CCBOARD_)/.test(k) && k !== 'TMUX' && k !== 'TMUX_PANE'));   // CCBOARD_* 同理（11/16 14:23 窗口里继承的 CCBOARD_DATA 让一份沙盒服务写坏了真实数据，cc-board-9e 的 datalock 同样剥）
+// Code Mode（11/17 22:3x Khalil 本人要的，khalil-06 定范围）：Claude Code 的实验开关是这个环境变量。只给新任务里勾了开关的那一个窗口、和记录里最后一次是 Code Mode 的接回窗口，
+// 不写 settings、不全局开。TMUX_ENV 剥掉了所有 CLAUDE*（规则不改），所以在剥完之后、只对这一个窗口加：套在 claude 的 argv 外面（wrapLaunch 那层 zsh 里面），claude 收到的参数一个不变
+const CODE_MODE_ENV = 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE';
+const withCodeMode = (argv) => ['/usr/bin/env', CODE_MODE_ENV + '=1', ...argv];
 const TMUX_EXIT_LOG = path.join(DATA, 'tmux-exit.log');
 // 看护：一个脱离会话的 /bin/sh（两次 fork，父进程是 1，服务重启不带走它）让 tmux 留在前台（-D）当它的子进程，wait 拿到退出状态写一行日志。
 // 分得清：exit 0 = tmux 自己退的（会话都结束了、kill-server、或收到 SIGTERM——tmux 接住 TERM 也按正常退出，这三种分不开）；signal 9 KILL = 被硬杀（kill -9 或内存不够时系统杀的）；
@@ -294,6 +298,7 @@ function toolLine(b) {
     case 'SendMessage': return '给 ' + (i.to || '别的会话') + ' 发消息';
     case 'AskUserQuestion': return '在问你问题';
     case 'Grep': case 'Glob': return '找文件';
+    case 'REPL': return i.description || '跑脚本';                   // Code Mode：模型发的一段 JS，description 是它自己写的一句说明
     default: return String(b.name || '').replace(/^mcp__/, '').replace(/__/g, ' · ').slice(0, 50);
   }
 }
@@ -320,6 +325,7 @@ function newState() {
     note: null, noteAt: null, tool: null, steps: 0, turnAt: null, ask: null, queued: null, lastAt: null, done: false,
     open: false, halt: null,            // open = 这一轮还没收尾；halt = 这一轮为什么停了 {kind, text, at}
     model: null, effort: null,          // 最近一条真回复（不是 <synthetic> 报错）用的模型 id 和强度；老版本、不支持强度的模型没有 effort
+    codeMode: false,                    // 记录里最后一条 repl-mode 的 replMode（Code Mode，11/17）；一条都没有 = false
     // 架构视图：peers = 别的窗口发来的消息按发信人累计（键 pid|名字 → {pid, name, n, first, last}，毫秒）；human = 他本人开了几轮、最近一轮的时间；
     // turnPeer = 这一轮是别的窗口开的时，是谁开的（{pid, name, at}）；ctx = 最近一条主线真回复的上下文大小（token）
     peers: new Map(), human: null, turnPeer: null, ctx: null };
@@ -360,6 +366,7 @@ function apply(st, d) {
   switch (d.type) {
     case 'ai-title': if (d.aiTitle) st.title = d.aiTitle; return;
     case 'custom-title': st.custom = d.customTitle || d.title || st.custom; return;
+    case 'repl-mode': st.codeMode = d.replMode === true; return;   // Code Mode：每次保存都写一条，他中途关掉会写 false；只认最后一条（Claude Code 自己读回也是 last-wins）
     case 'queue-operation':
       if (d.operation === 'enqueue' && d.content) st.queued = { text: String(d.content), at: d.timestamp };
       return;
@@ -405,7 +412,7 @@ function apply(st, d) {
           const h = haltOf(d, m);                            // 同一种错连着报（额度没恢复时每次被叫醒都会再报一遍）算同一次停住，时间记第一次的
           if (st.halt && st.halt.kind === h.kind) st.halt.text = h.text; else st.halt = h;
           st.open = false; st.ask = null; st.lastAt = d.timestamp;
-        }
+        } else if (d.isVirtual === true) noteVirtual(st, d, m);   // Code Mode 脚本里真正跑的工具（见 noteVirtual）
         return;
       }
       if (typeof m.model === 'string' && m.model) { st.model = m.model.slice(0, 60); st.effort = typeof d.effort === 'string' && /^[a-z]{2,10}$/.test(d.effort) ? d.effort : null; }   // 模型和强度跟着最近一条真回复走：/model、/effort 改了，下一条回复就是新的
@@ -423,7 +430,7 @@ function apply(st, d) {
             st.resultBy = st.turnBy || 'human';             // 这次交付是给谁的：你本人开的头，还是别的窗口
           } else { st.note = b.text; st.noteAt = d.timestamp; st.done = false; }
         } else if (b.type === 'tool_use') {
-          st.steps++; st.tool = toolLine(b); st.done = false; noteTool(st.files, b.input);
+          st.steps++; if (b.name !== 'Poll') st.tool = toolLine(b); st.done = false; noteTool(st.files, b.input);   // Poll（Code Mode 等后台脚本）不顶掉上一条：卡片上留着 REPL 那句说明
           st.nTools++; if (/^(Edit|MultiEdit|Write|NotebookEdit)$/.test(b.name)) st.nEdits++;
           if (WRITE_TOOLS.test(b.name) && b.input) noteWrite(st, b.input.file_path || b.input.notebook_path, d.timestamp);   // 这一轮改了哪些文件 + 撞车提示（记录里的时间）
           if (b.name === 'Bash' && b.input) for (const dir of bashWriteDirs(b.input.command, d.cwd)) noteWriteDir(st, dir, d.timestamp);   // Bash 里的 git / 重定向 / cp：只进撞车
@@ -432,6 +439,19 @@ function apply(st, d) {
       }
       st.lastAt = d.timestamp;
     }
+  }
+}
+// Code Mode 的虚拟调用（11/17）：模型发的是一个 REPL（input.code 是一段 JS），脚本里真正跑的 Bash / Read / Write / Edit 各自另记一条 assistant：
+// model 是 <synthetic>、isVirtual: true、isApiErrorMessage: false、stop_reason 'stop_sequence'，content 里是普通的 tool_use。
+// 它们在 REPL 返回之后才一批写进记录（写的先后和时间戳的先后不一定一致），所以只交给计数和「这一轮改了哪些文件 / 撞车」：
+// 不碰这一轮的状态（open / done / final / result / halt / ask）和卡片上的当前工具（留着 REPL 的说明）。stop_reason 是 stop_sequence，当成普通回复会被认成「交付了」。
+function noteVirtual(st, d, m) {
+  for (const b of m.content) {
+    if (!b || b.type !== 'tool_use') continue;
+    st.steps++; noteTool(st.files, b.input);
+    st.nTools++; if (/^(Edit|MultiEdit|Write|NotebookEdit)$/.test(b.name)) st.nEdits++;
+    if (WRITE_TOOLS.test(b.name) && b.input) noteWrite(st, b.input.file_path || b.input.notebook_path, d.timestamp);
+    if (b.name === 'Bash' && b.input) for (const dir of bashWriteDirs(b.input.command, d.cwd)) noteWriteDir(st, dir, d.timestamp);
   }
 }
 
@@ -756,6 +776,8 @@ function readTurns(file, want) {
             finalId = m.id;
           }
         }
+      } else if (d.type === 'assistant' && cur && d.isVirtual === true && !d.isApiErrorMessage && d.message && d.message.model === '<synthetic>' && Array.isArray(d.message.content)) {
+        for (const b of d.message.content) if (b && b.type === 'tool_use') cur.steps++;   // Code Mode 脚本里真正跑的工具：只算步数，不当交付（见 noteVirtual）
       }
     });
     if (turns.length >= want || span >= size || span >= (64 << 20)) break;
@@ -825,7 +847,7 @@ function codexSessions(seen) {
       regName: name, userNamed: false, title: first.replace(/\s+/g, ' ').slice(0, 28), aiTitle: null, custom: null,
       prompt: st.prompt || a.prompt || null, promptAt: st.promptAt, ...deliver(st.result), resultAt: st.resultAt, done: st.done,
       note: st.note, noteAt: st.noteAt, tool: st.tool, steps: st.steps, turnAt: st.turnAt, lastAt: st.lastAt, ask: null,
-      channel: 'tmux', tmux: name, order: 5e5, model: a.model || null, effort: a.effort || null, ctx: null, sub: 0, halt: st.halt, file: tr.file };   // Codex 读不到上下文和子 agent
+      channel: 'tmux', tmux: name, order: 5e5, model: a.model || null, effort: a.effort || null, ctx: null, sub: 0, halt: st.halt, file: tr.file, codeMode: false };   // Codex 读不到上下文和子 agent；Code Mode 只有 Claude Code 有
     o.quiet = tr.tick(o.status === 'busy', scanDt); o.alert = alertOf(o);
     o.project = classify(st.files, { title: o.title, prompt: o.prompt, cwd: o.cwd, home: HOME, pin: pinOf(name) });
     out.push(o);
@@ -1269,6 +1291,7 @@ function scanSessions() {
       resultAt: st.resultAt, done: st.done,
       note: st.note, noteAt: st.noteAt, tool: st.tool, steps: st.steps, turnAt: st.turnAt, lastAt: st.lastAt,
       ask: st.ask ? askView(st.ask) : null, halt: st.halt, model: st.model, effort: st.effort, ctx: st.ctx,
+      codeMode: st.codeMode === true,                     // 记录里最后一条 repl-mode（卡片上模型胶囊前面的「Code」）
     };
     o.quiet = tr.tick(o.status === 'busy', scanDt, o.status === 'busy' || o.status === 'shell'); o.alert = alertOf(o);
     o.sub = tr.sub;                                        // 正在跑的子 agent 数（只数在跑的会话）
@@ -1819,6 +1842,41 @@ function watchTidy() {
   } finally { tidyBusy = false; }
 }
 
+// 接回时要不要带 Code Mode：记录里**最后一条** repl-mode 的 replMode（他中途在 Claude Code 里关掉会再写一条 false，Claude Code 自己读回也是 last-wins）。
+// 从文件尾往前一块块读，找到就停；一条都没有 = 普通会话，不带。找不到记录、读不了、那一行坏了 → 一律不带，日志写一行（宁可少开，不替他开）。
+// 只认整行就是 {"type":"repl-mode",…} 的：别的记录正文里提到这串字（比如一次 grep 的输出）不算。
+const REPL_TAG = Buffer.from('"type":"repl-mode"');
+const REPL_CHUNK = Math.max(16, Number(process.env.CCBOARD_REPL_CHUNK) || 256 << 10);   // 一块读多少字节；测试给 64，让夹具里的接回走跨块那几步（拼半行、超长行、切点）
+async function lastReplMode(file, sid) {
+  const say = (why) => { console.log(`codemode ${new Date().toISOString()} ${String(sid).slice(0, 8)} ${why}，接回不带 Code Mode`); return false; };
+  if (!file) return say('找不到它的对话记录');
+  let fh = null;
+  try {
+    fh = await fs.promises.open(file, 'r');
+    const size = (await fh.stat()).size, CH = REPL_CHUNK;
+    let end = size, carry = Buffer.alloc(0);           // carry：上一块（更靠后）开头那半行，接到这一块后面
+    while (end > 0) {
+      const start = Math.max(0, end - CH), buf = Buffer.alloc(end - start);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, start);
+      if (bytesRead !== buf.length) return say('对话记录读到一半变短了');
+      const all = Buffer.concat([buf, carry]);
+      const cut = start > 0 ? all.indexOf(10) : -1;    // 这一块的第一行可能不完整：留给下一块（更靠前）接上
+      if (start > 0 && cut < 0) { carry = all; end = start; continue; }
+      const body = all.subarray(cut + 1);
+      let i = body.lastIndexOf(REPL_TAG);
+      while (i >= 0) {                                  // 从后往前一行一行看带这串字的行；不是 repl-mode 记录的整行跳过
+        const a = body.lastIndexOf(10, i) + 1, z = body.indexOf(10, i), line = body.subarray(a, z < 0 ? body.length : z).toString('utf8').trim();
+        let d = null; try { d = JSON.parse(line); } catch { if (line.startsWith('{"type":"repl-mode"')) return say('最后一条 repl-mode 那一行坏了'); }
+        if (d && d.type === 'repl-mode') return d.replMode === true;
+        i = a > 0 ? body.lastIndexOf(REPL_TAG, a - 1) : -1;
+      }
+      carry = start > 0 ? all.subarray(0, cut) : Buffer.alloc(0); end = start;
+    }
+    return false;                                       // 从来没开过
+  } catch (e) { return say('读不了对话记录（' + (e.code || e.message) + '）'); }
+  finally { if (fh) await fh.close().catch(() => {}); }
+}
+
 async function unarchive(sid) {
   const it = archive.items[sid];
   if (!it) return { ok: false, error: '归档里没有它' };
@@ -1832,12 +1890,15 @@ async function unarchive(sid) {
   if (it.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };
   const name = newName();
   it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now();   // 先同步占住：排队接和他手点同一个、双击，都只会接一次（下面几个 await 期间别人看到的已经是 restoring）
-  const cmd = it.provider === 'codex' ? [codexBin || 'codex', 'resume', sid] : [await findClaude(), '--resume', sid];
+  const cm = it.provider !== 'codex' && await lastReplMode(it.file || locate(sid, it.cwd), sid);   // 所有接回（单张卡、一起退出后的排队接回）都从这里过：上次是 Code Mode 的，接回来还是
+  const cl = it.provider === 'codex' ? null : [await findClaude(), '--resume', sid];   // Codex 不找 claude（第一次找可能等到 15 秒，接回的看护是 12 秒）
+  const cmd = it.provider === 'codex' ? [codexBin || 'codex', 'resume', sid] : cm ? withCodeMode(cl) : cl;
   const r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);   // 接回来的也是自己一台 tmux
   if (!r.ok) { if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r; }
   if (it.provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: it.prompt || '', sid, rollout: it.file }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // 11/15：恢复出来的窗口也要过信任框（主目录的信任不存）和可能有的首次向导，以前只有 newSession 点
   launches.set(name, { at: Date.now(), prompt: '恢复「' + it.title + '」', cwd: dir });
+  if (cm) console.log(`codemode ${new Date().toISOString()} ${name} resume ${sid.slice(0, 8)} on`);
   it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now(); saveArchive();
   await refreshPanes();
   return { ok: true, resumed: true, name };
@@ -2386,6 +2447,7 @@ async function newSession(prompt, cwd, opt = {}) {
   try { if (!fs.statSync(dir).isDirectory()) throw new Error(); } catch { return { ok: false, error: '没有这个文件夹：' + dir }; }
   if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };
   const provider = opt.provider === 'codex' ? 'codex' : 'claude';
+  if (opt.codeMode === true && provider !== 'claude') return { ok: false, error: 'Code Mode 只有 Claude Code 有' };   // 报错不忽略：悄悄不开，调用方会以为开了（和写错档位同一个理由）
   const model = String(opt.model || '').trim(), effort = String(opt.effort || '').trim();
   if ((model && !SAFE_ARG.test(model)) || (effort && !SAFE_ARG.test(effort))) return { ok: false, error: '模型或强度的写法不对' };
   let acct = null;                                    // 选了账号：只认 config 里登记过、钥匙串里有 token 的
@@ -2410,16 +2472,18 @@ async function newSession(prompt, cwd, opt = {}) {
   } else {
     const cl = [await findClaude()]; if (model) cl.push('--model', model); if (effort) cl.push('--effort', effort);
     if (text) cl.push(text);
-    args.push(...wrapLaunch(acct, cl));                // 没选账号原样不变；选了就在外面包一层读钥匙串的 zsh
+    args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));   // 没选账号原样不变；选了就在外面包一层读钥匙串的 zsh。Code Mode 套在这一层里面
   }
   const r = await openSession(name, args);           // 每个窗口一台 tmux（P0-0）
   if (!r.ok) return r;
   launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });
   if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}${opt.account ? '' : ' default'}`);
+  const codeMode = provider === 'claude' && opt.codeMode === true;
+  if (codeMode) console.log(`codemode ${new Date().toISOString()} ${name} new on`);
   if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
   if (provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: shown, sid: null, rollout: null, model, effort }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // config 里打开就替他点，开在哪个文件夹都一样；不等它，卡片先出来
-  return { ok: true, name, project: pin, account: acct ? acct.id : null };
+  return { ok: true, name, project: pin, account: acct ? acct.id : null, codeMode };
 }
 
 // 新开的会话如果卡在「是否信任这个文件夹」，界面上给一个确认按钮
@@ -2654,7 +2718,8 @@ const server = http.createServer(async (req, res) => {
       const who = req.headers.origin ? null : fromOk ? Promise.resolve({ sid: body.from, how: 'from' }) : findCaller(req.socket.remotePort).then((sid) => (sid ? { sid, how: 'lsof' } : null), () => null);
       const rt = routeNew({ provider: body.provider, model: body.model, effort: body.effort, tier: body.tier });
       if (!rt.ok) return reply(res, 200, rt);
-      const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null });
+      if (body.codeMode != null && typeof body.codeMode !== 'boolean') return reply(res, 200, { ok: false, error: 'codeMode 只能是 true 或 false' });   // "1"、1 这类写法不猜：只有 true 才开
+      const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null, codeMode: body.codeMode === true });
       if (r.ok) { await refreshPanes(); if (rt.tier) console.log(`route ${new Date().toISOString()} ${r.name} ${rt.tier} ${body.provider === 'codex' ? 'codex' : 'claude'} ${rt.model || '-'} ${rt.effort}`); }
       if (r.ok && who) {
         const w = await who;

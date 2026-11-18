@@ -282,6 +282,12 @@ body.flow .alert .meta::before{width:16px;height:16px;margin:0}
 .card:has(.mdl:not([hidden])) .title{padding-right:120px}
 body.flow .mdl{right:16px;margin-top:22px}
 @container (min-width:541px){.mdl{max-width:160px;padding:0 8px;font-size:11px}.card:has(.mdl:not([hidden])) .title{padding-right:176px}}
+/* Code Mode 的窗口（11/17）：胶囊最前面多一段「Code」，一根墨线隔开，和模型同一个胶囊、同一套字和线。胶囊和标题的让位都放宽一截（最长的真实组合 Code │ Sonnet · medium 不截字） */
+.mdl .cm{display:inline-block;padding-right:5px;margin-right:5px;box-shadow:inset calc(-1 * var(--ink-w)) 0 0 var(--ink)}
+.mdl .cm:last-child{padding-right:0;margin-right:0;box-shadow:none}   /* 还没回过话（没有模型和强度）：只有「Code」，不留一根空线 */
+.mdl.cm{max-width:150px}
+.card:has(.mdl.cm:not([hidden])) .title{padding-right:158px}
+@container (min-width:541px){.mdl .cm{padding-right:7px;margin-right:7px}.mdl.cm{max-width:210px}.card:has(.mdl.cm:not([hidden])) .title{padding-right:226px}}
 .head{margin:6px 16px 0;font-size:13px;line-height:1.5;color:var(--text);word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .head:empty{display:none} .s-handled .head,.s-fyi .head,.s-idle .head{color:var(--text-2)}
 .ask{margin:9px 16px 0;padding:7px 10px;border-radius:var(--r-ctl);font-size:12.5px;line-height:1.5;font-weight:600;color:var(--attn);background:color-mix(in srgb,var(--attn) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--attn) 22%,transparent);word-break:break-word}
@@ -494,6 +500,16 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .field textarea,.field input,.field select{display:block;width:100%;background:var(--field);border:1px solid var(--hair);border-radius:var(--r-ctl);padding:7px 11px;outline:none;height:34px;transition:border-color var(--d1) var(--ease)}
 .field select{-webkit-appearance:none;appearance:none;padding-right:26px;background-image:linear-gradient(45deg,transparent 50%,var(--text-3) 50%),linear-gradient(135deg,var(--text-3) 50%,transparent 50%);background-position:calc(100% - 15px) 15px,calc(100% - 10px) 15px;background-size:5px 5px;background-repeat:no-repeat;min-width:118px}
 .field textarea{height:150px;resize:vertical;line-height:1.5}
+/* 新任务的 Code Mode 开关（11/17）：role=switch 的按钮。开 = --thumb（「你选中的那一项」），关 = --fill；描边、圆角都走 token，不做药丸形（只有点是圆的）。下面一句说明只写事实 */
+.cmf .sw{display:inline-flex;align-items:center;gap:9px;height:24px;padding:0 2px 0 0;background:none;border:0;border-radius:var(--r-ctl);color:var(--text);font:inherit;font-size:13px;cursor:pointer}
+.cmf .swt{position:relative;flex:none;width:32px;height:18px;border-radius:var(--r-ctl);background:var(--fill);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:background-color var(--d2) var(--ease)}
+.cmf .swt::after{content:"";position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:var(--r-badge);background:var(--raised);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);transition:transform var(--d2) var(--ease-out)}
+.cmf .sw[aria-checked="true"] .swt{background:var(--thumb)}
+.cmf .sw[aria-checked="true"] .swt::after{transform:translateX(14px)}
+.cmf .sw:hover .swt{box-shadow:inset 0 0 0 var(--ink-w) var(--hair-2)}
+.cmf .cmn{margin:5px 0 0 41px;font-size:12px;line-height:1.5;color:var(--text-3)}
+.cmf[hidden]{display:none}
+@media (prefers-reduced-motion:reduce){.cmf .swt,.cmf .swt::after{transition:none}}
 .field textarea:focus,.field input:focus,.field select:focus{border-color:var(--hair-3)}
 .arow{display:flex;align-items:center;gap:12px;padding:11px 0}
 .arow+.arow{border-top:1px solid var(--hair)}
@@ -649,6 +665,7 @@ body.org main:has(#org.map){overflow:hidden}
       <div class="field"><label for="nEffort">强度</label><select id="nEffort"></select></div>
       <div class="field" id="nAcctField"><label for="nAcct">账号</label><select id="nAcct"></select></div>
     </div>
+    <div class="field cmf" id="nCmField"><button type="button" class="sw" id="nCm" role="switch" aria-checked="false" aria-describedby="nCmNote"><span class="swt" aria-hidden="true"></span><span class="swl">Code Mode（实验）</span></button><p class="cmn" id="nCmNote">Claude 写脚本一次跑多个工具，适合大范围搜索、同一种改动改很多文件；这个窗口不能用 Remote Control。</p></div>
   </div>
   <div class="dfoot"><button class="plain" id="nClip" title="加图片或文件，也可以直接粘贴或拖进来">加附件</button><span class="grow" id="nMsg">⌘ 回车开工</span><button class="plain" data-close>取消</button><button class="primary" id="nGo">开工</button></div>
 </dialog>
@@ -707,7 +724,7 @@ const EN = {
   '已放回来': 'Restored', '正在后台把它接回来，马上出现': 'Restoring in the background…', '没有记录到你说的话': 'No prompt recorded', '这段记录里没有找到你说的话。': 'No prompts found in this transcript.',
   '直接写任务，它在后台做，做完会站到最前面。放在哪个文件夹它自己定。留空 = 开一个空会话，等你在卡片里说第一句。': 'Describe the task. It runs in the background and comes to the front when done. It picks the project folder itself. Leave empty for a blank session.',
   '⌘N 新任务 · ⌘T 直接开一个空会话': '⌘N new task · ⌘T blank session', '看干净的对话': 'Clean transcript', '只看你说的和它交付的': 'Only your prompts and its deliveries', '在访达里显示': 'Reveal in Finder',
-  '这台机器上没找到它的命令': 'Its command was not found on this Mac', '读网页': 'Fetch page', '找文件': 'Search files', '在问你问题': 'Asking you', '跑多 agent 流程': 'Running a workflow',
+  '这台机器上没找到它的命令': 'Its command was not found on this Mac', '读网页': 'Fetch page', '找文件': 'Search files', '在问你问题': 'Asking you', '跑多 agent 流程': 'Running a workflow', '跑脚本': 'Running a script',
   '还没有归档的会话。': 'Nothing archived yet.', '在卡片右上角的菜单里选「归档」。': 'Use the ⋯ menu on a card to archive it.', '这一轮还没有交付': 'No delivery in this turn yet',
   '加附件': 'Attach', '去掉': 'Remove', '选要发给它的文件': 'Choose files to send', '一次最多 10 个附件': 'Up to 10 attachments at a time', '附件没传上去': 'Attachment upload failed',
   '加图片或文件，也可以直接粘贴或拖进来': 'Attach images or files. You can also paste or drop them.', '没有内容': 'Nothing to send',
@@ -735,6 +752,8 @@ const EN = {
   '上一张': 'Previous', '上一张（←）': 'Previous (←)', '下一张': 'Next', '下一张（→）': 'Next (→)', '这些图都打不开了': 'None of these images could be opened',
   '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second', '文件太大，只显示了开头 1 MB。': 'File is large; showing the first 1 MB only.',
   '最近一条回复用的': 'used by its latest reply', '开窗口时定的': 'set when the window was opened',
+  'Code Mode（实验）': 'Code Mode (experimental)', 'Claude 写脚本一次跑多个工具，适合大范围搜索、同一种改动改很多文件；这个窗口不能用 Remote Control。': 'Claude writes a script that runs several tools in one go. Suits wide searches and the same change across many files. This window can’t use Remote Control.',
+  '这个窗口开着 Code Mode（实验）：Claude 写脚本一次跑多个工具，不能用 Remote Control': 'This window runs Code Mode (experimental): Claude writes a script that runs several tools in one go; no Remote Control',
   // 架构视图（11/16 khalil-a0）
   '架构': 'Org', '架构图怎么排': 'Org chart layout', '层级': 'Tree', '放射': 'Radial', '画布': 'Canvas', '画布缩小': 'Zoom out', '画布放大': 'Zoom in', '适应窗口': 'Fit', '把整张图放回窗口里（双击空白处也行）': 'Fit the whole chart in the window (or double-click empty space)',
   '谁归谁管：总管、各项目的负责人和它们带的窗口': 'Who reports to whom: the chief, each project lead and the windows they run',
@@ -944,12 +963,14 @@ function modelName(id) {
   const nums = raw.split('-').filter((x) => /^\d+$/.test(x));
   return { name: fam[1][0].toUpperCase() + fam[1].slice(1).toLowerCase(), ver: nums.join('.') };
 }
+// Code Mode 的窗口（服务给的 codeMode：记录里最后一条 repl-mode）在最前面多一段「Code」，一根墨线隔开（11/17）
 function setModel(el, s) {
-  const m = modelName(s.model), ef = /^[a-z]{2,10}$/.test(s.effort || '') ? s.effort : '';
-  const key = m || ef ? [s.model, ef, s.provider].join('|') : '';
-  if (el.dataset.k === key) return; el.dataset.k = key; el.hidden = !key; if (!key) { el.textContent = ''; el.removeAttribute('title'); return; }
-  el.innerHTML = (m ? '<span class="mn">' + esc(m.name) + '</span>' + (m.ver ? '<span class="mv"> ' + esc(m.ver) + '</span>' : '') : '') + (ef ? '<span class="me">' + (m ? ' · ' : '') + esc(ef) + '</span>' : '');
-  el.title = [s.model ? T('模型') + ' ' + s.model : '', ef ? T('强度') + ' ' + ef : ''].filter(Boolean).join(' · ') + ' — ' + T(s.provider === 'codex' ? '开窗口时定的' : '最近一条回复用的');
+  const m = modelName(s.model), ef = /^[a-z]{2,10}$/.test(s.effort || '') ? s.effort : '', cm = s.codeMode === true && s.provider !== 'codex';
+  const key = m || ef || cm ? [s.model, ef, s.provider, cm ? 'cm' : ''].join('|') : '';
+  if (el.dataset.k === key) return; el.dataset.k = key; el.hidden = !key; el.classList.toggle('cm', cm); if (!key) { el.textContent = ''; el.removeAttribute('title'); return; }
+  el.innerHTML = (cm ? '<span class="cm">Code</span>' : '') + (m ? '<span class="mn">' + esc(m.name) + '</span>' + (m.ver ? '<span class="mv"> ' + esc(m.ver) + '</span>' : '') : '') + (ef ? '<span class="me">' + (m ? ' · ' : '') + esc(ef) + '</span>' : '');
+  const used = m || ef ? [s.model ? T('模型') + ' ' + s.model : '', ef ? T('强度') + ' ' + ef : ''].filter(Boolean).join(' · ') + ' — ' + T(s.provider === 'codex' ? '开窗口时定的' : '最近一条回复用的') : '';
+  el.title = [used, cm ? T('这个窗口开着 Code Mode（实验）：Claude 写脚本一次跑多个工具，不能用 Remote Control') : ''].filter(Boolean).join('\n');
 }
 const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const ms = (t) => (t ? Date.parse(t) || 0 : 0);
@@ -2056,8 +2077,13 @@ function fillNew() {
   $('#nAcctField').style.display = A.length ? '' : 'none';
   $('#nAcct').innerHTML = L('<option value="">默认' + (dA ? '（' + esc(dA.name) + '）' : p.login ? '（当前登录 ' + esc(p.login) + '）' : '') + '</option>' + A.map((a) => '<option value="' + esc(a.id) + '"' + (a.ready ? '' : ' disabled') + '>' + esc(a.name) + (a.ready ? '' : '（钥匙串里还没有 token）') + '</option>').join(''));
   $('#nAcct').value = A.some((a) => a.ready && a.id === pick.account) ? pick.account : '';
+  const cmHide = pick.provider !== 'claude'; $('#nCmField').hidden = cmHide; if (cmHide) setCm(false);   // Code Mode 只有 Claude Code 有：选了 Codex 就收起，并关掉（看不见的开关不能还开着）
 }
 $('#nProv').addEventListener('click', (e) => { const b = e.target.closest('[data-prov]'); if (!b || b.disabled) return; keepPick(); pick.provider = b.dataset.prov; fillNew(); });
+// Code Mode 开关（11/17 Khalil 本人要的）：只对这一次开的这一个窗口。默认关，每次打开弹窗都回到关，不记上一次（不进 ccb_new）
+function setCm(on) { const b = $('#nCm'), v = on ? 'true' : 'false'; if (b.getAttribute('aria-checked') !== v) b.setAttribute('aria-checked', v); }   // function 声明：fillNew() 先于这一行被调也认得
+function cmOn() { return $('#nCm').getAttribute('aria-checked') === 'true' && !$('#nCmField').hidden; }
+$('#nCm').addEventListener('click', () => setCm(!cmOn()));
 function keepPick() { pick.model = pick.model || {}; pick.effort = pick.effort || {}; pick.model[pick.provider] = $('#nModel').value.trim(); pick.effort[pick.provider] = $('#nEffort').value; pick.account = $('#nAcct').value; store('ccb_new', pick); }
 // 在哪一列的列头点的「新任务」：{key, name}，跟着任务交给服务，新卡落进那一列。右上角、⌘N 和「其他」那一列开的是 null（它自己找项目）
 let newIn = null;
@@ -2067,11 +2093,11 @@ function openNew(proj) {
   newIn = proj && proj.key && proj.key !== 'other' ? { key: proj.key, name: proj.name } : null;
   $('#nTitle').textContent = newIn ? T('新任务') + ' · ' + T(newIn.name) : T('新任务');
   $('#nPrompt').placeholder = T(newIn ? NEW_TIP_IN : NEW_TIP);
-  fillNew(); $('#nMsg').textContent = T('⌘ 回车开工'); $('#nMsg').style.color = ''; $('#newDlg').showModal(); $('#nPrompt').focus(); }
+  setCm(false); fillNew(); $('#nMsg').textContent = T('⌘ 回车开工'); $('#nMsg').style.color = ''; $('#newDlg').showModal(); $('#nPrompt').focus(); }
 async function goNew() {
   const prompt = $('#nPrompt').value.trim(), cwd = '~';      // 不问放哪个文件夹：都开在主目录，服务会让它自己找项目文件夹
   keepPick(); $('#nGo').disabled = true; let r; const nFiles = newHold.atts.length;
-  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '', account: pick.provider === 'claude' ? pick.account || '' : '' }); }
+  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '', account: pick.provider === 'claude' ? pick.account || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   $('#nGo').disabled = false;
   if (r.ok) { $('#nPrompt').value = ''; newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }

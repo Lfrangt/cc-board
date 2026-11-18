@@ -45,7 +45,7 @@ const MUTANTS = {
   'tidy-drop-not-moved': ["    if (r.ok && cur.drop) { dropArchived(sid, cur); return; }", "    if (false) { dropArchived(sid, cur); return; }"],
   'open-scripts':        ["  return OPEN_EXT.has(ext) ? 'open' : 'reveal';", "  return 'open';"],
   'open-any-origin':     ["const og = req.headers.origin; return !og ||", "const og = req.headers.origin; return true ||"],
-  'no-project-evidence': ["st.steps++; st.tool = toolLine(b); st.done = false; noteTool(st.files, b.input);", "st.steps++; st.tool = toolLine(b); st.done = false;"],
+  'no-project-evidence': ["st.steps++; if (b.name !== 'Poll') st.tool = toolLine(b); st.done = false; noteTool(st.files, b.input);", "st.steps++; if (b.name !== 'Poll') st.tool = toolLine(b); st.done = false;"],   // 11/17 Code Mode：这一行多了「Poll 不顶掉上一条」，原文跟着改
   'lost-no-project':     ["lostAt: x.lostAt, crash: x.crash || null, idle: x.idle === true, project: x.project || classify(null, { title: x.title, prompt: x.prompt, cwd: x.cwd, home: HOME }) }));", "lostAt: x.lostAt, crash: x.crash || null, idle: x.idle === true }));"],
   'api-error-ignored':   ["        if (d.isApiErrorMessage) {\n          const h = haltOf(d, m);", "        if (false) {\n          const h = haltOf(d, m);"],
   'compact-as-prompt':   ["if (d.isMeta || d.isCompactSummary) return;", "if (d.isMeta) return;"],
@@ -78,7 +78,7 @@ const MUTANTS = {
   'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto };", "    return def;"],
   'limits-codex-ungated': ['codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null', 'codex: codexLimits(CODEX_HOME, now)'],
   'limits-not-in-state': ['sandbox: SANDBOX, limits: LIMITS };', 'sandbox: SANDBOX };'],
-  'account-not-wrapped': ['    args.push(...wrapLaunch(acct, cl));', '    args.push(...cl);'],
+  'account-not-wrapped': ['    args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));', '    args.push(...(opt.codeMode === true ? withCodeMode(cl) : cl));'],   // 11/17 Code Mode：这一行多了套 /usr/bin/env 那一层，原文跟着改
   'account-skip-ready':  ["    if (!acct.ready) return { ok: false, error: '钥匙串里还没有「' + acct.name + '」的 token' };\n", ''],
   'account-any-id':      ["    if (!acct) return { ok: false, error: '没有这个账号：' + String(want).slice(0, 40) };", "    if (!acct) acct = { id: String(want), name: String(want), ready: true };"],
   // config 的 defaultAccount（11/17 car3）：没选账号时不按它包；写了没登记的号也照用
@@ -227,7 +227,7 @@ const MUTANTS = {
   'codex-patch-ignored': ["      for (const f of patchFiles(p.input, p.arguments)) noteWrite(st, f, d.timestamp);", ""],
   'patch-escaped-nl':    ["([^\\n\\r\\\\\"]+)/g", "([^\\n\\r\\\"]+)/g"],
   // 评审之后补的（[1d] 的 Bash 和 Codex 新一轮）：Bash 里的写不认、heredoc 正文当成命令、Codex 他说了新的一句不清单子
-  'bash-write-ignored':  ["for (const dir of bashWriteDirs(b.input.command, d.cwd)) noteWriteDir(st, dir, d.timestamp);", ";"],
+  'bash-write-ignored':  ["for (const dir of bashWriteDirs(b.input.command, d.cwd)) noteWriteDir(st, dir, d.timestamp);   // Bash 里的 git", ";   // Bash 里的 git"],   // 11/17 Code Mode：noteVirtual 里有同样一句，原文带上后面的注释才只指 apply() 那一处
   'bash-heredoc-body':   ["if (m) end = m[2];", "if (m) end = null;"],
   'codex-turn-no-clear': ["if (text.trim() && !codexInjected(text)) newTurnWrites(st);", ";"],
   // 只回变过的（拉数据瘦身，[2v]）：不认 v（每次整份）、不带 v 的老读法也走新格式、quiet 也算变了、不给 gone、不给 ids、全局字段每次都给、不认启动号
@@ -273,6 +273,29 @@ const MUTANTS = {
   'notified-reply-null':  ["  if (replyDisk.has(s.sid) && !stale) b.reply = replyDisk.get(s.sid);", "  if (replyDisk.has(s.sid) && !stale) b.reply = null;"],
   'stale-disk-trusted':   [" && !stale) b.reply = replyDisk.get(s.sid);", ") b.reply = replyDisk.get(s.sid);"],
   'shell-hold-no-reset':  ["|| h.key !== n.key || h.wait !== n.wait) {", "|| h.key !== n.key) {"],
+  // Code Mode（11/17）：开窗口和接回的环境变量、codeMode 字段、记录里的虚拟调用（state.test.mjs 的 [1e]、[7m]、[9] 核环境那一项）
+  "codemode-new-no-env": ["args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));", "args.push(...wrapLaunch(acct, cl));"],
+  "codemode-new-always": ["args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));", "args.push(...wrapLaunch(acct, withCodeMode(cl)));"],
+  "codemode-codex-ignored": ["  if (opt.codeMode === true && provider !== 'claude') return { ok: false, error: 'Code Mode 只有 Claude Code 有' };", ""],
+  "codemode-type-unchecked": ["if (body.codeMode != null && typeof body.codeMode !== 'boolean') return reply(res, 200, { ok: false, error: 'codeMode 只能是 true 或 false' });", ""],
+  "codemode-resume-ignored": ["  const cm = it.provider !== 'codex' && await lastReplMode(it.file || locate(sid, it.cwd), sid);", "  const cm = false;"],
+  "codemode-resume-any-true": ["if (d && d.type === 'repl-mode') return d.replMode === true;", "if (d && d.type === 'repl-mode' && d.replMode === true) return true;"],
+  "codemode-read-fail-on": ["接回不带 Code Mode`); return false; };", "接回不带 Code Mode`); return true; };"],
+  "codemode-quote-counts": ["if (d && d.type === 'repl-mode') return d.replMode === true;", "if (d) return /\"replMode\":true/.test(line);"],
+  "codemode-repl-sticky": ["case 'repl-mode': st.codeMode = d.replMode === true; return;", "case 'repl-mode': st.codeMode = st.codeMode || d.replMode === true; return;"],
+  "codemode-state-missing": ["      codeMode: st.codeMode === true,", ""],
+  "codemode-virtual-ignored": ["        } else if (d.isVirtual === true) noteVirtual(st, d, m);", "        }"],
+  "codemode-virtual-as-real": ["if (m.model === '<synthetic>') {", "if (m.model === '<synthetic>' && !d.isVirtual) {"],
+  "codemode-virtual-touches-turn": ["    st.steps++; noteTool(st.files, b.input);\n", "    st.steps++; st.tool = toolLine(b); st.done = false; noteTool(st.files, b.input);\n"],
+  "codemode-virtual-no-edits": ["noteTool(st.files, b.input);\n    st.nTools++; if (/^(Edit|MultiEdit|Write|NotebookEdit)$/.test(b.name)) st.nEdits++;", "noteTool(st.files, b.input);\n    st.nTools++;"],
+  "codemode-virtual-no-wrote": ["\n    if (WRITE_TOOLS.test(b.name) && b.input) noteWrite(st, b.input.file_path || b.input.notebook_path, d.timestamp);\n", "\n"],
+  "codemode-poll-replaces": ["if (b.name !== 'Poll') st.tool = toolLine(b);", "st.tool = toolLine(b);"],
+  "codemode-repl-no-desc": ["    case 'REPL': return i.description || '跑脚本';", "    case 'REPL': return '跑脚本';"],
+  "codemode-turns-virtual-ignored": ["for (const b of d.message.content) if (b && b.type === 'tool_use') cur.steps++;   // Code Mode", "for (const b of []) cur.steps++;   // Code Mode"],
+  // 评审（11/17 23:5x）补的三个守卫：跨块时丢掉后一块开头那半行 / 碰到嵌着 repl-mode 对象的记录就当成 false / 脚本里跑的 Bash 的写不进撞车
+  "codemode-carry-dropped": ["carry = start > 0 ? all.subarray(0, cut) : Buffer.alloc(0); end = start;", "carry = Buffer.alloc(0); end = start;"],
+  "codemode-nested-false": ["if (d && d.type === 'repl-mode') return d.replMode === true;", "if (d) return d.type === 'repl-mode' && d.replMode === true;"],
+  "codemode-virtual-bash-ignored": ["    if (b.name === 'Bash' && b.input) for (const dir of bashWriteDirs(b.input.command, d.cwd)) noteWriteDir(st, dir, d.timestamp);\n  }\n}\n", "  }\n}\n"],
 };
 for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边

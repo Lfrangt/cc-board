@@ -847,7 +847,95 @@ async function orgMapCheck() {
   }
 }
 
+// ── Code Mode（11/17 作者 本人要的）：新任务弹窗里一个开关（默认关、每次打开回到关、不记上一次；选了 Codex 收起并关掉；勾了才发 codeMode: true，Codex 不发这个键），
+//    下面一句只写事实的说明；卡片的模型胶囊最前面一段「Code」（夹具里是 recover：记录里有 repl-mode true），一根墨线隔开、字和颜色和模型同一套。
+//    中英文 × 深浅色各一遍，截图按序号放进 OUT/codemode/；再在浏览器里把每个 Claude 会话都改成 codeMode，量每种墙宽和封面下胶囊不截字、标题让出位置。
+//    颜色只核 token：开 = --thumb、关 = --fill、分隔线 = --ink（和这个主题算出来的颜色比）。服务端的断言在 state.test.mjs 的 [1e]、[7m]。单独跑：UI_ONLY=codemode
+async function cmCheck() {
+  console.log('\n[Code Mode]');
+  // 弹窗用页面自己的 openNew() 打开（「新任务」按钮也是调它）：英文界面 1520 px 时顶栏本来就放不下，右上角的按钮在视口外点不到（以前这样红过，和 Code Mode 无关）
+  const openDlg = (pg) => pg.evaluate(() => openNew()).catch(() => {});
+  const fillP = (pg, t) => pg.fill('#nPrompt', t, { timeout: 3000 }).catch(() => {});
+  const tap = (pg, sel) => pg.click(sel, { timeout: 3000 }).then(() => true, () => false);   // 找不到就算了、接着往下（红阶段在没有开关的旧界面上跑，要列出每一条红，不能卡 30 秒后整段崩掉）
+  const SH = path.join(OUT, 'codemode'); fs.rmSync(SH, { recursive: true, force: true }); fs.mkdirSync(SH, { recursive: true });
+  const R = '.card[data-sid="' + FX.sids.recover + '"]';
+  const NOTE = { zh: 'Claude 写脚本一次跑多个工具，适合大范围搜索、同一种改动改很多文件；这个窗口不能用 Remote Control。', en: 'Claude writes a script that runs several tools in one go. Suits wide searches and the same change across many files. This window can’t use Remote Control.' };
+  const tok = (page, v) => page.evaluate((v) => { const p = document.createElement('span'); p.style.color = 'var(' + v + ')'; document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; }, v);
+  const sw = (page) => ev(page, () => { const f = document.querySelector('#nCmField'), b = document.querySelector('#nCm'); if (!f || !b) return null;
+    return { shown: !f.hidden && getComputedStyle(f).display !== 'none', role: b.getAttribute('role'), on: b.getAttribute('aria-checked'), label: (b.querySelector('.swl') || {}).textContent || '', note: (document.querySelector('#nCmNote') || {}).textContent || '',
+      desc: b.getAttribute('aria-describedby'), track: getComputedStyle(b.querySelector('.swt')).backgroundColor }; });
+  let n = 0;
+  for (const [lang, scheme] of [['zh', 'dark'], ['zh', 'light'], ['en', 'dark'], ['en', 'light']]) {
+    const zh = lang === 'zh', tag = 'Code Mode（' + lang + ' ' + scheme + '）：', L1 = zh ? '中文' : '英文', S1 = scheme === 'dark' ? '深色' : '浅色';
+    const { ctx, page, errs } = await open({ mode: 'wall', lang, scheme });
+    let sent = null; await page.route('**/api/new', async (route) => { sent = JSON.parse(route.request().postData() || '{}'); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, name: 'ccb-test-cm' }) }); });   // 拦在浏览器里，不真的开会话
+    // 卡片：recover 的胶囊
+    const cap = await ev(page, (R) => { const c = document.querySelector(R), m = c && c.querySelector('.mdl'); if (!m) return null; const cm = m.querySelector('.cm'), t = c.querySelector('.title'), mn = m.querySelector('.mn');
+      return { shown: !m.hidden && m.offsetWidth > 0, first: !!cm && m.firstElementChild === cm, cmText: cm ? cm.textContent : null, seen: [...m.querySelectorAll('span')].filter((x) => getComputedStyle(x).display !== 'none').map((x) => x.textContent).join(''),
+        title: m.title, trunc: m.scrollWidth > m.clientWidth, clear: parseFloat(getComputedStyle(t).paddingRight) >= m.offsetWidth + 4, below: m.offsetTop >= c.querySelector('.chead').offsetHeight, inside: m.offsetLeft >= 0,
+        line: cm ? getComputedStyle(cm).boxShadow : '', same: !!cm && !!mn && getComputedStyle(cm).fontFamily === getComputedStyle(mn).fontFamily && getComputedStyle(cm).color === getComputedStyle(mn).color && getComputedStyle(cm).fontSize === getComputedStyle(mn).fontSize,
+        marks: document.querySelectorAll('.card .mdl .cm').length }; }, R);
+    const want = await page.evaluate(() => api('/api/state?peek=1').then((s) => s.sessions.filter((x) => x.codeMode === true).map((x) => x.sid)));
+    const ink = await tok(page, '--ink');
+    ok(!!cap && cap.shown && cap.first && cap.cmText === 'Code' && cap.seen === 'CodeOpus · xhigh' && cap.same, tag + 'Code Mode 的卡（recover）：模型胶囊最前面一段「Code」，后面照旧是 Opus · xhigh，字体、字号、颜色和模型名同一套', JSON.stringify(cap));
+    ok(!!cap && cap.line.includes(ink) && /inset/.test(cap.line), tag + '「Code」和模型之间是一根墨线（--ink 算出来的颜色，不是新颜色）', JSON.stringify({ line: cap && cap.line, ink }));
+    ok(!!cap && !cap.trunc && cap.clear && cap.below && cap.inside, tag + '胶囊没被截成省略号、挂在卡头下面、在卡内，标题让出了它的宽度', JSON.stringify(cap));
+    ok(!!cap && want.length === 1 && want[0] === FX.sids.recover && cap.marks === 1, tag + '只有服务说 codeMode 的会话有「Code」（夹具里只有 recover 一个），别的卡的胶囊不变', JSON.stringify({ want, marks: cap && cap.marks }));
+    ok(!!cap && /Code Mode/.test(cap.title) && (zh || !/[一-鿿]/.test(cap.title)), tag + '鼠标停在胶囊上：提示里写着 Code Mode' + (zh ? '' : '，英文没有漏翻的中文'), JSON.stringify(cap && cap.title));
+    // 新任务弹窗（这之前不滚页面：英文那一遍先把 recover 滚进来，右上角的「新任务」就被挤出视口、点不到了，以前这样崩过。卡片的截图放在这一遍最后，locator 自己会滚）
+    await openDlg(page); await sleep(450);
+    const s0 = await sw(page), fill = await tok(page, '--fill'), thumb = await tok(page, '--thumb');
+    ok(!!s0 && s0.shown && s0.role === 'switch' && s0.on === 'false' && s0.label === (zh ? 'Code Mode（实验）' : 'Code Mode (experimental)') && s0.note === NOTE[lang] && s0.desc === 'nCmNote' && s0.track === fill,
+      tag + '新任务弹窗：一个「' + (s0 && s0.label) + '」开关（role=switch），默认关（轨道是 --fill），下面那句说明只写事实、读屏会读到', JSON.stringify({ s0, fill }));
+    ok(!!s0 && !/省额度|省 token|save|cheaper|quota/i.test(s0.note) && (zh || !/[一-鿿]/.test(s0.label + s0.note)), tag + '说明里不写「省额度」' + (zh ? '' : '，英文没有漏翻的中文'), JSON.stringify(s0 && s0.note));
+    await tap(page, '#nCm'); await sleep(450);
+    const s1 = await sw(page);
+    ok(!!s1 && s1.on === 'true' && s1.track === thumb, tag + '点一下：打开（轨道是 --thumb，和「你选中的那一项」同一个颜色）', JSON.stringify({ s1, thumb }));
+    await fillP(page, zh ? '把所有 fetch 调用都加上 10 秒超时' : 'Add a 10 s timeout to every fetch call');
+    n++; await page.locator('#newDlg').screenshot({ path: path.join(SH, String(n).padStart(2, '0') + '-' + L1 + '-' + S1 + '-新任务弹窗-Code Mode 打开.png') });
+    sent = null; await tap(page, '#nGo'); await sleep(700);
+    ok(!!sent && sent.codeMode === true && sent.provider === 'claude', tag + '打开再开工：发给服务的带 codeMode: true', JSON.stringify(sent));
+    await openDlg(page); await sleep(450);
+    const s2 = await sw(page), kept = await page.evaluate(() => localStorage.getItem('ccb_new') || '');
+    ok(!!s2 && s2.on === 'false' && !/codeMode|cm/i.test(kept), tag + '再打开弹窗：开关回到关，不记上一次（ccb_new 里没有它）', JSON.stringify({ s2, kept }));
+    sent = null; await fillP(page, '不勾'); await tap(page, '#nGo'); await sleep(700);
+    ok(!!sent && sent.codeMode === false, tag + '不勾就开工：发的是 codeMode: false', JSON.stringify(sent));
+    if (zh && scheme === 'dark') {        // 选了 Codex：收起开关并关掉；发出去的不带 codeMode 这个键（服务那边 Codex + codeMode 会报错）
+      await openDlg(page); await sleep(450); await tap(page, '#nCm'); await sleep(200);
+      await tap(page, '#nProv [data-prov="codex"]'); await sleep(300);
+      const s3 = await sw(page);
+      sent = null; await fillP(page, '交给 Codex'); await tap(page, '#nGo'); await sleep(700);
+      ok(!!s3 && !s3.shown && s3.on === 'false' && !!sent && sent.provider === 'codex' && !('codeMode' in sent), tag + '选了 Codex：开关收起、关掉，发给服务的没有 codeMode', JSON.stringify({ s3, sent }));
+      await openDlg(page); await sleep(450); await tap(page, '#nProv [data-prov="claude"]'); await sleep(300);
+      const s4 = await sw(page);
+      ok(!!s4 && s4.shown && s4.on === 'false', tag + '换回 Claude Code：开关又出来，还是关着', JSON.stringify(s4));
+      await page.keyboard.press('Escape'); await sleep(300);
+      await page.evaluate(() => { try { const p = JSON.parse(localStorage.getItem('ccb_new')); p.provider = 'claude'; localStorage.setItem('ccb_new', JSON.stringify(p)); } catch (e) {} });
+    }
+    n++; await page.locator(R).screenshot({ path: path.join(SH, String(n).padStart(2, '0') + '-' + L1 + '-' + S1 + '-卡片上的Code标记.png') });
+    ok(errs.length === 0, tag + '页面没报错', errs.join(' | ')); await ctx.close();
+  }
+  // 每个 Claude 会话都改成 codeMode（浏览器里改 /api/state 的应答）：墙的几种宽度（700 / 1080 / 1500 换格数，刚过线时卡最窄）和封面（宽卡写版本号）下，每个胶囊都不截字、标题让出位置
+  for (const lang of ['zh', 'en']) for (const [mode, w] of [['wall', 701], ['wall', 1081], ['wall', 1440], ['wall', 1520], ['wall', 1728], ['flow', 1520]]) {
+    const c4 = await browser.newContext({ viewport: { width: w, height: 900 }, colorScheme: 'dark' });
+    await c4.addInitScript((m) => { try { localStorage.setItem('ccb_mode', JSON.stringify(m)); } catch (e) {} }, mode);
+    const pg = await c4.newPage(); const e4 = [];
+    pg.on('pageerror', (e) => e4.push(String(e)));
+    await pg.route('**/api/state*', async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }
+      for (const s of j.sessions || []) if (s.provider !== 'codex') s.codeMode = true; await route.fulfill({ response: r, json: j }); });
+    await pg.goto(FX.url + '&lang=' + lang); await pg.waitForSelector('.card'); await sleep(2400);
+    const g = await ev(pg, () => { const out = { n: 0, bad: [] };
+      for (const el of document.querySelectorAll('.card')) { const m = el.querySelector('.mdl'); if (!m || m.hidden || !m.querySelector('.cm')) continue; out.n++;
+        const t = el.querySelector('.title'), h = el.querySelector('.chead');
+        if (m.scrollWidth > m.clientWidth || parseFloat(getComputedStyle(t).paddingRight) < m.offsetWidth + 4 || m.offsetTop < h.offsetHeight || m.offsetLeft < 0) out.bad.push(m.textContent + ' w' + m.offsetWidth + '/' + m.scrollWidth + ' pad' + getComputedStyle(t).paddingRight + ' card' + el.offsetWidth); }
+      return out; });
+    ok(g.n >= 20 && g.bad.length === 0 && !e4.length, `Code Mode（${lang} ${mode} ${w} px）：每个 Claude 会话都开着时，${g.n} 个胶囊（含最长的 Code · Sonnet · medium）都不截字、在卡头下面、标题让出了位置`, JSON.stringify({ g, e4 }));
+    await c4.close();
+  }
+}
+
 try {
+  if (process.env.UI_ONLY === 'codemode') { await cmCheck(); console.log('\n（UI_ONLY=codemode：只跑了「Code Mode」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'snooze') { await snoozeCheck(); console.log('\n（UI_ONLY=snooze：只跑了「先放着带时间」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'delta') { await deltaCheck(); console.log('\n（UI_ONLY=delta：只跑了「只回变过的」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'orgmap') { await orgMapCheck(); console.log('\n（UI_ONLY=orgmap：只跑了「架构 · 放射」这一段，不是整套）'); throw ONLY_DONE; }
@@ -2395,6 +2483,7 @@ try {
       ok(errs.length === 0, '横幅 · 浅色：页面没报错', errs.join(' | ')); await ctx.close();
     }
   }
+  await cmCheck();         // Code Mode：新任务的开关、卡片上的「Code」（只在浏览器里拦 /api/new，不真开会话）
   await snoozeCheck();     // 先放着带时间（会在服务里记推迟，段末清掉）
   await deltaCheck();      // 只回变过的（拉数据瘦身）：会真的归档一个夹具会话，所以放在最后
 } catch (e) { if (e !== ONLY_DONE) throw e; } finally { await browser.close(); }
