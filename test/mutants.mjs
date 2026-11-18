@@ -185,6 +185,15 @@ const MUTANTS = {
   // 架构视图的接线（11/15 org-chart）：规则本身（org.mjs）的改坏对照在 org.test.mjs --mutants，这里只改坏服务备料的地方；[1c]、[7h]、[8] 必须抓到
   'org-not-in-state':    ["      out.org = orgSafe();", ""],
   'org-head-words-dropped': [", leadWords: CONFIG.org.leadWords, headWords: CONFIG.org.headWords });", ", leadWords: CONFIG.org.leadWords });"],   // 11/17 分支负责人：服务没把 headWords 交给 org.mjs
+  // 11/17 win-49：点名的负责人（org.seats）、「…分支」的默认字样
+  'org-seats-not-passed':   ["seats: seatSids(sessions), ", ""],
+  'org-seats-strict':       ["out.seats[k] = f; else out.seatsBad++;", "out.seats[k] = f; else throw new Error('org.seats 写错');"],
+  'org-seats-uuid-ignored': ["if (p.ids.length && p.name) hit = byId.find((x) => nameIs(x, p.name)) || null;", "if (p.ids.length && p.name) hit = live.find((x) => nameIs(x, p.name)) || null;"],
+  'org-seats-hex-only':     ["const UUID_RE = /[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}/gi;", "const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;"],   // 只认十六进制：夹具的会话号认不出，名字和会话号对不上时退不回去
+  'tidy-seats-collected':   ["    if (role) { const k = 'seat:' + s.sid", "    if (false) { const k = 'seat:' + s.sid"],   // 自动收工照收坐在岗位上的窗口（分支负责人被当成做完了收掉的那种）
+  'org-seats-no-reload':    ["if (Date.now() - seatMemo.at < CHIEF_MS) return seatMemo.map;", "if (seatMemo.at) return seatMemo.map;"],
+  'org-branch-tail-dropped': ["|head of|' + BRANCH_TAIL };", "|head of' };"],
+  'org-branch-git-ok':      ["(?<!合并|合进|合入|并入|清理|删除|删掉|切换|切到|新建|新开|拉取|拉出|推送|远程|本地|临时|功能|特性|发布|开发|修复|热修|上线|回滚|[主旧切删拉推建合])分支", "分支"],
   'org-no-startedAt':    ["x.pid === p.pid && Number(x.startedAt) <= at", "x.pid === p.pid"],
   'org-name-not-unique': ["if (c.length === 1) return c[0].sid;", "if (c.length >= 1) return c[0].sid;"],
   'org-peer-turn-only':  ["        const p = notePeer(st, d);", "        const p = st.open ? null : notePeer(st, d);"],

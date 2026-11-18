@@ -20,6 +20,8 @@
         墙上每列几格由 allot() 定：拖两列之间的分隔条（.gsplit，pointer 事件 → dragPaint() 跟手、endDrag() 吸附）记下的格数（ccb_span）先拿，其余照 lanes() 分，放不下的列挤成窄条（.squeezed，点一下 peek 先让它一格）。~/Projects/ccboard-launch-film 逐字读取本文件的样式表和 i18n 字典。
         架构视图（body.org）只照服务端的 org 画谁归谁管，不自己推：orgModel() 定画在哪（你 → 总管 → 每个项目一列：负责人的树、总管带、你直接带），paintOrg() 按 sid 复用方块（.onode 用墙上卡片同一套状态 class），
         orgLines() 量几何画 SVG 墨线，悬停 / 聚焦时 orgChain() 那一串加重并在 #otip 写依据（orgWhy）；orgFlights() 比前后两次轮询找刚到的消息，orgFly() 飞一个一次性的小点、收信人亮一下。
+        架构图有两种摆法（顶栏「层级 | 放射」，ccb_orgshape）：层级是上面这一张；放射（#org.map）是同一份 org、同一批方块，你和总管在圆心、每个项目一个扇区、窗口按上下级一圈圈往外，
+        orgMapLayout()（纯函数）算每个方块在哪，orgMapPaint() / orgMapArrange() 摆上去，orgMapLines() 画线，画布能拖能缩放（orgV、orgMapApply / orgMapFit / orgMapZoom）。
  [PROTOCOL]: Update this header on change, then check CLAUDE.md
 -->
 <html lang="zh-CN">
@@ -556,6 +558,56 @@ body.org #org{display:block;position:relative;min-height:100%;padding:28px 0 64p
 #otip[hidden]{display:none} #otip .nw{white-space:nowrap}
 .ofx{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:25}
 .ofly{position:absolute;left:0;top:0;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;border-radius:50%;background:var(--accent)}
+/* 架构 · 放射（11/17）：同一批方块换个摆法。你和总管在圆心，每个项目一个扇区，窗口按上下级一圈圈往外；字一律横着写，所以圈是椭圆。
+   画布（.omv）能拖、能缩放：世界（.omw）整个 transform，线画在世界里（non-scaling-stroke：缩放时还是一根墨线）。
+   普通窗口只留状态点和标题、没有框（要你动手的多一行：要你做的事）；悬停 / 聚焦时原地展开成和层级图一样的方块（.hot1），缩小着看时按倍数放回原大。 */
+#oshape{display:none} body.org #oshape{display:flex}
+body.org #org.map{position:absolute;inset:0;min-height:0;padding:0;overflow:hidden}
+body.org main:has(#org.map){overflow:hidden}
+.omv{position:absolute;inset:0;overflow:hidden;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none}
+.omv.drag{cursor:grabbing}
+.omw{position:absolute;left:0;top:0;width:0;height:0;transform-origin:0 0}
+.omw.glide{transition:transform var(--d3) var(--ease-out)}
+.omlines{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.omlines path{fill:none;stroke:var(--ink);stroke-width:var(--ink-w);vector-effect:non-scaling-stroke}
+.omlines path.hot{stroke:var(--text-2);stroke-width:1.5}
+#org.map .otop{position:absolute;left:0;top:0;width:max-content;padding:0;transform:translate(-50%,-50%)}
+#org.map .ovl.o1l{height:12px} #org.map .ovl.o2l{display:none}
+#org.map .ochief{width:276px}
+.omnodes{list-style:none;margin:0;padding:0}
+#org.map .omnodes>.oli{position:absolute;left:0;top:0;width:max-content;padding:0}
+#org.map .oli.ar>.onode{position:absolute;right:0;top:0}
+#org.map .oli>.okids{display:none}
+#org.map .oli.hot1{z-index:6}
+#org.map .omnodes .onode{width:max-content;max-width:340px}
+#org.map .onode .o3{display:none}
+#org.map .oli.r-lead>.onode{width:276px}
+#org.map .oli:not(.hot1) .obr{display:none}
+#org.map .oli.r-head>.onode{padding:4px 9px 4px 7px}
+#org.map .oli.r-head .o2,#org.map .oli.r-member .o2,#org.map .oli.r-former .o2{display:none}
+#org.map .oli.r-head .ot{max-width:184px}
+#org.map .oli.r-member>.onode,#org.map .oli.r-former>.onode{padding:3px 8px 3px 5px;border-radius:var(--r-ctl);background:none;box-shadow:none}
+#org.map .oli.r-member>.onode:hover,#org.map .oli.r-former>.onode:hover{box-shadow:inset 0 0 0 999px var(--hover)}
+#org.map .oli.r-member>.onode.hot,#org.map .oli.r-former>.onode.hot{box-shadow:inset 0 0 0 var(--ink-w) var(--text-2)}
+#org.map .oli.r-member>.onode.ping,#org.map .oli.r-former>.onode.ping{box-shadow:inset 0 0 0 1.5px var(--accent)}
+#org.map .oli.r-member .ot,#org.map .oli.r-former .ot{flex:none;max-width:172px;font-size:12.5px;font-weight:500;color:var(--text-2)}
+#org.map .oli.r-member .s-busy .ot,#org.map .oli.r-member .bg .ot,#org.map .oli.r-member .s-review .ot{color:var(--text)}
+#org.map .oli.ar:is(.r-member,.r-former):not(.hot1) .o1{flex-direction:row-reverse}   /* 左半边没有框的：点靠圆心那一头，字往外伸 */
+#org.map .oli.ar:is(.r-member,.r-former):not(.hot1) .o2{padding-left:0;padding-right:20px;text-align:right}
+/* 要你动手的（琥珀）在图上直接多一行：要你做的事 */
+#org.map .oli.r-member>.onode:is(.s-reply,.s-ask,.alert) .o2{display:block;max-width:206px}
+#org.map .oli.r-member>.onode:is(.s-reply,.s-ask,.alert) .ot{font-weight:600;color:var(--text)}
+/* 悬停 / 聚焦的那一个：原地展开成完整的方块 */
+#org.map .omnodes>.oli.hot1>.onode.onode{min-width:280px;padding:7px 10px 8px 9px;border-radius:var(--r-card);background:var(--raised);box-shadow:var(--shadow-pop);transform:scale(var(--omi,1));transform-origin:0 0}
+#org.map .omnodes>.oli.ar.hot1>.onode.onode{transform-origin:100% 0}
+#org.map .oli.hot1 .o2,#org.map .oli.hot1 .o3{display:block;max-width:none}
+#org.map .oli.hot1 .o3:empty{display:none}
+#org.map .oli.hot1 .obr:not(:empty){display:block}
+#org.map .oli.hot1 .ot{flex:1;max-width:none;font-size:13px;font-weight:600;color:var(--text)}
+.omlabs>.ghead{position:absolute;left:0;top:0;height:20px;padding:0 6px;align-items:baseline;white-space:nowrap;background:var(--bg);border-radius:var(--r-badge);pointer-events:none}
+.omlabs>.ghead.r{translate:-100% 0} .omlabs>.ghead.c{translate:-50% -50%}
+.omctl{position:absolute;right:16px;bottom:16px;z-index:20}
+.omctl button{min-width:28px;justify-content:center}
 @media (max-width:700px){body.org #org{padding-top:18px} .orow{flex-direction:column;align-items:stretch;width:auto;min-width:0;gap:24px;padding-top:0} .ocol{width:auto} .obus{display:none}}
 @media (max-width:700px){.hint,.brand,.lim{display:none} .bar{gap:8px;padding-left:10px;padding-right:10px} .seg button{padding:0 8px} :root{--cw:calc(100vw - 28px)} .arow{flex-wrap:wrap}.arow .t{flex-basis:100%}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important} dialog,dialog[open]{transform:none} .card{transition-property:opacity,filter!important} .halo{transition-property:opacity!important}}
@@ -571,6 +623,7 @@ body.org #org{display:block;position:relative;min-height:100%;padding:28px 0 64p
   <div class="lim" id="limits" role="group" aria-label="订阅额度"></div>
   <button class="tbtn" id="archBtn">归档</button>
   <div class="seg" id="by" aria-label="墙上怎么分列"><button data-by="project">按项目</button><button data-by="status">按状态</button></div>
+  <div class="seg" id="oshape" aria-label="架构图怎么排"><button data-oshape="tree">层级</button><button data-oshape="map">放射</button></div>
   <div class="seg" id="rows" aria-label="一屏放多少"><button data-rows="2">8 格</button><button data-rows="3">12 格</button></div>
   <button class="primary" id="newBtn" title="⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片">新任务</button>
 </header>
@@ -683,11 +736,13 @@ const EN = {
   '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second', '文件太大，只显示了开头 1 MB。': 'File is large; showing the first 1 MB only.',
   '最近一条回复用的': 'used by its latest reply', '开窗口时定的': 'set when the window was opened',
   // 架构视图（11/16 khalil-a0）
-  '架构': 'Org', '谁归谁管：总管、各项目的负责人和它们带的窗口': 'Who reports to whom: the chief, each project lead and the windows they run',
+  '架构': 'Org', '架构图怎么排': 'Org chart layout', '层级': 'Tree', '放射': 'Radial', '画布': 'Canvas', '画布缩小': 'Zoom out', '画布放大': 'Zoom in', '适应窗口': 'Fit', '把整张图放回窗口里（双击空白处也行）': 'Fit the whole chart in the window (or double-click empty space)',
+  '谁归谁管：总管、各项目的负责人和它们带的窗口': 'Who reports to whom: the chief, each project lead and the windows they run',
   '总管': 'Chief', '负责人': 'Lead', '前任': 'Former', '后台在跑': 'Background task', '你派的': 'from you', '没有事等你': 'nothing needs you', '刚刚': 'just now',
   '总管，直接归你': 'Chief, reports to you', '项目负责人，归总管': 'Project lead, reports to the chief', '项目负责人，你直接带': 'Project lead, reports to you',
   '分支': 'Branch', '分支负责人，归总管': 'Branch lead, reports to the chief', '分支负责人，你直接带': 'Branch lead, reports to you',
   '没有窗口在管它，你自己在带': 'No window manages it; you lead it yourself',
+  '没有窗口在管它，按项目挂在总管下面': 'No window manages it; placed under the chief by project',
   // 一起退出、全部接回（P0-0）
   '全部接回': 'Resume all', '停下': 'Stop', '接着接回': 'Continue', '正在一个一个接回': 'Resuming one at a time',
   '对话都还在，可以一个一个接回来': 'Their conversations are kept and can be resumed one by one',
@@ -729,7 +784,8 @@ const RULES = [
   [/^(.+) 开的窗口$/, 'Opened by $1'], [/^最近 (\d+) 条消息来自 (.+)，最近一条(.+)$/, (m, n, a, t) => 'Last ' + n + ' messages came from ' + a + ', the latest ' + T(t.trim())],
   [/^原来听前任的，换代后跟着岗位归 (.+)$/, 'Used to report to the previous holder; moved to $1 with the seat'], [/^已交接给 (.+)$/, 'Handed over to $1'], [/^分支负责人，归 (.+)$/, 'Branch lead, reports to $1'],
   [/^一直在向 (.+) 交东西（(\d+) 条，最近一条 (.+)）$/, (m, a, n, t) => 'Keeps delivering to ' + a + ' (' + n + (n === '1' ? ' message' : ' messages') + ', the latest ' + T(t) + ')'], [/^归 (.+) 管$/, 'Reports to $1'],
-  [/^(\d+) 个你直接带$/, '$1 directly under you'], [/^(\d+) 个有窗口在带$/, '$1 led by a window'],
+  [/^没有窗口在管它，按项目挂在 (.+) 下面$/, 'No window manages it; placed under $1 by project'], [/^(.+) 给它发过 (\d+) 条消息（最近一条 (.+)），挂在它下面$/, (m, a, n, t) => a + ' sent it ' + n + (n === '1' ? ' message' : ' messages') + ' (the latest ' + T(t) + '), so it sits under ' + a], [/^没有窗口在管它，标题对得上分支 (.+)，挂在它下面$/, 'No window manages it; its title matches branch $1, so it sits there'],
+  [/^(\d+) 个你直接带$/, '$1 directly under you'], [/^(\d+) 个有窗口在带$/, '$1 led by a window'], [/^(\d+) 个按项目挂上$/, '$1 placed by project'],
   // 一起退出的横幅（P0-0）
   [/^(\d\d:\d\d) 有 (\d+) 个窗口一起退出了$/, '$2 windows exited together at $1'], [/^已接回 (\d+) \/ (\d+)$/, '$1 / $2 resumed'],
   [/^负载 ([\d.]+)，等降到 (\d+) 以下再接$/, 'Load $1 — waiting until it drops below $2'], [/^负载一直没降，停在第 (\d+) 个$/, 'Load stayed high — stopped at window $1'], [/^停在第 (\d+) 个$/, 'Stopped at window $1'],
@@ -2224,6 +2280,9 @@ addEventListener('message', (e) => { if (e.source === $('#pFrame').contentWindow
 const ORG_ROLE = { chief: '总管', lead: '负责人', head: '分支', former: '前任' };
 const onodes = new Map(), ocols = new Map();      // sid → { li, box, kids, pt }；项目 key → 一列的元素
 let orgM = null, orgPrev = null, orgHot = null, orgZoomAt = 0;
+let orgShape = store('ccb_orgshape') === 'map' ? 'map' : 'tree';         // 架构图怎么排：层级（你在最上面，一列一个项目）| 放射（你在圆心）
+const orgV = { k: 1, x: 0, y: 0, user: false, drawn: false };            // 放射图的画布：屏幕 = 世界 × k + (x, y)；user = 他自己拖过 / 缩放过（之后不替他把图放回窗口里）
+let orgMapL = null, orgMapSp = null, orgMapKeys = null; const orgMapWH = new Map(), orgMapEls = new Map();   // 上一次的布局、要排的东西、扇区绕圈的先后；量过的方块大小、项目名的元素
 const setText = (el, t) => { if (el && el.textContent !== t) el.textContent = t; };
 // 窗口的短名：登记名末尾括号里的那个（「总指挥 · Fable（khalil-a5）」→ khalil-a5）；没有就用短的登记名，再没有用标题
 function shortName(s) {
@@ -2250,7 +2309,10 @@ function orgModel(st) {
   // 分支负责人（11/17 Khalil：「固定在我们架构里比较靠上方的位置」）排在最前面，不跟着状态挪：它是总指挥下面固定的一条分支，他常点它派活
   // 「N 件事等你」那几件要在各组最上面一眼看到；状态没变时顺序不变（档位只跟着状态变），所以不会每次轮询都跳
   const tier = (sid) => { const v = (cards.get(sid) || {}).v, d = dotOf(v); return d === 'act' ? 0 : d === 'busy' ? 1 : d === 'review' ? 2 : 3; };
-  const rank = (a, b) => (role(b) === 'head') - (role(a) === 'head') || (role(a) === 'former') - (role(b) === 'former') || tier(a) - tier(b) || (S.get(a).startedAt || 0) - (S.get(b).startedAt || 0) || (a < b ? -1 : 1);
+  // 分支负责人之间（11/17 khalil-49）：「X负责人」（增长、设计这类管一摊事的高管）排在「…分支」（开发线）前面，也不跟着状态挪。起因：「…分支」也认成分支以后，
+  // 管一摊事的负责人要是最晚开的（比如从归档里接回来），按开的先后会排到开发线后面，可它应该一直待在最上面。只决定先后，不改谁归谁管
+  const hp = (sid) => { if (role(sid) !== 'head') return 2; const s = S.get(sid) || {}; return /负责人|head of/i.test(String(s.regName || '') + ' ' + String(s.title || '')) ? 0 : 1; };
+  const rank = (a, b) => (role(b) === 'head') - (role(a) === 'head') || hp(a) - hp(b) || (role(a) === 'former') - (role(b) === 'former') || tier(a) - tier(b) || (S.get(a).startedAt || 0) - (S.get(b).startedAt || 0) || (a < b ? -1 : 1);
   const kids = new Map(), under = new Map(), colOf = new Map(), cols = new Map();
   for (const [k, b] of up) { if (!kids.has(b)) kids.set(b, []); kids.get(b).push(k); }
   for (const l of kids.values()) l.sort(rank);
@@ -2264,7 +2326,7 @@ function orgModel(st) {
     const c = cols.get(g.key); c.n++; if (!up.has(id)) c[sec(id)].push(id);
   }
   for (const c of cols.values()) for (const k of ['lead', 'chief', 'you']) c[k].sort(rank);
-  return { S, nd, chief, gen: chief && Number.isFinite(O.gen) ? O.gen : null, role, boss, up, kids, under, sec, top, colOf, cols: [...cols.values()] };
+  return { S, nd, chief, gen: chief && Number.isFinite(O.gen) ? O.gen : null, role, boss, up, kids, under, sec, top, colOf, hp, cols: [...cols.values()] };
 }
 // 「消息飞过去」：和上一次轮询比，哪个窗口的哪个发信人的最近一条变新了。第一次载入（a 是 null）、上一次还不在的窗口都不算（它们的旧消息不是刚到的）
 function orgFlights(a, b) {
@@ -2304,6 +2366,11 @@ function orgWhy(sid, M, st) {
   if (role === 'former') return T('已交接给 ' + bn);
   if (x.handed) return T('原来听前任的，换代后跟着岗位归 ' + bn);
   if (x.via === 'spawn') return T(bn + ' 开的窗口');
+  // dept（11/17）：没有窗口在管它（多半是你本人开的），服务按项目把它挂到这个项目的岗位上。照实写：挂上去的那个窗口没给它派过活
+  if (x.via === 'dept') return T(b === M.chief ? '没有窗口在管它，按项目挂在总管下面' : M.role(b) === 'head' ? '没有窗口在管它，标题对得上分支 ' + bn + '，挂在它下面' : '没有窗口在管它，按项目挂在 ' + bn + ' 下面');
+  // contact（11/17 khalil-49）：没有窗口在管它，但它这个项目的负责人 / 分支负责人给它发过消息（第 3 步要两条才算，这里一条就挂）。n / last 是那个岗位发给它的，
+  // 数的是服务读进来的这个窗口自己的对话记录里那个岗位发来的消息（origin.kind === 'peer'，记录最近 4 MB 起），不是群聊、不是收件箱
+  if (x.via === 'contact' && x.n > 0 && x.last > 0) return T(bn + ' 给它发过 ' + x.n + ' 条消息（最近一条 ' + agoText(x.last, st.now) + '），挂在它下面');
   // msg：n / last 是上级发给它的；report（服务端 7c622fb 起单独标）：规则第 3 步的兜底，它一直在向负责人交东西，n / last 是它发给上级的。界面不再自己拿 from 去猜
   if (x.via === 'msg' && x.n > 0 && x.last > 0) return T('最近 ' + x.n + ' 条消息来自 ' + bn + '，最近一条 ' + agoText(x.last, st.now));
   if (x.via === 'report' && x.n > 0 && x.last > 0) return T('一直在向 ' + bn + ' 交东西（' + x.n + ' 条，最近一条 ' + agoText(x.last, st.now) + '）');
@@ -2352,6 +2419,7 @@ function orgCol(c) {
 }
 function orgSkel() {
   const O = $('#org'); if (O.firstChild) return O;
+  if (orgShape === 'map') return orgMapSkel(O);
   O.innerHTML = '<div class="otop"><div class="oyou"><b></b><span class="oyn num"></span><span class="oyn2 num"></span></div><i class="ovl o1l"></i><ul class="ochief"></ul><i class="ovl o2l"></i></div>' +
     '<div class="oscroll"><div class="orow"><svg class="obus" width="1" height="1" aria-hidden="true"><path class="base"/><path class="hot"/></svg></div></div>' +
     '<div class="ofx" aria-hidden="true"></div><div id="otip" role="tooltip" hidden></div>';
@@ -2371,16 +2439,20 @@ function paintOrg(st) {
   // 你：一句平常话。在跑 = 墙上的「运行中」（含后台在跑），等你 = 要你处理的那一类（等你选、停住了、待跟进：琥珀色的那些），和墙上「按状态」的第一列同一个判断
   let nRun = 0, nAct = 0; for (const sid of M.S.keys()) { const v = (cards.get(sid) || {}).v; if (!v) continue; if (v.live) nRun++; if (dotOf(v) === 'act') nAct++; }
   const y1 = $('.oyou .oyn', O), yl = orgYouLine(M.S.size, nRun, nAct); if (y1.dataset.k !== yl) { y1.dataset.k = yl; y1.innerHTML = yl; }
-  let nDirect = 0; for (const sid of M.S.keys()) if (!M.boss(sid)) nDirect++;            // 没有窗口在管的（总管、没有总管时的负责人也算）；两个数加起来是窗口数
-  setText($('.oyou .oyn2', O), T(nDirect + ' 个你直接带') + ' · ' + T((M.S.size - nDirect) + ' 个有窗口在带'));
+  // 第二行：你直接带（总管、没有总管时的负责人也算）· 有窗口在带 · 按项目挂上（via dept：没有窗口在管、服务按项目挂到岗位上的，11/17）。三个数加起来是窗口数；最后一个是 0 时不写
+  let nDirect = 0, nPlaced = 0; for (const sid of M.S.keys()) { if (!M.boss(sid)) nDirect++; else if (M.nd(sid).via === 'dept') nPlaced++; }
+  setText($('.oyou .oyn2', O), [T(nDirect + ' 个你直接带'), T((M.S.size - nDirect - nPlaced) + ' 个有窗口在带')].concat(nPlaced ? [T(nPlaced + ' 个按项目挂上')] : []).join(' · '));
   for (const sid of M.S.keys()) orgBox(sid, M, st);
   O.classList.toggle('nochief', !M.chief); O.classList.toggle('nocols', !M.cols.length);
   orgPlace($('.ochief', O), M.chief ? [M.chief] : []);
-  const row = $('.orow', O), els = [$('.obus', row), ...M.cols.map((c) => orgCol(c).el)];
-  for (const [k, c] of ocols) if (!M.cols.some((x) => x.key === k)) { c.el.remove(); ocols.delete(k); }
-  els.forEach((el, i) => { if (row.children[i] !== el) row.insertBefore(el, row.children[i] || null); });
-  for (const sid of M.S.keys()) orgPlace(onodes.get(sid).kids, M.kids.get(sid) || []);
-  orgMark(); orgFit();
+  if (orgShape === 'map') orgMapPaint(O, M);       // 放射：同一批方块，换个摆法
+  else {
+    const row = $('.orow', O), els = [$('.obus', row), ...M.cols.map((c) => orgCol(c).el)];
+    for (const [k, c] of ocols) if (!M.cols.some((x) => x.key === k)) { c.el.remove(); ocols.delete(k); }
+    els.forEach((el, i) => { if (row.children[i] !== el) row.insertBefore(el, row.children[i] || null); });
+    for (const sid of M.S.keys()) orgPlace(onodes.get(sid).kids, M.kids.get(sid) || []);
+    orgMark(); orgFit();
+  }
   const fl = orgFlights(orgPrev, st); orgPrev = { now: st.now, org: st.org };
   for (const f of fl) orgFly(f.from, f.to);
 }
@@ -2397,13 +2469,14 @@ function orgChain() {
 function orgMark() {
   const O = $('#org'); if (!orgM || !O.firstChild) return;
   const ch = orgChain();
-  for (const [sid, n] of onodes) n.box.classList.toggle('hot', ch.on.has(sid));
+  for (const [sid, n] of onodes) { n.box.classList.toggle('hot', ch.on.has(sid)); n.li.classList.toggle('hot1', orgShape === 'map' && sid === orgHot); }   // hot1：放射图里悬停的那一个原地展开
   $('.oyou', O).classList.toggle('hot', ch.on.size > 0);
   $('.ovl.o1l', O).classList.toggle('hot', ch.viaChief); $('.ovl.o2l', O).classList.toggle('hot', ch.path);
   for (const [k, c] of ocols) for (const g of ['chief', 'you']) c.g[g].lab.classList.toggle('hot', ch.col === k && ch.sec === g);
 }
 function orgLines() {
   const O = $('#org'), M = orgM; if (mode !== 'org' || !M || !O.firstChild) return;
+  if (orgShape === 'map') return orgMapLines();
   const R = 5, px = (n) => Math.round(n) + 0.5, ch = orgChain(), hotKid = new Set([...ch.on].filter((k) => M.up.has(k)));
   for (const [key, c] of ocols) {
     if (!c.el.isConnected) continue;
@@ -2446,6 +2519,7 @@ function orgLines() {
 // 列宽：一屏放得下就把各列撑开到最宽 380 px；放不下每列至少 248 px，列区域横着滚
 function orgFit() {
   const O = $('#org'); if (mode !== 'org' || !O.firstChild) return;
+  if (orgShape === 'map') return orgMapArrange();
   const n = Math.max(1, $('.orow', O).querySelectorAll(':scope > .ocol').length), w = Math.max(248, Math.min(380, Math.floor(($('.oscroll', O).clientWidth - 32 - (n - 1) * 28) / n))) + 'px';
   if ($('.orow', O).style.getPropertyValue('--ocw') !== w) $('.orow', O).style.setProperty('--ocw', w);
   orgLines(); orgTip();
@@ -2463,6 +2537,11 @@ function orgTip() {
   const or = $('#org').getBoundingClientRect(), r = n.box.getBoundingClientRect(), mw = Math.max(140, Math.round(r.width - 20)) + 'px';
   if (tip.style.maxWidth !== mw) tip.style.maxWidth = mw;
   const w = tip.offsetWidth, h = tip.offsetHeight;
+  if (orgShape === 'map') {                           // 放射图：展开的方块浮在图上，依据贴在它下面（放不下贴上面），不骑在下边线上盖住它的第三行
+    const ar = n.li.classList.contains('ar'), below = r.bottom + 5 + h <= or.bottom - 4;
+    tip.style.left = Math.round(Math.max(8, Math.min(or.width - w - 8, (ar ? r.right - w : r.left) - or.left))) + 'px';
+    tip.style.top = Math.round((below ? r.bottom + 5 : r.top - 5 - h) - or.top) + 'px'; return;
+  }
   tip.style.left = Math.round(Math.max(8, r.right - 10 - w - or.left)) + 'px';
   tip.style.top = Math.round(r.bottom + Math.min(h / 2, 10) - h - or.top) + 'px';
 }
@@ -2482,7 +2561,222 @@ function orgFly(from, to) {
 function orgReset() {
   const O = $('#org'); for (const x of onodes.values()) clearTimeout(x.pt);
   O.textContent = ''; O.className = ''; onodes.clear(); ocols.clear(); orgM = null; orgPrev = null; orgHot = null;
+  orgMapL = null; orgMapSp = null; orgMapKeys = null; orgMapWH.clear(); orgMapEls.clear(); orgV.user = false; orgV.drawn = false;
 }
+// ── 架构 · 放射（11/17 khalil-e7）──
+// Khalil 11/17 22:38：「任务多的话……我在最上面金字塔级的这个可能显示的就不是很那个了……做成一个像类似 Canvas 一样的，就是我在中间，然后呢可以放射状出去……有不同的项目，然后 Agent 呢以我为圆心」。
+// 同一份 org、同一批方块（onodes、orgBox），只换摆法：你和总管在圆心，每个项目一个扇区，窗口按上下级一圈圈往外。谁归谁管照旧只看服务端，这里一条规则都不加。
+// 放射布局（纯函数，测试直接喂数据）。sp = { hub: { w, h }, sectors: [{ key, roots: [id] }]（绕圈的先后，第一个在正右）, kids: Map(id → [id]), size: (id) → { w, h }, opt }
+// 回 { pos: Map(id → { x, y, l, t, w, h, d, th, al }), secs: [{ key, x, y, at }], box: { x0, y0, x1, y1 }, s }：(x, y) 是它在圈上的点，l / t 是方块左上角，al 是 -1…1（方块朝哪边伸：1 = 往右，-1 = 往左，0 = 居中）。
+// 字一律横着写，所以圈是椭圆；一个窗口要占多大的角度看它在哪：左右两侧是上下叠，只要一行高；正上正下是并排，要一整个方块宽（need）。
+// 圈 1 只放带着人的（负责人）；没带人的至少在圈 2，不然三五个零散窗口就把圆心周围占满。圈放不下就整体往外放（s），放得下有富余就把角度摊开（最多 stretch 倍），再多的匀给扇区之间。
+function orgMapLayout(sp) {
+  const o = Object.assign({ ratio: 1.6, gx: 26, gy: 5, ring: 44, padX: 44, padY: 30, gap: 0.1, stretch: 2.2 }, sp.opt || {});
+  const TAU = Math.PI * 2, hub = sp.hub || { w: 0, h: 0 }, secs = (sp.sectors || []).filter((S) => S && S.roots && S.roots.length), kidsOf = (id) => sp.kids.get(id) || [];
+  const depth = new Map(), ringW = [], ringH = [], ax = [0], by = [0], ang = new Map(), pos = new Map(), lo = [], hi = [], rev = secs.map(() => false); let maxD = 1;
+  const walk = (id, d) => { const ks = kidsOf(id).filter((c) => !depth.has(c)), dd = ks.length ? d : Math.max(2, d), z = sp.size(id); depth.set(id, dd); maxD = Math.max(maxD, dd);
+    ringW[dd] = Math.max(ringW[dd] || 0, z.w); ringH[dd] = Math.max(ringH[dd] || 0, z.h); for (const c of ks) if (!depth.has(c)) walk(c, d + 1); };
+  for (const S of secs) for (const r of S.roots) if (!depth.has(r)) walk(r, 1);
+  // 有扇区在圈 1 上没有方块时，它的项目名写在圈 1 上、往外伸（见下面 labs）：圈 1 至少留出一个项目名的宽度，项目名碰不到圈 2 的方块（11/18 khalil-eb）
+  if (secs.some((S) => !S.roots.some((r) => depth.get(r) === 1))) ringW[1] = Math.max(ringW[1] || 0, 130);
+  const out = (box) => ({ pos, secs: [], box, s: 1, band: [] });
+  if (!depth.size) return out({ x0: -hub.w / 2, y0: -hub.h / 2, x1: hub.w / 2, y1: hub.h / 2 });
+  const rings = (s) => { let a = (hub.w / 2 + o.padX) * s; for (let d = 1; d <= maxD; d++) { ax[d] = a; by[d] = Math.max(a / o.ratio, hub.h / 2 + o.padY + (ringH[1] || 0) / 2 + (d - 1) * ((ringH[d] || 26) + 30)); a += (ringW[d] || 0) + o.ring; } };
+  const need = (th, d, z) => Math.min((z.h + o.gy) / Math.max(1e-6, by[d] * Math.abs(Math.cos(th))), (z.w + o.gx) / Math.max(1e-6, ax[d] * Math.abs(Math.sin(th))));
+  const shift = (id, dl) => { ang.set(id, ang.get(id) + dl); for (const c of kidsOf(id)) if (depth.get(c) > depth.get(id)) shift(c, dl); };
+  const span = (id, th, k, rv) => {                    // 把 id 这棵子树从 th 起顺时针排下去，回它排到哪
+    const d = depth.get(id), z = sp.size(id), ks = kidsOf(id).filter((c) => depth.get(c) > d);
+    if (!ks.length) { const w = need(th, d, z) * k; ang.set(id, th + w / 2); return th + w; }
+    const t0 = th; for (const c of (rv ? ks.slice().reverse() : ks)) th = span(c, th, k, rv);
+    const own = need((t0 + th) / 2, d, z) * k;         // 下级占的角度比它自己要的还小（只带一个）：往两边让开
+    if (th - t0 < own) { const dl = (own - (th - t0)) / 2; for (const c of ks) shift(c, dl); th = t0 + own; }
+    ang.set(id, (t0 + th) / 2); return th;
+  };
+  const sweep = (th0, k, gap) => { let th = th0; secs.forEach((S, i) => { lo[i] = th; for (const r of (rev[i] ? S.roots.slice().reverse() : S.roots)) th = span(r, th, k, rev[i]); hi[i] = th; th += gap; }); return th - th0; };
+  const lay = (k, gap) => { let c = 0, tot = 0; for (let i = 0; i < 4; i++) { tot = sweep(c, k, gap); c -= (lo[0] + hi[0]) / 2; } return tot; };   // 第一个扇区的正中对着正右：它排在哪又影响它占多宽，来回几次就稳了
+  const settle = (s) => {
+    rings(s); let k = 1, gap = o.gap;
+    if (lay(1, gap) < TAU) { let a = 1, b = o.stretch; if (lay(b, gap) <= TAU) k = b; else { for (let i = 0; i < 14; i++) { const m = (a + b) / 2; if (lay(m, gap) > TAU) b = m; else a = m; } k = a; } }
+    for (let i = 0; i < 3; i++) { const left = TAU - lay(k, gap); if (left <= 1e-4) break; gap += left / secs.length; }
+    return lay(k, gap);
+  };
+  const put = () => { pos.clear(); for (const [id, th] of ang) { const d = depth.get(id), z = sp.size(id), c = Math.cos(th), x = ax[d] * c, y = by[d] * Math.sin(th), al = Math.max(-1, Math.min(1, c * 3)); pos.set(id, { x, y, l: x - z.w * (1 - al) / 2, t: y - z.h / 2, w: z.w, h: z.h, d, th, al }); } };
+  const hit = () => { const R = [...pos.values()], hw = hub.w / 2 + 14, hh = hub.h / 2 + 12;
+    for (const p of R) if (p.l < hw && p.l + p.w > -hw && p.t < hh && p.t + p.h > -hh) return true;
+    for (let i = 0; i < R.length; i++) for (let j = i + 1; j < R.length; j++) { const p = R[i], q = R[j]; if (p.l < q.l + q.w + 8 && q.l < p.l + p.w + 8 && p.t < q.t + q.h + 1 && q.t < p.t + p.h + 1) return true; }
+    return false; };
+  let s = 1; rings(1);
+  if (lay(1, o.gap) > TAU) { let a = 1, b = 2; for (; b < 64; a = b, b *= 2) { rings(b); if (lay(1, o.gap) <= TAU) break; } for (let i = 0; i < 16; i++) { const m = (a + b) / 2; rings(m); if (lay(1, o.gap) > TAU) a = m; else b = m; } s = b; }
+  settle(s);
+  secs.forEach((S, i) => { const c = (lo[i] + hi[i]) / 2, cx = Math.cos(c); rev[i] = cx < -0.38 || (cx <= 0.38 && Math.sin(c) > 0); });   // 左边、下边的扇区倒着排：排第一的总在上面（或左边）
+  settle(s); put();
+  for (let i = 0; i < 40 && hit(); i++) { s *= 1.04; settle(s); put(); }   // 兜底：还有方块压着（不同圈之间、挨着圆心的），整体再往外放一点
+  const labs = secs.map((S, i) => {                    // 项目名：这个扇区只有一个负责人就写在它的方块上面，不然写在圈 1 上扇区正中（那里没有方块）
+    const heads = S.roots.filter((r) => depth.get(r) === 1), p = heads.length ? pos.get(heads[0]) : null, c = (lo[i] + hi[i]) / 2, cx = Math.cos(c), x = ax[1] * cx, y = by[1] * Math.sin(c);
+    if (p) return { key: S.key, x: p.al < 0 ? p.l + p.w : p.l, y: p.t - 24, at: p.al < 0 ? 'r' : 'l' };
+    // 写在圈 1 上的：左右两侧往外伸（左边右对齐、右边左对齐，竖着居中，项目名一行 20 px 高），正上正下照旧居中。之前一律居中，左右两侧的项目名有半截伸进圆心那一块（4 个项目时「Acme App 5」压着「你」）
+    return Math.abs(cx) > 0.38 ? { key: S.key, x, y: y - 10, at: cx < 0 ? 'r' : 'l' } : { key: S.key, x, y, at: 'c' };
+  });
+  const box = { x0: -hub.w / 2, y0: -hub.h / 2, x1: hub.w / 2, y1: hub.h / 2 };
+  for (const p of pos.values()) { box.x0 = Math.min(box.x0, p.l); box.y0 = Math.min(box.y0, p.t); box.x1 = Math.max(box.x1, p.l + p.w); box.y1 = Math.max(box.y1, p.t + p.h); }
+  for (const l of labs) { box.y0 = Math.min(box.y0, l.y - 12); box.y1 = Math.max(box.y1, l.y + 22); }
+  // band[d]：圈 d 里侧那道空档（圈 d - 1 的方块外沿和圈 d 的方块之间）的椭圆半轴，绕开圆心的线从这里走（orgMapLines）
+  const band = ax.map((a, d) => (d ? [a - o.ring / 2, by[d] - 15] : null));
+  return { pos, secs: labs, box, s, band };
+}
+// 扇区绕圈的先后：最大的在右、第二大的在左，其余上下填空；项目没增没减时一次打开里不换位（和墙上的列一样：数一变就左右互换，图就认不得了）
+function orgMapRound(cols) {
+  const sig = cols.map((c) => c.key).sort().join('\n');
+  if (!orgMapKeys || orgMapKeys.sig !== sig) {
+    const by = cols.slice().sort((a, b) => b.n - a.n || (a.key < b.key ? -1 : 1)).map((c) => c.key), down = [], up = [];
+    by.forEach((k, i) => { if (i > 1) (i % 2 ? up : down).push(k); });
+    orgMapKeys = { sig, keys: by.slice(0, 1).concat(down, by.slice(1, 2), up.reverse()) };
+  }
+  return orgMapKeys.keys.map((k) => cols.find((c) => c.key === k));
+}
+function orgMapSkel(O) {
+  O.className = 'map'; const mn = $('main'); mn.scrollTop = 0; mn.scrollLeft = 0;       // 层级图里往下滚过再切过来：这一页不滚，画布自己挪
+  O.innerHTML = '<div class="omv"><div class="omw"><svg class="omlines" width="1" height="1" aria-hidden="true"><path class="base"/><path class="hot"/></svg>' +
+    '<div class="otop"><div class="oyou"><b></b><span class="oyn num"></span><span class="oyn2 num"></span></div><i class="ovl o1l"></i><ul class="ochief"></ul><i class="ovl o2l"></i></div>' +
+    '<ul class="omnodes"></ul><div class="omlabs"></div></div></div>' +
+    L('<div class="seg omctl" role="group" aria-label="画布"><button data-omz="out" aria-label="画布缩小" title="画布缩小">−</button><button data-omz="fit" title="把整张图放回窗口里（双击空白处也行）">适应窗口</button><button data-omz="in" aria-label="画布放大" title="画布放大">+</button></div>') +
+    '<div class="ofx" aria-hidden="true"></div><div id="otip" role="tooltip" hidden></div>';
+  $('.oyou b', O).textContent = T('你');
+  const v = $('.omv', O), free = (e) => !e.target.closest('.onode, .oyou');
+  // 画布：两指滑 / 滚轮 = 挪；捏合、⌘ 或 Ctrl + 滚轮 = 以指针为中心缩放；按住空白处拖 = 挪；双击空白处 = 放回窗口里
+  v.addEventListener('wheel', (e) => { e.preventDefault(); if (e.ctrlKey || e.metaKey) orgMapZoom(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY); else { orgV.x -= e.deltaX; orgV.y -= e.deltaY; orgV.user = true; orgMapApply(); } }, { passive: false });
+  let g0 = 1;                                           // WebKit 的捏合是 gesture 事件（Chromium 是带 ctrlKey 的 wheel）
+  v.addEventListener('gesturestart', (e) => { e.preventDefault(); g0 = orgV.k; });
+  v.addEventListener('gesturechange', (e) => { e.preventDefault(); orgMapZoom(g0 * e.scale / orgV.k, e.clientX, e.clientY); });
+  v.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !free(e)) return;
+    const p = { x: e.clientX, y: e.clientY, ox: orgV.x, oy: orgV.y }; try { v.setPointerCapture(e.pointerId); } catch {} v.classList.add('drag');
+    const mv = (m) => { orgV.x = p.ox + m.clientX - p.x; orgV.y = p.oy + m.clientY - p.y; orgV.user = true; orgMapApply(); };
+    const up = () => { v.classList.remove('drag'); v.removeEventListener('pointermove', mv); v.removeEventListener('pointerup', up); v.removeEventListener('pointercancel', up); };
+    v.addEventListener('pointermove', mv); v.addEventListener('pointerup', up); v.addEventListener('pointercancel', up);
+  });
+  v.addEventListener('dblclick', (e) => { if (free(e)) orgMapFit(true); });
+  v.addEventListener('scroll', () => { if (v.scrollLeft || v.scrollTop) { v.scrollLeft = 0; v.scrollTop = 0; } });      // 键盘聚焦到画面外的方块时浏览器会偷偷滚这一层：滚回去，改成挪画布
+  v.addEventListener('focusin', (e) => {
+    const b = e.target.closest('.onode'); if (!b || !b.matches(':focus-visible')) return;
+    const r = b.getBoundingClientRect(), q = v.getBoundingClientRect(), dx = r.left < q.left + 16 ? q.left + 16 - r.left : r.right > q.right - 16 ? q.right - 16 - r.right : 0, dy = r.top < q.top + 16 ? q.top + 16 - r.top : r.bottom > q.bottom - 16 ? q.bottom - 16 - r.bottom : 0;
+    if (dx || dy) { orgV.x += dx; orgV.y += dy; orgV.user = true; orgMapApply(true); }
+  });
+  $('.omctl', O).addEventListener('click', (e) => { const z = e.target.closest('[data-omz]'); if (!z) return; if (z.dataset.omz === 'fit') orgMapFit(true); else orgMapZoom(z.dataset.omz === 'in' ? 1.25 : 0.8, undefined, undefined, true); });
+  return O;
+}
+function orgMapPaint(O, M) {
+  const role = M.role, age = (id) => (M.S.get(id).startedAt || 0);
+  // 先后不跟着状态挪（层级图里要你动手的排最上面；图上位置要认得住，状态靠颜色）：分支在前（几个分支之间「X负责人」在「…分支」前面，M.hp 和层级图同一个判断）、前任在后，其余按开的先后
+  const ord = (a, b) => (role(b) === 'head') - (role(a) === 'head') || M.hp(a) - M.hp(b) || (role(a) === 'former') - (role(b) === 'former') || age(a) - age(b) || (a < b ? -1 : 1);
+  // 带着人的分支多出一圈：一前一后分到扇面两头（斜上、斜下，那里上下有空），不挤在正左正右把图撑宽；排第一的分支仍在最前
+  const fan = (ks) => { const s = ks.slice().sort(ord), h = s.filter((k) => role(k) === 'head' && (M.kids.get(k) || []).length); if (h.length < 2) return s; const back = h.filter((k, i) => i % 2), bs = new Set(back); return s.filter((k) => !bs.has(k)).concat(back.reverse()); };
+  const kids = new Map(); for (const [p, ks] of M.kids) kids.set(p, fan(ks));
+  const cols = M.cols.map((c) => ({ key: c.key, name: c.name, n: c.n, roots: [...c.lead.slice().sort(ord), ...c.chief.slice().sort(ord), ...c.you.slice().sort(ord)] })).filter((c) => c.roots.length);
+  const sectors = orgMapRound(cols), flat = [], dfs = (id) => { flat.push(id); for (const c of kids.get(id) || []) dfs(c); };
+  for (const S of sectors) S.roots.forEach(dfs);
+  orgPlace($('.omnodes', O), flat);
+  for (const [sid, x] of onodes) { const c = 'oli r-' + role(sid) + (x.li.classList.contains('ar') ? ' ar' : '') + (x.li.classList.contains('hot1') ? ' hot1' : ''); if (x.li.className !== c) x.li.className = c; if (x.kids.firstChild) x.kids.textContent = ''; }
+  const labs = $('.omlabs', O);
+  for (const [k, el] of orgMapEls) if (!sectors.some((S) => S.key === k)) { el.remove(); orgMapEls.delete(k); }
+  for (const S of sectors) { let el = orgMapEls.get(S.key); if (!el) { el = document.createElement('div'); el.className = 'ghead'; el.setAttribute('role', 'heading'); el.setAttribute('aria-level', '2'); labs.appendChild(el); orgMapEls.set(S.key, el); } const h = esc(T(S.name)) + '<b class="num">' + S.n + '</b>'; if (el.dataset.k !== h) { el.dataset.k = h; el.innerHTML = h; } }
+  orgMapSp = { sectors, kids, M };
+  orgMark(); orgMapArrange();
+}
+// 量方块（只量变过的）→ 算布局 → 摆上去 → 画线；他没自己拖过 / 缩放过，就把整张图放回窗口里
+function orgMapArrange() {
+  const O = $('#org'), sp = orgMapSp, v = $('.omv', O); if (!sp || !v || !v.clientWidth) return;
+  const top = $('.otop', O), sz = (id) => orgMapWH.get(id) || { w: 180, h: 26, k: '' };
+  for (const [sid, x] of onodes) {                     // 大小只跟职级、标题、它带几个、有没有第二行有关；展开着的那个（hot1）量出来是展开的大小，先用上一次的
+    if (x.li.parentNode !== $('.omnodes', O)) continue;
+    const k = x.li.className.replace(/ (ar|hot1)\b/g, '') + '\n' + x.box.className.replace(/ (hot|ping)\b/g, '') + '\n' + $('.ot', x.box).textContent + '\n' + $('.obr', x.box).textContent + '\n' + $('.os', x.box).textContent.length;
+    if (sz(sid).k !== k && !x.li.classList.contains('hot1')) orgMapWH.set(sid, { w: x.box.offsetWidth, h: x.box.offsetHeight, k });
+  }
+  for (const sid of [...orgMapWH.keys()]) if (!onodes.has(sid)) orgMapWH.delete(sid);
+  // 圆心那一块（你 + 总管）按没展开时的大小算、按这个大小钉在圆心：悬停总管时它原地往下多出一行，「你」不往上跳，别的方块也不跟着重排
+  const hub = $('.ochief > .oli.hot1', O) && orgMapL ? orgMapL.hub : { w: top.offsetWidth, h: top.offsetHeight }, vw = v.clientWidth, vh = v.clientHeight;
+  const tt = 'translate(' + (-hub.w / 2) + 'px,' + (-hub.h / 2) + 'px)'; if (top.style.transform !== tt) top.style.transform = tt;
+  const sig = [vw, vh, hub.w, hub.h].join(',') + '|' + sp.sectors.map((S) => S.key + ':' + S.roots.join(',')).join(';') + '|' + [...sp.kids].map(([p, ks]) => p + '>' + ks.join(',')).join(';') + '|' + [...onodes.keys()].map((id) => { const z = sz(id); return z.w + 'x' + z.h; }).join(',');
+  if (orgMapL && orgMapL.sig === sig) { orgMapLines(); orgTip(); return; }      // 没变就不重排（轮询每拍都来）：只在窗口增减、标题或职级变了、窗户大小变了时重新算
+  // 椭圆多扁：几个都排一遍，取整张图放回窗口里最大的那个（窗口宽就扁一点，窄就圆一点；同样的窗口和窗户大小，结果一样）
+  let L0 = null, best = 0;
+  for (const ratio of [1, 1.2, 1.4, 1.65, 1.95, 2.3]) { const l = orgMapLayout({ hub, sectors: sp.sectors, kids: sp.kids, size: sz, opt: { ratio } }), k = Math.min((vw - 52) / Math.max(1, l.box.x1 - l.box.x0), (vh - 52) / Math.max(1, l.box.y1 - l.box.y0)); if (k > best * 1.01) { best = k; L0 = l; L0.ratio = ratio; } }
+  const was = orgMapL; orgMapL = L0; orgMapL.hub = hub; orgMapL.sig = sig;
+  for (const [id, p] of L0.pos) { const li = onodes.get(id).li, ar = p.al < 0, tr = 'translate(' + Math.round(ar ? p.l + p.w : p.l) + 'px,' + Math.round(p.t) + 'px)'; if (li.classList.contains('ar') !== ar) li.classList.toggle('ar', ar); if (li.style.transform !== tr) li.style.transform = tr; }
+  for (const l of L0.secs) { const el = orgMapEls.get(l.key); if (!el) continue; const c = 'ghead' + (l.at === 'l' ? '' : ' ' + l.at), tr = 'translate(' + Math.round(l.x) + 'px,' + Math.round(l.y) + 'px)'; if (el.className !== c) el.className = c; if (el.style.transform !== tr) el.style.transform = tr; }
+  orgMapLines();
+  const b = L0.box, same = was && ['x0', 'y0', 'x1', 'y1'].every((k) => Math.abs(was.box[k] - b[k]) < 1) && orgV.vw === vw && orgV.vh === vh;
+  if (!orgV.drawn) { orgMapFit(false); orgV.drawn = true; } else if (!orgV.user && !same) orgMapFit(true); else orgTip();
+  orgV.vw = vw; orgV.vh = vh;
+}
+// 线：上级方块的边 → 下级朝圆心的那一头，直线。底线一条 path 一次描完（墨线半透明，分开描交叉处会叠深）；悬停的那一串另描一条
+function orgMapLines() {
+  const O = $('#org'), M = orgM, L0 = orgMapL, sv = $('.omlines', O); if (!M || !L0 || !sv) return;
+  const top = $('.otop', O), you = $('.oyou', top), ce = M.chief && onodes.get(M.chief), r1 = (n) => Math.round(n * 10) / 10;
+  const rect = (el) => ({ l: el.offsetLeft - L0.hub.w / 2, t: el.offsetTop - L0.hub.h / 2, w: el.offsetWidth, h: el.offsetHeight });
+  const youR = rect(you), chiefR = ce && ce.box.isConnected ? rect(ce.box) : youR, ch = orgChain();
+  // 下级那一头：朝左右伸的接在靠圆心的那条竖边正中；正上正下的接在靠圆心的那条横边正中
+  const end = (c) => [c.al >= 0.5 ? c.l : c.al <= -0.5 ? c.l + c.w : c.l + c.w / 2, Math.abs(c.al) >= 0.5 ? c.t + c.h / 2 : c.y > 0 ? c.t : c.t + c.h];
+  const edge = (P, x, y) => { const px = P.l + P.w / 2, py = P.t + P.h / 2, dx = x - px, dy = y - py, t = Math.min(dx ? (P.w / 2) / Math.abs(dx) : Infinity, dy ? (P.h / 2) / Math.abs(dy) : Infinity); return [px + dx * Math.min(1, t), py + dy * Math.min(1, t), t]; };
+  // 圆心那一块（你 + 总管）外扩 8 px：上级到下级的线不许进去
+  const H = { l: -L0.hub.w / 2 - 8, r: L0.hub.w / 2 + 8, t: -L0.hub.h / 2 - 8, b: L0.hub.h / 2 + 8 }, inH = (x, y) => x > H.l && x < H.r && y > H.t && y < H.b;
+  const segH = (ax, ay, bx, by) => { let a = 0, b = 1; for (const [o, d, lo, hi] of [[ax, bx - ax, H.l, H.r], [ay, by - ay, H.t, H.b]]) { if (!d) { if (o <= lo || o >= hi) return false; continue; } const t1 = (lo - o) / d, t2 = (hi - o) / d; a = Math.max(a, Math.min(t1, t2)); b = Math.min(b, Math.max(t1, t2)); } return a < b; };
+  // 上级到下级的直线要从圆心那一块底下穿过时（一个负责人的下级绕过了半圈，去另一头的线横穿圆心），改成一条绕开圆心的弧（二次贝塞尔）：
+  // 弧的正中落在下级那一圈里侧的空档上（band），方向是上下级两个角度的正中；取样核一遍还碰到圆心那一块就再往外放。别的线照旧是直线（11/18 khalil-eb）
+  const curve = (P, c, ex, ey) => {
+    const m = (P.th + c.th) / 2, bd = L0.band && L0.band[c.d]; if (!bd || !Number.isFinite(m)) return '';
+    for (let k = 1, i = 0; i < 8; i++, k *= 1.15) {
+      const mx = bd[0] * k * Math.cos(m), my = bd[1] * k * Math.sin(m), px = P.l + P.w / 2, py = P.t + P.h / 2;
+      const [sx, sy] = edge(P, 2 * mx - (px + ex) / 2, 2 * my - (py + ey) / 2), cx = 2 * mx - (sx + ex) / 2, cy = 2 * my - (sy + ey) / 2;
+      let ok = true; for (let j = 1; j < 32 && ok; j++) { const u = j / 32, v = 1 - u; if (inH(v * v * sx + 2 * v * u * cx + u * u * ex, v * v * sy + 2 * v * u * cy + u * u * ey)) ok = false; }
+      if (ok || i === 7) return 'M' + r1(sx) + ' ' + r1(sy) + 'Q' + r1(cx) + ' ' + r1(cy) + ' ' + r1(ex) + ' ' + r1(ey);
+    }
+    return '';
+  };
+  const line = (P, c) => {
+    const [ex, ey] = end(c), [sx, sy, t] = edge(P, ex, ey);
+    if (t >= 1) return '';
+    if (P.th !== undefined && segH(sx, sy, ex, ey)) { const q = curve(P, c, ex, ey); if (q) return q; }
+    return 'M' + r1(sx) + ' ' + r1(sy) + 'L' + r1(ex) + ' ' + r1(ey);
+  };
+  let base = '', hot = '';
+  for (const [id, c] of L0.pos) {
+    const up = M.up.get(id); let P = up ? L0.pos.get(up) : M.boss(id) === M.chief && M.chief ? chiefR : youR; if (!P) continue;
+    if (P === chiefR && P !== youR) {                  // 去总管的线要是先碰到「你」那一块，就停在它的边上：圆心是「你 + 总管」一起，线不从方块底下穿过去
+      const [ex, ey] = end(c), dx = P.l + P.w / 2 - ex, dy = P.t + P.h / 2 - ey;      // 从线真正接的那一点量（以前从下级方块的中心量，画出来的线是从边上起的，会擦过「你」的角）
+      const enter = (R) => { let a = 0, b = 1; for (const [o, d, lo, hi] of [[ex, dx, R.l, R.l + R.w], [ey, dy, R.t, R.t + R.h]]) { if (!d) { if (o < lo || o > hi) return Infinity; continue; } const t1 = (lo - o) / d, t2 = (hi - o) / d; a = Math.max(a, Math.min(t1, t2)); b = Math.min(b, Math.max(t1, t2)); } return a <= b ? a : Infinity; };
+      if (enter(youR) < enter(P)) P = youR;
+    }
+    const d = line(P, c); base += d; if (ch.on.has(id)) hot += d;
+  }
+  if (sv.firstChild.getAttribute('d') !== base) sv.firstChild.setAttribute('d', base);
+  if (sv.lastChild.getAttribute('d') !== hot) sv.lastChild.setAttribute('d', hot);
+}
+function orgMapApply(glide) {
+  const O = $('#org'), w = $('.omw', O); if (!w) return;
+  w.classList.toggle('glide', !!glide && !calm.matches);
+  const t = 'translate(' + Math.round(orgV.x) + 'px,' + Math.round(orgV.y) + 'px) scale(' + Math.round(orgV.k * 1000) / 1000 + ')';
+  if (w.style.transform !== t) { w.style.transform = t; w.style.setProperty('--omi', String(Math.round(Math.max(1, 1 / orgV.k) * 1000) / 1000)); }
+  orgTip();
+}
+function orgMapFit(glide) {
+  const O = $('#org'), L0 = orgMapL, v = $('.omv', O); if (!L0 || !v) return;
+  const vw = v.clientWidth, vh = v.clientHeight, m = 26, b = L0.box;
+  orgV.k = Math.max(0.2, Math.min(1.1, (vw - 2 * m) / Math.max(1, b.x1 - b.x0), (vh - 2 * m) / Math.max(1, b.y1 - b.y0)));
+  orgV.x = vw / 2 - orgV.k * (b.x0 + b.x1) / 2; orgV.y = vh / 2 - orgV.k * (b.y0 + b.y1) / 2; orgV.user = false; orgMapApply(glide);
+}
+function orgMapZoom(f, cx, cy, glide) {
+  const v = $('#org .omv'); if (!v || !(f > 0)) return;
+  const r = v.getBoundingClientRect(), px = cx === undefined ? r.width / 2 : cx - r.left, py = cy === undefined ? r.height / 2 : cy - r.top, k = Math.max(0.2, Math.min(2.5, orgV.k * f)), q = k / orgV.k;
+  orgV.x = px - (px - orgV.x) * q; orgV.y = py - (py - orgV.y) * q; orgV.k = k; orgV.user = true; orgMapApply(glide);
+}
+function setOrgShape(k) {
+  orgShape = k === 'map' ? 'map' : 'tree'; store('ccb_orgshape', orgShape);
+  document.querySelectorAll('#oshape button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.oshape === orgShape)));
+  orgReset(); if (mode === 'org' && last) paint(last);
+}
+$('#oshape').addEventListener('click', (e) => { const b = e.target.closest('[data-oshape]'); if (b && b.dataset.oshape !== orgShape) setOrgShape(b.dataset.oshape); });
+document.querySelectorAll('#oshape button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.oshape === orgShape)));
 {
   const O = $('#org');
   O.addEventListener('mouseover', (e) => { const b = e.target.closest('.onode'); if (b) orgSetHot(b.dataset.sid); });

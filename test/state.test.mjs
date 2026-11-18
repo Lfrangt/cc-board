@@ -140,12 +140,14 @@ mk('atAsk', 'idle', aged(5 * H, [R.human('出个主意'), R.final('想了两个�
 mk('atBusy', 'busy', aged(5 * H, [R.human('跑一下'), R.tool(), R.result(), R.note('我先看看。')]), { statusAgo: 5 * H, claude: true });                            // 在跑的不收
 mk('atShell', 'shell', aged(5 * H, [R.peer('win-f2', '验收过了'), R.tool('Edit'), R.result(), R.final('已合入，回归在后台跑。')]), { statusAgo: 5 * H, claude: true });   // 放到后台的命令还在跑：不收
 mk('atHalt', 'idle', aged(5 * H, [R.human('跑回归'), R.final('回归全过。'), R.notif(), R.apiErr('rate_limit', LIMIT)]), { statusAgo: 5 * H, claude: true });      // 交付了、又被后台通知叫醒撞上额度：有 alert 的不收
+mk('atFastHead', 'idle', [R.human('改一下设计稿'), R.tool('Edit'), R.result(), R.final('设计稿改好了。')], { claude: true, reg: 'FretFlow 设计负责人（win-g9）' });   // 待审阅、点了「审完了」= fast 线该收，但它是分支负责人：不收（11/17 win-49；fast 线和 smart 线一样要挡住）
 mk('atFast', 'idle', [R.human('改一下标题'), R.tool('Edit'), R.result(), R.final('标题改好了。')], { claude: true });                // 点「审完了」后安静 3 秒 → 收
 mk('atFocus', 'idle', [R.human('改一下页脚'), R.tool('Edit'), R.result(), R.final('页脚改好了。')], { claude: true });               // 同上，但他正看着总控台时先不收
 mk('atStale', 'idle', [R.human('改一下配色'), R.tool('Edit'), R.result(), R.final('配色改好了。')], { claude: true });               // 点的是上一次交付的「审完了」→ 不算
 // 收之前看一眼（tidyJudge）：fyi 安静半小时 = 过了 smart 线（15 分钟）、没到 fyi 线（1 小时）。假的判断命令按正文里的记号答（见下面 BIN/judge）
 const jfx = (mark) => aged(H / 2, [R.peer('win-f2', '合入吧'), R.tool('Edit'), R.result(), R.final('补丁已合入。' + mark)]);
 mk('jDone', 'idle', jfx('J-DONE'), { statusAgo: H / 2, claude: true });     // 做完了 → 走 smart 线收；改过文件 → 留
+mk('jHead', 'idle', jfx('J-DONE'), { statusAgo: H / 2, claude: true, reg: 'FretFlow 运营负责人（win-g7）' });   // 和 jDone 一样该收，但它是分支负责人：不收、不问小模型（11/17 win-49：smart 线也不能收岗位上的窗口）。不用「推广」：和 orgHead 同一条分支，会把其中一个变成前任
 mk('jWait', 'idle', jfx('J-WAIT'), { statusAgo: H / 2, claude: true });     // 在等别人 → 照旧等满 fyi 线
 mk('jYours', 'idle', jfx('J-YOURS'), { statusAgo: H / 2, claude: true });   // 还有要你定的事 → 不收，卡片改成待跟进
 mk('jBad', 'idle', jfx('J-BAD'), { statusAgo: H / 2, claude: true });       // 答非所问 → 判不出来，照旧等
@@ -163,7 +165,11 @@ mk('orgDupB', 'idle', [R.human('重名 B'), R.final('好。')], { reg: 'win-0b' 
 mk('orgRecv', 'idle', [R.human('收消息'), R.final('收到。')]);
 mk('orgHum', 'idle', Array.from({ length: 6 }, (_, i) => [R.human('第 ' + (i + 1) + ' 轮'), R.final('好。')]).flat());   // 负责人发来 3 条，但他本人最近说了 6 轮：他自己带着
 mk('orgOld', 'idle', [R.human('接着做'), R.final('好。')]);
-mk('orgHead', 'idle', [R.human('拉新'), R.final('好。')], { reg: 'FretFlow 推广负责人（win-g4）' });   // 分支负责人（11/17）：和负责人 peerDone 同一个项目，挂在它下面，不是它的前任         // 听的是一个已经不在的前任总指挥（进程没了，改过一次名）：跟着岗位归现任 peerDone，handed
+mk('orgHead', 'idle', [R.human('拉新'), R.final('好。')], { reg: 'FretFlow 推广负责人（win-g4）' });
+// 「<话题>分支」（11/17 win-49）：标题（ai-title）以「…分支」结尾、在给 orgBrW 发消息的 orgBr 是分支；「car3 合并分支」是 git 用语，同样发了消息也不是；orgBrW 只收过分支 1 条 → 挂到分支（via contact）
+mk('orgBr', 'idle', [{ type: 'ai-title', aiTitle: '字体与排版分支' }, R.human('导入平台'), R.final('好。')], { reg: 'win-g5' });
+mk('orgGit', 'idle', [{ type: 'ai-title', aiTitle: 'car3 合并分支' }, R.human('合补丁'), R.final('好。')], { reg: 'win-g6' });
+mk('orgBrW', 'idle', [R.human('补跑'), R.final('好。')]);   // 分支负责人（11/17）：和负责人 peerDone 同一个项目，挂在它下面，不是它的前任         // 听的是一个已经不在的前任总指挥（进程没了，改过一次名）：跟着岗位归现任 peerDone，handed
 }
 // ── 这一轮改了哪些文件（wrote / wroteMore）和撞车提示（collide）专用的会话（`--ui` 不放：界面测试按卡数断言）──
 // 假主目录里造仓库：repoW / repoT / repoP / repoM / repoC / repoS / repoD1 / repoD2（.git 是文件夹），repoC/wt（.git 是文件 = worktree，自己算一个仓库），norepo（没有 .git）；
@@ -244,6 +250,7 @@ const DEAD_PID = spawnSync('/usr/bin/true').pid;
       R.peerFrom({ name: 'win-r5' }, '改名前发的', now - 14 * MIN), R.peerFrom({ name: 'win-r5' }, '改名前发的 2', now - 14 * MIN + 1000),
       R.peerFrom({ name: 'win-0b' }, '重名的发的', now - 13 * MIN), R.peerFrom({ name: 'win-0b' }, '重名的发的 2', now - 13 * MIN + 1000)]);
     insertRecs('orgHum', 0, [0, 1, 2].map((i) => R.peerFrom('peerDone', '派活 ' + i, now - 5 * MIN + i * 1000)));
+    insertRecs('orgBrW', 0, [R.peerFrom('orgGit', '合完了', now - 9 * MIN), R.peerFrom('orgBr', '补跑一下导入页', now - 8 * MIN)]);
     // orgOld：同一个已经退出的进程，先叫「总指挥（旧名）」发 1 条，改名后又发 2 条：合成一个 gone 项，3 条
     insertRecs('orgOld', 0, [R.peerFrom({ pid: DEAD_PID, name: '总指挥（旧名）' }, '先做这个', now - 40 * MIN),
       R.peerFrom({ pid: DEAD_PID, name: 'FretFlow 总指挥（win-x9）' }, '再做那个', now - 36 * MIN), R.peerFrom({ pid: DEAD_PID, name: 'FretFlow 总指挥（win-x9）' }, '做完回我', now - 35 * MIN)]);
@@ -363,7 +370,8 @@ env.CCBOARD_DATA = path.join(FH, 'Library/Application Support/cc-board'); delete
 // ── config.json：示例项目表（test/fixture-config.json），两个开关都打开。最后一段 [8] 换成写坏的 config 重启，看默认值 ──
 const DATA0 = path.join(FH, 'Library/Application Support/cc-board'); fs.mkdirSync(DATA0, { recursive: true });
 const CHIEF = path.join(ROOT, 'chief-state.json');
-fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true, autoTidy: !process.argv.includes('--ui'), tidyJudge: !process.argv.includes('--ui'), accounts: [{ id: 'good', name: '旧号' }, { id: 'none', name: '还没存 token 的号' }], org: { chief: CHIEF }, autoContinue: process.argv.includes('--ui') ? false : { maxRun: 2 } }));   // --ui：界面测试点「审完了」，不能让服务把卡收走
+const SEAT = path.join(ROOT, 'seat-other.txt');   // org.seats（11/17 win-49）：点名「其他」这一组的现任负责人；开头不建（没点名），[1c] 末尾写进去再改坏、删掉
+fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true, autoTidy: !process.argv.includes('--ui'), tidyJudge: !process.argv.includes('--ui'), accounts: [{ id: 'good', name: '旧号' }, { id: 'none', name: '还没存 token 的号' }], org: { chief: CHIEF, seats: { other: SEAT, fretflow: path.join(ROOT, 'no-such-seat.txt'), 'bad key!': '/x' } }, autoContinue: process.argv.includes('--ui') ? false : { maxRun: 2 } }));   // --ui：界面测试点「审完了」，不能让服务把卡收走
 // 架构场景：点名总管的文件（照 ~/Projects/assistant/state.json 的样子：session_id + generation）；hint 是负责人 peerDone 开的（spawn.json 按 tmux 名记）
 fs.writeFileSync(CHIEF, JSON.stringify({ window: 'w-projC', session_id: S.projC.sid, generation: 3 }));
 if (S.hint.tmux) fs.writeFileSync(path.join(DATA0, 'spawn.json'), JSON.stringify({ [S.hint.tmux]: { by: S.peerDone.sid, at: Date.now() } }));
@@ -589,14 +597,18 @@ try {
   ok(on(st, 'unfin').boss === sd('peerDone') && on(st, 'unfin').via === 'msg' && on(st, 'unfin').n === 3, '负责人发来 3 条（1 条开了一轮、2 条在这一轮里，每条都算）→ 上级是它（via msg，n 3）', show(st, TREE));
   ok(on(st, 'intr').boss === sd('unfin') && on(st, 'intr').via === 'msg', '下级的下级：intr 收到 unfin 3 条 → 归 unfin', show(st, TREE));
   ok(on(st, 'done').boss === sd('peerDone') && on(st, 'done').via === 'msg', 'done 听的是前任 askQ 的 → 跟着岗位挂到现任 peerDone', show(st, TREE));
-  ok(on(st, 'run').boss === null && on(st, 'run').for === sd('peerDone'), 'run 正在跑、这一轮是 peerDone 的一条消息开的：for 指向它；只有 1 条，不算上级', show(st, TREE));
-  ok(on(st, 'links').role === 'member' && on(st, 'links').boss === null && on(st, 'limit').boss === null && on(st, 'projF').boss === null, '名字里带「总管」但比点名的总管晚开的 links 是普通窗口；没有证据的窗口没有上级', show(st, TREE));
+  // 按项目挂上（11/17）：没有窗口在管的，和负责人 peerDone 同一个项目的挂到它下面，别的项目（这里都没有负责人）挂到总管 projC
+  const pkey = (n) => (by(st, n).project || {}).key, seatOf = (n) => (pkey(n) === pkey('peerDone') ? sd('peerDone') : sd('projC'));
+  const placed = (n) => on(st, n).boss === seatOf(n) && on(st, n).via === 'dept' && on(st, n).n === 0;
+  ok(on(st, 'run').boss === sd('peerDone') && on(st, 'run').via === 'contact' && on(st, 'run').n === 1 && on(st, 'run').for === sd('peerDone'), 'run 正在跑、这一轮是 peerDone 的一条消息开的：for 指向它；只有 1 条，不算派活（via 不是 msg）；负责人给它发过消息，挂到它（via contact，n 1；11/17 win-49 之前是 via dept）', show(st, TREE));
+  ok(on(st, 'links').role === 'member' && placed('links') && placed('limit') && placed('projF') && pkey('projF') !== pkey('peerDone') && on(st, 'projF').boss === sd('projC'),
+    '名字里带「总管」但比点名的总管晚开的 links 是普通窗口；没有证据的窗口按项目挂上：和 peerDone 同项目的挂到它，projF（FretFlow，那里没有负责人）挂到总管', show(st, TREE.concat(['projF'])) + ' ' + JSON.stringify(['links', 'limit', 'projF', 'peerDone'].map(pkey)));
   const fr = (n) => on(st, n).from || [];
   ok(fr('unfin').length === 1 && fr('unfin')[0][0] === sd('peerDone') && fr('unfin')[0][1] === 3 && fr('unfin')[0][2] === recAt('unfin', 3) && JSON.stringify(fr('done').map((x) => [x[0], x[1]])) === JSON.stringify([[sd('askQ'), 3]]),
     'from：[发信人 sid, 条数, 最近一条的时间]（unfin 最近一条是这一轮里第二条的时间）', JSON.stringify({ unfin: fr('unfin'), done: fr('done') }));
   ok(on(st, 'done').for === 'you' && on(st, 'peerDone').for === null && fr('peerDone').length === 0, 'for：他本人开的一轮是 you；peerDone 这一轮是 win-f2 开的，没有这个窗口 → null，from 里也不列认不出的', show(st, ['done', 'peerDone']) + ' ' + JSON.stringify(fr('peerDone')));
   ok(JSON.stringify(fr('orgRecv').map((x) => [x[0], x[1]])) === JSON.stringify([[sd('orgRen'), 2]]), '认发信人：进程号对得上但那个会话开得比消息晚（orgLate）→ 不认；pid 认不出时按名字，登记名包含它且唯一（orgRen）→ 认；两个窗口重名（win-0b）→ 不认', JSON.stringify(fr('orgRecv')));
-  ok(on(st, 'orgHum').boss === null, '他本人最近说了 6 轮，负责人发来 3 条：他自己带着，没有上级（他说了几轮是从对话记录里数的）', show(st, ['orgHum']));
+  ok(on(st, 'orgHum').boss === sd('peerDone') && on(st, 'orgHum').via === 'contact' && on(st, 'orgHum').n === 3, '他本人最近说了 6 轮，负责人发来 3 条：不算负责人在派活（via 不是 msg，他说了几轮是从对话记录里数的）；负责人确实发过消息，挂到它（via contact，n 3；11/17 win-49 之前是 via dept）', show(st, ['orgHum']) + ' ' + pkey('orgHum'));
   ok(on(st, 'orgHead').role === 'head' && on(st, 'orgHead').boss === sd('peerDone') && on(st, 'orgHead').via === 'seat' && on(st, 'peerDone').role === 'lead',
     '分支负责人：登记名「FretFlow 推广负责人」→ role head，挂在同一个项目的负责人 peerDone 下面（via seat），不是它的前任（服务把 headWords 交给了 org.mjs）', show(st, ['orgHead', 'peerDone']));
   // 已经不在的发信人（gone）：进程号认不出活会话的，做成 gone 项交给 org.mjs；名字带「总指挥」就是前任，听它的跟着岗位归现任
@@ -620,6 +632,28 @@ try {
   fs.writeFileSync(CHIEF, JSON.stringify({ window: 'w-projC', session_id: S.projC.sid, generation: 3 }));
   const stC = await until(async () => { const r = await get('/api/state'); return r.org && r.org.chief === sd('projC') ? r : null; }, 8000);
   ok(stC && stC.org.gen === 3 && on(stC, 'peerDone').role === 'lead', '文件修好 → 又回到点名的 projC', stC ? show(stC, ['projC', 'peerDone']) : 'timeout');
+  // 「…分支」（11/17 win-49）：服务把新的默认字样交给 org.mjs；只收过分支 1 条消息的挂到它（via contact）
+  ok(on(stC, 'orgBr').role === 'head' && on(stC, 'orgBr').boss === sd('peerDone') && on(stC, 'orgGit').role === 'member' && on(stC, 'orgBrW').boss === sd('orgBr') && on(stC, 'orgBrW').via === 'contact' && on(stC, 'orgBrW').n === 1,
+    '标题「字体与排版分支」（不带 FretFlow：带了会被分到 FretFlow 那一组）、在给 orgBrW 发消息 → 分支，挂在 peerDone 下面；「car3 合并分支」同样发了消息也是普通窗口；orgBrW 只收过分支 1 条 → 挂到 orgBr（via contact，n 1）', show(stC, ['orgBr', 'orgGit', 'orgBrW', 'peerDone']));
+  // org.seats（11/17 win-49）：config 里三条，一条 key 不合规丢掉，整份 config 照用（autoTrust 这些还在），日志记 2 条
+  const cfgLine = (log().match(/^config .*$/m) || [''])[0];
+  ok(/org\.seats=2（丢掉 1 条写错的）/.test(cfgLine) && /autoTrust=true/.test(cfgLine), 'config：org.seats 有一条写错只丢那一条，整份照用；日志 org.seats=2（丢掉 1 条写错的）', cfgLine);
+  ok(pkey('peerDone') === 'other' && !fs.existsSync(SEAT) && on(stC, 'peerDone').role === 'lead', '点名文件还没建：照旧按字样认 peerDone（它在 other 这一组）', pkey('peerDone'));
+  const regOf = (n) => by(stC, n).regName;
+  fs.writeFileSync(SEAT, regOf('unfin') + ' [abc123]\n会话 ' + sd('unfin') + '\n');
+  const stSeat = await until(async () => { const r = await get('/api/state'); return on(r, 'unfin').role === 'lead' ? r : null; }, 8000);
+  ok(stSeat && on(stSeat, 'unfin').boss === sd('projC') && on(stSeat, 'unfin').via === 'seat' && on(stSeat, 'peerDone').role !== 'lead' && on(stSeat, 'orgBr').boss === sd('unfin'),
+    '写进点名文件（第一行窗口名、第二行会话号）→ unfin 当这一组的负责人（归总管），peerDone 不再是负责人，分支 orgBr 挂到 unfin 下面', stSeat ? show(stSeat, ['unfin', 'peerDone', 'orgBr']) : 'timeout');
+  ok(log().includes('点名负责人 other → ' + regOf('unfin') + '（' + sd('unfin').slice(0, 8) + '）'), '日志记一行「点名负责人 other → <窗口名>（会话号前 8 位）」', (log().match(/^org .*点名负责人.*$/gm) || []).join(' | '));
+  fs.writeFileSync(SEAT, regOf('unfin') + '\n会话 ' + sd('hint') + '\n');   // 名字是 unfin、会话号是 hint：对不上
+  let lastM = null;
+  const stSeatM = await until(async () => { const r = await get('/api/state'); lastM = r; return on(r, 'peerDone').role === 'lead' ? r : null; }, 8000);
+  ok(stSeatM && on(stSeatM, 'unfin').role !== 'lead' && on(stSeatM, 'hint').role !== 'lead' && log().includes('other → 认不出：点名的窗口不在墙上，或名字和会话号对不上（' + regOf('unfin') + ' / ' + sd('hint').slice(0, 8) + '）'),
+    '名字（unfin）和会话号（hint）对不上：认不出，退回按字样认 peerDone，日志写清对不上的两样', (stSeatM ? '' : 'timeout ') + show(stSeatM || lastM, ['peerDone', 'unfin', 'hint', 'askQ']) + ' ' + (log().match(/^org .*点名负责人.*$/gm) || []).slice(-2).join(' | '));
+  fs.writeFileSync(SEAT, regOf('unfin') + '\n会话 ' + sd('unfin') + '\n'); await until(async () => on(await get('/api/state'), 'unfin').role === 'lead', 8000);
+  fs.rmSync(SEAT);
+  const stSeatD = await until(async () => { const r = await get('/api/state'); return on(r, 'peerDone').role === 'lead' ? r : null; }, 8000);
+  ok(stSeatD && on(stSeatD, 'unfin').role !== 'lead', '点名文件删掉：退回按字样认 peerDone（后面各段照旧）', stSeatD ? show(stSeatD, ['peerDone', 'unfin']) : 'timeout');
 
   console.log('\n[1d] 这一轮改了哪些文件（wrote / wroteMore）和撞车提示（collide：30 分钟内墙上两个会话往同一个 git 仓库里写过）');
   st = await get('/api/state');
@@ -752,6 +786,11 @@ try {
   await sleep(7500); st = await poll4c(true); clearInterval(focus4c);
   ok(by(st, 'atFast') && by(st, 'atFocus'), 'tidy: 他正看着总控台时不收（卡片不在他眼前消失）', JSON.stringify([!!by(st, 'atFast'), !!by(st, 'atFocus')]));
   // 这段等收工时用 peek=1 读（只看不取），提示攒在服务里；等到之后两头各验一次：带 peek 连取两次都还在，不带取一次就清掉
+  // 坐在岗位上的不收，fast 线也一样（11/17 win-49）：atFastHead 是「FretFlow 设计负责人」，待审阅、点了「审完了」、他不看总控台，过了 fast 线也不收
+  const pmH = await prc({ [S.atFastHead.sid]: by(st, 'atFastHead').resultAt }); await sleep(8000); const stH = await get('/api/state?peek=1'), arcH = await get('/api/archive');
+  const fhRole = ((stH.org && stH.org.nodes && stH.org.nodes[S.atFastHead.sid]) || {}).role;
+  ok(pmH.ok && by(stH, 'atFastHead') && !arcH.items.some((x) => x.sid === S.atFastHead.sid) && fhRole === 'head' && new RegExp('^tidy \\S+ seat ' + S.atFastHead.sid.slice(0, 8) + ' fast 不收：它是分支负责人$', 'm').test(log()),
+    'tidy: 分支负责人（FretFlow 设计负责人）点了「审完了」、过了 fast 线也不收，日志写「seat … fast 不收：它是分支负责人」', JSON.stringify({ on: !!by(stH, 'atFastHead'), role: fhRole, line: (log().match(/^tidy .* seat .*$/gm) || []).slice(0, 3) }));
   const tidyN = (r) => (r.notices || []).find((x) => /^自动收工：/.test(x.text));
   let arc3 = { items: [] }, pk1 = {}; for (let i = 0; i < 30; i++) { await sleep(1000); pk1 = await get('/api/state?peek=1'); arc3 = await get('/api/archive'); if (tidyN(pk1) && ['atFast', 'atFocus'].every((n) => arc3.items.some((x) => x.sid === S[n].sid && x.state === 'archived'))) break; }
   const pk2 = await get('/api/state?peek=1');
@@ -768,6 +807,9 @@ try {
   let arcJd = { items: [] }; for (let i = 0; i < 20; i++) { arcJd = await get('/api/archive'); if (arcJd.items.some((x) => x.sid === S.jDone.sid && x.state === 'archived')) break; await sleep(1000); }
   const aj = (n) => arcJd.items.find((x) => x.sid === S[n].sid); st = await get('/api/state');
   ok(aj('jDone') && aj('jDone').state === 'archived' && aj('jDone').auto === true && /^无需处理的交付，\d+ 分钟没人理它，看过没有要你定的事，改过 1 次文件$/.test(aj('jDone').why) && !by(st, 'jDone'), 'judge: 安静半小时、小模型说做完了 → 走 smart 线收（没等满 1 小时的 fyi 线）；改过文件 → 留着', JSON.stringify(aj('jDone')));
+  const jhRole = ((st.org && st.org.nodes && st.org.nodes[S.jHead.sid]) || {}).role;
+  ok(by(st, 'jHead') && !aj('jHead') && ['head', 'lead'].includes(jhRole) && new RegExp('^tidy \\S+ seat ' + S.jHead.sid.slice(0, 8) + ' \\w+ 不收：它是(分支负责人|负责人)$', 'm').test(log()),
+    'judge: 同样安静半小时、交付一样的 jHead 是「FretFlow 运营负责人」（架构里坐在岗位上）→ 不收、还在墙上，日志写「不收：它是分支负责人」（11/17 win-49）', JSON.stringify({ on: !!by(st, 'jHead'), arc: aj('jHead') || null, role: jhRole, line: (log().match(/^tidy .* seat .*$/gm) || []).slice(0, 2) }));
   ok(['jWait', 'jYours', 'jBad', 'jExit'].every((n) => by(st, n) && !aj(n)), 'judge: 在等别人 / 还有要你定的事 / 答非所问 / 命令失败 → 都还在墙上', JSON.stringify(['jWait', 'jYours', 'jBad', 'jExit'].map((n) => [n, !!by(st, n), !!aj(n)])));
   const dy = by(st, 'jYours').digest, dw = by(st, 'jWait').digest, db = by(st, 'jBad').digest;
   ok(dy.need === 'reply' && dy.ask === 'J 要你定：选 A 还是 B' && dy.judged === true && dw.need === 'fyi' && !dw.judged && db.need === 'fyi', 'judge: 说还有事要你定的，卡片改成待跟进、那件事放进「要你做的事」；在等的、判不出来的原样是无需处理', JSON.stringify([dy, dw, db]));

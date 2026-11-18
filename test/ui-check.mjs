@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 .tmp/ui-fixture.json（state.test.mjs --ui 写的试验实例地址）；依赖 ./browser.mjs 的静音无头 Chromium；依赖 ./clips.mjs 的三段无声 WebM（图集 · 视频）
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；截图放 .tmp/shots（墙 / 封面、深色 / 浅色、英文）
- * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、列宽（拖分隔条跟手、松手吸附整格并记住、窄窗口里记了格数的列先拿、放不下的挤成窄条、点窄条先让一格、拖到底收起或挤开、双击 / Enter 恢复、方向键挪一格、宽卡大字）、正文里的本机路径能点、图集里的视频（格子里就地播、一次一个、⤢ 才放大、同时播放且只有指着的那格出声、对时间、进度条、全部放完复位）、放大看（⌘O / 双击；打开时从最新交付的第一行看起，不滚到最底）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」、输入框上的预判（灰字 Tab 收下、1/2/3 填进输入框、数字键、封面视图）、点「审完了」/ 撤销 / 页面载入时把记录告诉服务（自动收工靠它）、架构视图（谁归谁管：入口、你 / 总管 / 每个项目一列、负责人的树和前任、你直接带的个数、三行字、悬停加重和依据、点开放大看、消息飞过去、没有数据、英文、窄窗口）。
+ * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、列宽（拖分隔条跟手、松手吸附整格并记住、窄窗口里记了格数的列先拿、放不下的挤成窄条、点窄条先让一格、拖到底收起或挤开、双击 / Enter 恢复、方向键挪一格、宽卡大字）、正文里的本机路径能点、图集里的视频（格子里就地播、一次一个、⤢ 才放大、同时播放且只有指着的那格出声、对时间、进度条、全部放完复位）、放大看（⌘O / 双击；打开时从最新交付的第一行看起，不滚到最底）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」、输入框上的预判（灰字 Tab 收下、1/2/3 填进输入框、数字键、封面视图）、点「审完了」/ 撤销 / 页面载入时把记录告诉服务（自动收工靠它）、架构视图（谁归谁管：入口、你 / 总管 / 每个项目一列、负责人的树和前任、你直接带的个数、三行字、悬停加重和依据、点开放大看、消息飞过去、没有数据、英文、窄窗口）、架构 · 放射（顶栏「层级 | 放射」：你和总管在圆心、每个项目一个扇区；放回窗口里、不重叠、先后不跟状态、输入没变不重排、线、悬停原地展开、滚轮挪 / Ctrl 或 ⌘ + 滚轮缩放 / 拖空白处 / 三个按钮 / 双击空白处、纯函数 orgMapLayout 和 orgMapRound）。
  *        只读页面 + 点「先不管」和筛选，不往任何会话里发话。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -17,10 +17,15 @@ const ok = (cond, name, extra = '') => { if (cond) { pass++; console.log('  ok  
 const same = (got, want, name, extra = '') => ok(JSON.stringify(got) === JSON.stringify(want), name, extra || JSON.stringify(got));
 
 const browser = await launch();
-async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900 }) {      // 无头浏览器的系统语言是英文，中文界面要明说
+// 架构：服务 11/17 起把没有窗口在管的窗口按项目挂到负责人 / 总管下面（org 的 via: 'dept'）。测「你直接带」那套画法的块在浏览器里把它们还原成
+// boss: null（没有负责人、也没有总管时服务就是这样出的，比如刚装的总控台）；按项目挂上的画法另有一块，用服务的真实输出
+const unplace = (j) => { const N = j && j.org && j.org.nodes; if (N) for (const x of Object.values(N)) if (x && (x.via === 'dept' || x.via === 'contact')) Object.assign(x, { boss: null, via: null, n: 0, last: 0, handed: false }); return j; };   // contact（11/17 win-49）也是第 5 步挂上的，一起还原
+const unplaceRoute = async (route) => { const r = await route.fetch(); const j = await r.json(); await route.fulfill({ response: r, json: unplace(j) }); };
+async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900, unplaced = false }) {      // 无头浏览器的系统语言是英文，中文界面要明说
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, deviceScaleFactor: 2 });
   await ctx.addInitScript((m) => { try { localStorage.setItem('ccb_mode', JSON.stringify(m)); } catch (e) {} }, mode);
   const page = await ctx.newPage(); const errs = [];
+  if (unplaced) await page.route('**/api/state*', unplaceRoute);
   page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
   await page.goto(FX.url + (lang ? '&lang=' + lang : '')); await page.waitForSelector(mode === 'org' ? '#org .onode .ot' : '.card'); await sleep(2600);   // 架构视图里卡片藏着，等方块里的标题
   return { ctx, page, errs };
@@ -425,9 +430,427 @@ async function galVideoCheck() {
   }
 }
 
+// ── 架构 · 放射（11/17 win-e7）：作者 11/17 22:38「任务多的话……我在最上面金字塔级的这个可能显示的就不是很那个了……做成一个像类似 Canvas 一样的，就是我在中间，然后呢可以放射状出去」。
+//    顶栏「层级 | 放射」（#oshape，记在 ccb_orgshape，默认层级）；放射是同一份 org、同一批方块换个摆法：你和总管在圆心，每个项目一个扇区，窗口按上下级一圈圈往外。
+//    中文深色（服务的真实输出）走完整流程：默认层级 → 切过去 → 放回窗口里、不重叠、左边的往左伸、先后不跟状态、输入没变不重排、某个窗口空闲 → 在跑时位置不动、
+//    线（一个方块一条、两头接在方块边上、不从「你」和总管底下穿过）、悬停 / 聚焦原地展开和依据、缩小着看时放回原大、悬停总管时图不跳、滚轮挪、Ctrl / ⌘ + 滚轮以指针为中心缩放、
+//    拖空白处、他动过以后轮询和窗口变大小都不替他摆正、右下角三个按钮、窗口变大小（他没动过）重新放回、双击空白处、点方块放大看、main 不滚、墙和封面里没有开关、重开还在、切回层级和原来一样；
+//    纯函数 orgMapLayout 在页面的 Worker 里喂 8 组数据（含 kids 有环，每组限时 8 秒）、orgMapRound；4 个项目（在浏览器里改 /api/state）看扇区的方位、左边倒着排、去总管的线停在「你」的边上；
+//    英文浅色核文字和不报错。期望值从 /api/state 原始数据和方块的屏幕位置另算，不读界面的布局结果。单独跑：UI_ONLY=orgmap node test/ui-check.mjs
+async function orgMapCheck() {
+  console.log('\n[架构 · 放射]');
+  const S2N = Object.fromEntries(Object.entries(FX.sids).map(([k, v]) => [v, k]));
+  const tap = (page, sel) => page.click(sel, { timeout: 3000 }).then(() => true).catch(() => false);
+  const ctxOf = async ({ lang = 'zh', scheme = 'dark', w = 1520, h = 900, shape = null, route = null } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await ctx.addInitScript((s) => { try { localStorage.setItem('ccb_mode', '"org"'); if (s) localStorage.setItem('ccb_orgshape', JSON.stringify(s)); } catch (e) {} }, shape);
+    const page = await ctx.newPage(), errs = [];
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    if (route) await page.route('**/api/state*', route);
+    await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector('#org .onode .ot', { timeout: 10000 }).catch(() => {}); await sleep(2600);
+    return { ctx, page, errs };
+  };
+  // 一张图的样子：每个方块的屏幕位置、展开没有、依据、线、你 / 总管 / 圆心那一块、画布、开关、按钮（底上没有这些元素时读成空的，断言照常变红）
+  const mapOf = (page) => ev(page, (sids) => {
+    const name = Object.fromEntries(Object.entries(sids).map(([k, v]) => [v, k])), q = (s) => document.querySelector(s);
+    const R = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height }; };
+    const vis = (el) => !!el && getComputedStyle(el).display !== 'none' && el.getClientRects().length > 0;
+    const nodes = {};
+    for (const li of document.querySelectorAll('#org .omnodes > .oli')) {
+      const b = li.querySelector('.onode'); if (!b) continue;
+      nodes[name[li.dataset.sid] || li.dataset.sid] = { sid: li.dataset.sid, ar: li.classList.contains('ar'), hot1: li.classList.contains('hot1'), hot: b.classList.contains('hot'), box: b.className, tr: li.style.transform, r: R(b), o2: vis(b.querySelector('.o2')), o3: vis(b.querySelector('.o3')), why: b.dataset.why || '' };
+    }
+    const sv = q('#org .omlines'), tip = q('#otip'), m = q('main'), sh = q('#oshape'), ctl = q('#org .omctl');
+    let V = null; try { V = { k: orgV.k, x: orgV.x, y: orgV.y, user: orgV.user }; } catch (e) {}
+    return { map: !!q('#org.map'), cols: document.querySelectorAll('#org .ocol').length, n: Object.keys(nodes).length, nodes,
+      order: [...document.querySelectorAll('#org .omnodes > .oli')].map((li) => name[li.dataset.sid] || li.dataset.sid),
+      chief: R(q('#org .ochief .onode')), chiefX: q('#org .ochief .oli') ? { hot1: q('#org .ochief .oli').classList.contains('hot1'), o3: vis(q('#org .ochief .onode .o3')) } : null, you: R(q('#org .oyou')), top: R(q('#org .otop')), omv: R(q('#org .omv')), main: R(m),
+      labs: [...document.querySelectorAll('#org .omlabs > .ghead')].map((x) => ({ text: x.textContent, r: R(x) })),
+      tip: tip && !tip.hidden ? { text: tip.textContent, r: R(tip) } : null,
+      hotD: sv ? sv.querySelector('path.hot').getAttribute('d') || '' : null, youHot: !!q('#org .oyou.hot'), chiefHot: !!q('#org .ochief .onode.hot'),
+      shape: { shown: vis(sh), label: sh ? sh.getAttribute('aria-label') : null, btns: sh ? [...sh.querySelectorAll('button')].map((x) => [x.dataset.oshape, x.textContent.trim(), x.getAttribute('aria-pressed')]) : [] },
+      ctl: ctl ? { r: R(ctl), label: ctl.getAttribute('aria-label'), btns: [...ctl.querySelectorAll('button')].map((x) => ({ k: x.dataset.omz, text: x.textContent.trim(), label: x.getAttribute('aria-label') || '', title: x.title || '' })) } : null,
+      store: localStorage.getItem('ccb_orgshape'), V };
+  }, FX.sids);
+  // 层级图的结构：有哪几列、每个方块画在谁下面（或哪一组）
+  const treeOf = (page) => ev(page, (sids) => {
+    const name = Object.fromEntries(Object.entries(sids).map(([k, v]) => [v, k]));
+    return { cols: [...document.querySelectorAll('#org .ocol')].map((c) => c.dataset.key), up: Object.fromEntries([...document.querySelectorAll('#org .onode')].map((b) => {
+      const li = b.closest('.oli'), p = li && li.parentElement && li.parentElement.closest('.oli'), g = b.closest('.ogrp');
+      return [name[b.dataset.sid] || b.dataset.sid, p ? name[p.dataset.sid] || p.dataset.sid : b.closest('.ochief') ? 'top' : g ? (b.closest('.ocol') || {}).dataset.key + '/' + g.dataset.g : null]; })) };
+  }, FX.sids);
+  // 线：把 path 的每一段换算到屏幕上（世界那一层 .omw 的 transform + 画布的位置），看两头各落在哪个方块的边上、中间有没有穿过「你」或总管的方块（另写的取样，不用界面算线的办法）
+  const linesOf = (page) => ev(page, () => {
+    const sv = document.querySelector('#org .omlines'), w = document.querySelector('#org .omw'), v = document.querySelector('#org .omv'); if (!sv || !w || !v) return null;
+    const m = new DOMMatrix(getComputedStyle(w).transform), o = v.getBoundingClientRect(), P = (x, y) => ({ x: o.left + m.a * x + m.c * y + m.e, y: o.top + m.b * x + m.d * y + m.f });
+    const boxes = [...document.querySelectorAll('#org .omnodes .onode')].map((b) => ({ sid: b.dataset.sid, r: b.getBoundingClientRect() }));
+    const you = document.querySelector('#org .oyou').getBoundingClientRect(), ce = document.querySelector('#org .ochief .onode'), chief = ce ? ce.getBoundingClientRect() : null;
+    const onEdge = (p, r, t = 2) => p.x >= r.left - t && p.x <= r.right + t && p.y >= r.top - t && p.y <= r.bottom + t && (Math.abs(p.x - r.left) <= t || Math.abs(p.x - r.right) <= t || Math.abs(p.y - r.top) <= t || Math.abs(p.y - r.bottom) <= t);
+    const inside = (p, r) => p.x > r.left + 1.5 && p.x < r.right - 1.5 && p.y > r.top + 1.5 && p.y < r.bottom - 1.5;
+    // 一条线是直线（M…L…）或绕开圆心的弧（M…Q 控制点 终点，二次贝塞尔；11/18 win-eb）。.omw 的 transform 是仿射的，控制点照样换算，曲线上的点取样也照样对
+    const segs = [...(sv.querySelector('path.base').getAttribute('d') || '').matchAll(/M(-?[\d.]+) (-?[\d.]+)(?:L(-?[\d.]+) (-?[\d.]+)|Q(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+))/g)]
+      .map((x) => (x[3] !== undefined ? { a: P(+x[1], +x[2]), b: P(+x[3], +x[4]) } : { a: P(+x[1], +x[2]), c: P(+x[5], +x[6]), b: P(+x[7], +x[8]) }));
+    const at = (s, t) => (s.c ? { x: (1 - t) ** 2 * s.a.x + 2 * (1 - t) * t * s.c.x + t * t * s.b.x, y: (1 - t) ** 2 * s.a.y + 2 * (1 - t) * t * s.c.y + t * t * s.b.y } : { x: s.a.x + (s.b.x - s.a.x) * t, y: s.a.y + (s.b.y - s.a.y) * t });
+    const out = { n: segs.length, q: segs.filter((s) => s.c).length, li: document.querySelectorAll('#org .omnodes > .oli').length, endNot: 0, startNot: 0, toYou: 0, toChief: 0, cross: [], crossKid: [] };
+    for (const s of segs) {
+      const { a, b } = s, child = boxes.find((x) => onEdge(b, x.r)); if (!child) out.endNot++;
+      const from = onEdge(a, you) ? 'you' : chief && onEdge(a, chief) ? 'chief' : boxes.some((x) => x !== child && onEdge(a, x.r)) ? 'box' : null;
+      if (!from) out.startNot++; else if (from === 'you') out.toYou++; else if (from === 'chief') out.toChief++;
+      for (let i = 1; i < 60; i++) { const p = at(s, i / 60); if (inside(p, you) || (chief && inside(p, chief))) { out[from === 'box' ? 'crossKid' : 'cross'].push([a, b].map((z) => [Math.round(z.x), Math.round(z.y)])); break; } }
+    }
+    return out;
+  });
+  const rects = (page, names) => ev(page, (l) => Object.fromEntries(l.map(([n, sid]) => { const b = document.querySelector('#org .omnodes .onode[data-sid="' + sid + '"]'); if (!b) return [n, null]; const r = b.getBoundingClientRect(); return [n, { l: r.left, t: r.top, w: r.width, h: r.height }]; })), names.map((n) => [n, FX.sids[n]]));
+  // 画布里一块空白（离每个方块、圆心、项目名、按钮都 ≥ 24 px），离 (fx, fy) 那一点最近的
+  const emptyAt = (page, fx = 0.5, fy = 0.5) => ev(page, ([fx, fy]) => {
+    const v = document.querySelector('#org .omv'); if (!v) return null; const q = v.getBoundingClientRect();
+    const rs = [...document.querySelectorAll('#org .onode, #org .otop, #org .omlabs > .ghead, #org .omctl, #crash')].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0);
+    const far = (x, y) => rs.every((r) => x < r.left - 24 || x > r.right + 24 || y < r.top - 24 || y > r.bottom + 24);
+    let best = null, bd = Infinity; const cx = q.left + q.width * fx, cy = q.top + q.height * fy;
+    for (let y = q.top + 30; y < q.bottom - 30; y += 11) for (let x = q.left + 30; x < q.right - 30; x += 13) {
+      if (!far(x, y)) continue; const el = document.elementFromPoint(x, y); if (!el || !v.contains(el) || el.closest('.onode, .oyou, .omctl')) continue;
+      const d = (x - cx) ** 2 + (y - cy) ** 2; if (d < bd) { bd = d; best = { x, y }; } }
+    return best; }, [fx, fy]);
+  const inBox = (r, o, t = 1) => !!r && !!o && r.l >= o.l - t && r.r <= o.r + t && r.t >= o.t - t && r.b <= o.b + t;
+  const allIn = (g) => !!g && !!g.omv && g.n > 0 && Object.values(g.nodes).every((x) => inBox(x.r, g.omv)) && inBox(g.you, g.omv) && (!g.chief || inBox(g.chief, g.omv)) && g.labs.every((l) => inBox(l.r, g.omv));
+  const outOf = (g) => (g && g.omv ? Object.entries(g.nodes).filter(([, x]) => !inBox(x.r, g.omv)).map(([n]) => n).concat(g.labs.filter((l) => !inBox(l.r, g.omv)).map((l) => 'lab:' + l.text)) : ['没有画布']);
+  const overlap = (a, b, s = 0.5) => Math.min(a.r, b.r) - Math.max(a.l, b.l) > s && Math.min(a.b, b.b) - Math.max(a.t, b.t) > s;
+  const geo = (g) => { const L = Object.entries(g.nodes || {}), bad = [], hub = [], cx = g.top ? (g.top.l + g.top.r) / 2 : 0;
+    for (let i = 0; i < L.length; i++) { if (g.top && overlap(L[i][1].r, g.top)) hub.push(L[i][0]); for (let j = i + 1; j < L.length; j++) if (overlap(L[i][1].r, L[j][1].r)) bad.push(L[i][0] + '/' + L[j][0]); }
+    const side = L.filter(([, x]) => { const c = (x.r.l + x.r.r) / 2; return c < cx - 5 ? !x.ar : c > cx + 5 ? x.ar : false; }).map(([n]) => n);
+    return { n: L.length, bad, hub, side, left: L.filter(([, x]) => x.ar).length }; };
+  const moved = (a, b, tol = 1.5) => Object.keys(a).filter((n) => !a[n] || !b[n] || Math.abs(a[n].l - b[n].l) > tol || Math.abs(a[n].t - b[n].t) > tol);
+  const shift = (a, b, n) => (a[n] && b[n] ? [Math.round((b[n].l - a[n].l) * 10) / 10, Math.round((b[n].t - a[n].t) * 10) / 10] : null);
+  const near = (x, y, t = 1.5) => Math.abs(x - y) <= t;
+  // 同一个上级下面（和每个扇区的根）的先后：期望值照 /api/state 的职级和开的时间另排——分支在前（几个分支之间名字或标题里带「负责人」/ head of 的在前）、前任在后、其余按开的先后；根按负责人 → 总管带 → 你直接带
+  const orderBad = (g, raw) => {
+    const N = (raw && raw.org && raw.org.nodes) || {}, ch = raw && raw.org && raw.org.chief, S = new Map(((raw && raw.sessions) || []).map((s) => [s.sid, s]));
+    const named = (sid) => { const s = S.get(sid) || {}, t = (String(s.regName || '') + ' ' + String(s.title || '')).toLowerCase(); return t.includes('负责人') || t.includes('head of'); };
+    const key = (sid) => { const r = N[sid] && N[sid].role; return [r === 'head' ? 0 : r === 'former' ? 2 : 1, r === 'head' && !named(sid) ? 1 : 0, (S.get(sid) || {}).startedAt || 0]; };
+    const cmp = (a, b) => { const x = key(a), y = key(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || (a < b ? -1 : 1); };
+    const grp = (sid) => (N[sid] && N[sid].role === 'lead' ? 0 : N[sid] && N[sid].boss === ch ? 1 : 2), by = new Map(), bad = [];
+    for (const n of g.order || []) { const sid = FX.sids[n] || n, b = N[sid] && N[sid].boss, p = b && b !== ch && S.has(b) ? b : 'root:' + (((S.get(sid) || {}).project || {}).key || 'other'); if (!by.has(p)) by.set(p, []); by.get(p).push(sid); }
+    for (const [p, l] of by) { const want = l.slice().sort((a, b) => (p.startsWith('root:') ? grp(a) - grp(b) : 0) || cmp(a, b)); if (JSON.stringify(want) !== JSON.stringify(l)) bad.push([S2N[p] || p, l.map((x) => S2N[x] || x), want.map((x) => S2N[x] || x)]); }
+    return { groups: by.size, kids: (by.get(FX.sids.peerDone) || []).length, bad };
+  };
+  let flip = null;      // 这个会话的状态在浏览器里从 idle 改成 busy（改 /api/state 的应答），看它在图上挪不挪
+  // 夹具里总管 projC 没有模型和上下文，第三行是空的、悬停时不会多出一行；这里给它补上（和真实的总管一样），悬停总管那一条才测得到「圆心那一块展开」
+  const flipRoute = async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }
+    for (const s of j.sessions || []) { if (flip && s.sid === flip) s.status = 'busy'; if (j.org && s.sid === j.org.chief) Object.assign(s, { model: s.model || 'claude-fable-5-2', ctx: s.ctx || 52000 }); }
+    await route.fulfill({ response: r, json: j }); };
+
+  // ── 一、中文深色 1520 × 900：默认层级 → 切到放射
+  let { ctx, page, errs } = await ctxOf({ route: flipRoute });
+  let g = await mapOf(page); const tree0 = await treeOf(page);
+  ok(!g.map && g.cols >= 1 && g.shape.shown && JSON.stringify(g.shape.btns) === '[["tree","层级","true"],["map","放射","false"]]' && g.shape.label === '架构图怎么排' && g.store === null,
+    '放射：没存过时架构图照旧是层级（从上往下那张）；顶栏多一个「层级 | 放射」，层级亮着', JSON.stringify({ map: g.map, cols: g.cols, shape: g.shape, store: g.store }));
+  const sc0 = await ev(page, () => { const m = document.querySelector('main'); m.scrollTop = 300; return m.scrollTop; });
+  await tap(page, '#oshape [data-oshape="map"]'); await sleep(1600); g = await mapOf(page);
+  const raw = await ev(page, () => api('/api/state?peek=1')), sids = ((raw && raw.sessions) || []).map((s) => s.sid), chief = raw && raw.org && raw.org.chief;
+  ok(g.map && g.cols === 0 && sids.length === 30 && g.n === 29 && !!g.chief && sids.every((s) => (s === chief ? true : !!g.nodes[S2N[s] || s])) && g.store === '"map"' && JSON.stringify(g.shape.btns.map((b) => b[2])) === '["false","true"]',
+    '放射：点「放射」切过去：墙上 30 个会话还是一个会话一个方块（总管在圆心，其余 29 个绕着它），没有列了；选择记在本机（ccb_orgshape）', JSON.stringify({ map: g.map, cols: g.cols, n: g.n, chief: !!g.chief, store: g.store, btns: g.shape.btns }));
+  ok(sc0 > 0 && g.main && g.omv && (await ev(page, () => document.querySelector('main').scrollTop)) === 0 && near(g.omv.t, g.main.t) && near(g.omv.b, g.main.b) && near(g.omv.l, g.main.l) && near(g.omv.r, g.main.r),
+    '放射：层级图里往下滚过 ' + sc0 + ' px 再切过来，页面回到顶，画布正好铺满顶栏下面这一块', JSON.stringify({ sc0, omv: g.omv, main: g.main }));
+  ok(allIn(g) && !!g.V && !g.V.user && g.V.k >= 0.2 && g.V.k <= 1.1, '放射：第一次画把整张图放回窗口里（29 个方块、你和总管、项目名都在画布里），缩放 ' + (g.V && Math.round(g.V.k * 100) / 100) + ' 倍', JSON.stringify({ V: g.V, out: outOf(g) }));
+  const g0 = geo(g);
+  ok(g0.n === 29 && g0.bad.length === 0 && g0.hub.length === 0, '放射：29 个方块两两不重叠，没有一个压着圆心（你 + 总管那一块）', JSON.stringify(g0));
+  ok(g0.n === 29 && g0.side.length === 0 && g0.left >= 1 && g0.left < g0.n, '放射：在圆心左边的 ' + g0.left + ' 个方块往左伸（右边缘对着圆心），右边的往右伸', JSON.stringify(g0));
+  const ob = orderBad(g, raw);
+  ok(ob.kids >= 20 && ob.bad.length === 0, '放射：先后不跟着状态走：同一个上级下面分支在前、前任在后、其余按开的先后（负责人 peerDone 下面 ' + ob.kids + ' 个、各扇区的根也一样；期望照 /api/state 的职级和开的时间另排）', JSON.stringify(ob));
+  await page.screenshot({ path: path.join(OUT, 'orgmap-zh-dark.png') });
+  // 输入没变不重排：包一层数 orgMapLayout 被调了几次，隔三次轮询
+  const lay0 = await ev(page, () => { try { window.__lay = 0; const f = orgMapLayout; window.orgMapLayout = function () { window.__lay++; return f.apply(this, arguments); }; window.__L0 = orgMapL; return !!orgMapL; } catch (e) { return String(e); } });
+  const p0 = await rects(page, Object.keys(g.nodes)); await sleep(3800);
+  const nl = await ev(page, () => { try { return { n: window.__lay, same: orgMapL === window.__L0 }; } catch (e) { return null; } }), p1 = await rects(page, Object.keys(g.nodes));
+  ok(lay0 === true && !!nl && nl.n === 0 && nl.same && moved(p0, p1).length === 0, '放射：输入没变就不重排：隔三次轮询，布局一次都没重算（orgMapLayout 调了 ' + (nl && nl.n) + ' 次），每个方块都在原处', JSON.stringify({ lay0, nl, moved: moved(p0, p1) }));
+  // 某个窗口空闲 → 在跑：挑负责人下面开得最晚、不是要你动手也不在跑的那个（层级图会把它挪到前面去）
+  const bk = await ev(page, (sids) => { const name = Object.fromEntries(Object.entries(sids).map(([k, v]) => [v, k])), o = {};
+    for (const c of document.querySelectorAll('#stage .card')) { if (/^[xp]:/.test(c.dataset.sid)) continue; const k = c.className; o[name[c.dataset.sid] || c.dataset.sid] = /(^| )alert( |$)|s-reply|s-ask/.test(k) ? 0 : /s-busy|(^| )bg( |$)/.test(k) ? 1 : /s-review/.test(k) ? 2 : 3; }
+    return o; }, FX.sids);
+  const N0 = (raw && raw.org && raw.org.nodes) || {};
+  const cand = ((raw && raw.sessions) || []).filter((s) => s.status === 'idle' && N0[s.sid] && N0[s.sid].role === 'member' && N0[s.sid].boss === FX.sids.peerDone && bk[S2N[s.sid]] >= 2).sort((a, b) => b.startedAt - a.startedAt)[0];
+  const fn = cand ? S2N[cand.sid] : null, top0 = (await mapOf(page)).top, f0 = await rects(page, Object.keys(g.nodes));
+  flip = cand ? cand.sid : null; await sleep(3800);
+  const gf = await mapOf(page), f1 = await rects(page, Object.keys(g.nodes));
+  ok(!!fn && /s-busy/.test((gf.nodes[fn] || {}).box || '') && !/s-busy/.test((g.nodes[fn] || {}).box || '') && moved(f0, f1).length === 0,
+    '放射：' + fn + ' 从空闲变成在跑（在浏览器里改 /api/state）：它的样子变成在跑，图上 29 个方块一个都没挪（层级图里它会排到前面）', JSON.stringify({ fn, moved: moved(f0, f1), hub: [top0, gf.top], box: (gf.nodes[fn] || {}).box }));
+  flip = null; await sleep(2000);
+  // 线
+  const ln = await linesOf(page);
+  ok(!!ln && ln.n === 29 && ln.li === 29 && ln.endNot === 0 && ln.startNot === 0 && ln.cross.length === 0 && ln.toChief + ln.toYou >= 1,
+    '放射：一个方块一条线（29 条）：一头在它自己方块的边上，另一头在上级（负责人 / 总管 / 你）方块的边上；去总管、去「你」的线没有一条从「你」或总管的方块底下穿过去', JSON.stringify(ln));
+  // 上级到下级的线（11/18 win-eb 加）：负责人在圈 1 正右、它带的 28 个绕满一圈，去左半边的那些直着连会横穿圆心（底上 6 条以上）；要绕开圆心走弧线
+  ok(!!ln && ln.n === 29 && ln.crossKid.length === 0 && ln.q >= 1,
+    '放射：上级到下级的线也不从「你」和总管的方块底下穿过：直着连会穿过的改成绕开圆心的弧（' + (ln && ln.q) + ' 条弧，其余是直线）', JSON.stringify(ln && { n: ln.n, q: ln.q, crossKid: ln.crossKid }));
+  // 悬停：右半边上方一个没有框的普通窗口、左半边一个（往左伸的），原地展开成三行的方块；依据贴在它下面、不盖住它；往上到「你」的那一串加重
+  const pickR = Object.entries(g.nodes).filter(([, x]) => !x.ar && !x.o2 && (N0[x.sid] || {}).role === 'member' && g.top && g.omv && x.r.l > g.top.r + 20 && x.r.b < g.omv.b - 260).sort((a, b) => a[1].r.t - b[1].r.t).map(([n]) => n)[0];
+  const pickL = Object.entries(g.nodes).filter(([, x]) => x.ar && !x.o2 && (N0[x.sid] || {}).role === 'member' && g.omv && x.r.b < g.omv.b - 200).map(([n]) => n)[0];
+  const hv = async (n) => { const a = ((await mapOf(page)).nodes || {})[n]; if (!a) return null; await page.mouse.move(a.r.l + a.r.w / 2, a.r.t + a.r.h / 2); await sleep(400); const G = await mapOf(page), b = (G.nodes || {})[n]; if (!b) return null;
+    return { n, ar: a.ar, hot1: b.hot1, o2: b.o2, o3: b.o3, h0: Math.round(a.r.h), h1: Math.round(b.r.h), w1: Math.round(b.r.w), anchor: a.ar ? [b.r.r - a.r.r, b.r.t - a.r.t].map(Math.round) : [b.r.l - a.r.l, b.r.t - a.r.t].map(Math.round),
+      tip: G.tip && G.tip.text, why: b.why, gap: G.tip ? [Math.round(G.tip.r.t - b.r.b), Math.round(b.r.t - G.tip.r.b)] : null, over: G.tip ? overlap(G.tip.r, b.r) : null, k: G.V && G.V.k, youHot: G.youHot, chiefHot: G.chiefHot, hot: G.hotD || '' }; };
+  const expanded = (h) => !!h && h.hot1 && h.o2 && h.o3 && h.h1 >= 2 * h.h0 && Math.abs(h.anchor[0]) <= 1 && Math.abs(h.anchor[1]) <= 1 && h.w1 >= 279 * Math.max(1, h.k || 1);
+  const tipOk = (h) => !!h && !!h.tip && h.tip === h.why && h.over === false && ((h.gap[0] >= 0 && h.gap[0] <= 12) || (h.gap[1] >= 0 && h.gap[1] <= 12));
+  const hR = pickR ? await hv(pickR) : null;
+  await page.screenshot({ path: path.join(OUT, 'orgmap-hover-zh-dark.png') });
+  const hL = pickL ? await hv(pickL) : null;
+  ok(expanded(hR) && !hR.ar, '放射：悬停右半边的 ' + pickR + '（平时只有点和标题）：原地展开成三行的方块（状态那一行、模型那一行都出来），左上角不动', JSON.stringify(hR));
+  ok(expanded(hL) && hL.ar, '放射：悬停左半边往左伸的 ' + pickL + '：展开时右上角不动（往左长）', JSON.stringify(hL));
+  ok(tipOk(hR) && hR.gap[0] >= 0 && tipOk(hL), '放射：依据（#otip）贴在展开的方块下面（间隙 0–12 px，下面放不下才贴上面），不盖住它', JSON.stringify({ r: hR && [hR.tip, hR.gap, hR.over], l: hL && [hL.tip, hL.gap, hL.over] }));
+  const hI = await hv('intr');
+  ok(!!hI && hI.hot1 && (hI.hot.match(/M/g) || []).length === 3 && hI.youHot && hI.chiefHot, '放射：悬停 intr → 它、unfin、负责人 peerDone 三段线另描一条加重，总管和「你」也加重', JSON.stringify(hI && { hot: hI.hot.length, m: (hI.hot.match(/M/g) || []).length, you: hI.youHot, chief: hI.chiefHot }));
+  // 悬停总管：圆心那一块原地展开，别的方块不能跟着挪（量的是轮询两次以后）
+  const gc0 = await mapOf(page), pc0 = await rects(page, Object.keys(g.nodes)), lc0 = await ev(page, () => window.__lay), cr = gc0.chief;
+  if (cr) await page.mouse.move(cr.l + cr.w / 2, cr.t + 12); await sleep(3800);
+  const pc1 = await rects(page, Object.keys(g.nodes)), lc1 = await ev(page, () => window.__lay), gc = await mapOf(page);
+  ok(!!cr && gc.chiefHot && !!gc.chiefX && gc.chiefX.hot1 && gc.chiefX.o3 && !(gc0.chiefX || {}).o3 && moved(pc0, pc1).length === 0 && !!gc.you && near(gc.you.t, gc0.you.t, 1) && near(gc.chief.t, cr.t, 1),
+    '放射：悬停圆心的总管：它原地展开（多出模型那一行）、写依据；「你」不往上跳，别的方块一个都不挪（隔两次轮询）', JSON.stringify({ moved: moved(pc0, pc1).slice(0, 6), lay: [lc0, lc1], you: [gc0.you && gc0.you.t, gc.you && gc.you.t], chief: [cr && cr.t, gc.chief && gc.chief.t, cr && cr.h, gc.chief && gc.chief.h], x: [gc0.chiefX, gc.chiefX], tip: gc.tip && gc.tip.text }));
+  // 缩小着看：缩到 0.5 倍再悬停，展开的方块按倍数放回原大
+  let p = await emptyAt(page, 0.5, 0.5); if (p) await page.mouse.move(p.x, p.y); await sleep(300);
+  await ev(page, () => orgMapZoom(0.5 / orgV.k)); await sleep(200);
+  const hz = pickR ? await hv(pickR) : null;
+  ok(!!hz && hz.k <= 0.51 && hz.hot1 && hz.w1 >= 279 && hz.h1 >= 2 * hz.h0, '放射：缩到 0.5 倍再悬停：展开的方块按倍数放回原大（屏幕上 ' + (hz && hz.w1) + ' px 宽，不跟着缩小），字照样读得清', JSON.stringify(hz));
+  await page.screenshot({ path: path.join(OUT, 'orgmap-zoomout-hover-zh-dark.png') });
+  await tap(page, '#org .omctl [data-omz="fit"]'); await sleep(600);
+  p = await emptyAt(page, 0.5, 0.5); if (p) await page.mouse.move(p.x, p.y); await sleep(350);
+  const gn = await mapOf(page);
+  ok(!Object.values(gn.nodes).some((x) => x.hot1 || x.hot) && !gn.tip && gn.hotD === '' && !gn.youHot, '放射：鼠标移到空白处，展开、加重、依据都收起', JSON.stringify({ hot1: Object.entries(gn.nodes).filter(([, x]) => x.hot1).map(([n]) => n), tip: gn.tip, hot: gn.hotD }));
+  const fc = await ev(page, (sid) => { const b = document.querySelector('#org .omnodes .onode[data-sid="' + sid + '"]'); if (!b) return null; b.focus(); const li = b.closest('.oli'), t = document.querySelector('#otip');
+    const r = { hot1: li.classList.contains('hot1'), tip: t && !t.hidden ? t.textContent : '', why: b.dataset.why }; b.blur(); return r; }, FX.sids.unfin);
+  ok(!!fc && fc.hot1 && !!fc.why && fc.tip === fc.why, '放射：键盘聚焦到一个窗口（unfin），和悬停一样原地展开、写依据', JSON.stringify(fc));
+  // 画布：滚轮挪；Ctrl / ⌘ + 滚轮以指针为中心缩放（拿两个方块的屏幕位置验：每个方块到指针的距离正好乘缩放的倍数）
+  const A = ['peerDone', 'projF'];
+  await ev(page, () => { window.__wh = []; addEventListener('wheel', (e) => window.__wh.push([e.deltaX, e.deltaY, e.ctrlKey, e.metaKey, e.deltaMode]), { capture: true, passive: true }); });
+  const lastWheel = () => ev(page, () => (window.__wh || []).slice(-1)[0] || null);       // 页面实际收到的那一下：deviceScaleFactor 2 时 Playwright 给的 60 / 40 到页面是 30 / 20
+  p = await emptyAt(page, 0.35, 0.4); if (p) await page.mouse.move(p.x, p.y); await sleep(200);
+  let b0 = await rects(page, A); await page.mouse.wheel(60, 40); await sleep(250); let b1 = await rects(page, A); const w1 = await lastWheel();
+  ok(!!p && !!w1 && w1[0] > 0 && w1[1] > 0 && w1[4] === 0 && A.every((n) => b0[n] && b1[n] && near(b1[n].l - b0[n].l, -w1[0]) && near(b1[n].t - b0[n].t, -w1[1]) && near(b1[n].w, b0[n].w, 0.5)),
+    '放射：滚轮 / 两指滑 = 挪画布（页面收到往右下滚 ' + (w1 && w1[0]) + ' / ' + (w1 && w1[1]) + ' px，图正好往左上挪这么多，不缩放）', JSON.stringify({ p, wheel: w1, d: A.map((n) => shift(b0, b1, n)) }));
+  const zoomAt = async (key, dy) => { const q = await emptyAt(page, 0.3, 0.3); if (!q) return null; await page.mouse.move(q.x, q.y); await sleep(150); const c0 = await rects(page, A);
+    await page.keyboard.down(key); await page.mouse.wheel(0, dy); await page.keyboard.up(key); await sleep(250); const c1 = await rects(page, A), w = await lastWheel();
+    if (!A.every((n) => c0[n] && c1[n])) return null; const f = c1[A[0]].w / c0[A[0]].w;
+    return { f: Math.round(f * 1000) / 1000, wheel: w, err: A.map((n) => Math.round(Math.max(Math.abs((c1[n].l - q.x) - f * (c0[n].l - q.x)), Math.abs((c1[n].t - q.y) - f * (c0[n].t - q.y))) * 10) / 10) }; };
+  const zc = await zoomAt('Control', -60);
+  ok(!!zc && !!zc.wheel && zc.wheel[2] && zc.f > 1.2 && zc.err.every((e) => e <= 2), '放射：Ctrl + 滚轮 = 以指针为中心放大（' + (zc && zc.f) + ' 倍；指针下那一点不动：两个方块到指针的距离都正好乘这个倍数）', JSON.stringify(zc));
+  const zm = await zoomAt('Meta', 60);
+  ok(!!zm && !!zm.wheel && zm.wheel[3] && zm.f < 0.85 && zm.err.every((e) => e <= 2), '放射：⌘ + 滚轮 = 以指针为中心缩小（' + (zm && zm.f) + ' 倍，同样指针下那一点不动）', JSON.stringify(zm));
+  // 按住空白处拖 = 挪
+  p = await emptyAt(page, 0.55, 0.6); b0 = await rects(page, A);
+  let dragging = null;
+  if (p) { await page.mouse.move(p.x, p.y); await page.mouse.down(); await page.mouse.move(p.x + 80, p.y + 30, { steps: 5 }); dragging = await ev(page, () => document.querySelector('#org .omv').classList.contains('drag')); await page.mouse.up(); }
+  await sleep(200); b1 = await rects(page, A); const dragAfter = await ev(page, () => document.querySelector('#org .omv').classList.contains('drag'));
+  ok(dragging === true && dragAfter === false && A.every((n) => b0[n] && b1[n] && near(b1[n].l - b0[n].l, 80) && near(b1[n].t - b0[n].t, 30)), '放射：按住空白处拖 = 挪画布（拖 80 / 30 px，图跟着挪 80 / 30 px）；松手就不再跟着', JSON.stringify({ dragging, dragAfter, d: A.map((n) => shift(b0, b1, n)) }));
+  // 他动过以后：轮询不替他摆正；窗口变大小，布局重算了，画布也不替他放回窗口里
+  const v0 = (await mapOf(page)).V; await sleep(3800); const v1 = (await mapOf(page)).V;
+  ok(!!v0 && !!v1 && v0.user && JSON.stringify(v0) === JSON.stringify(v1), '放射：他拖过 / 缩放过以后，隔三次轮询图不被摆回去', JSON.stringify({ v0, v1 }));
+  const lr0 = await ev(page, () => window.__lay);
+  await page.setViewportSize({ width: 1280, height: 800 }); await sleep(1000); const v2 = (await mapOf(page)).V, lr1 = await ev(page, () => window.__lay);
+  ok(!!v2 && !!v1 && v2.user && v2.k === v1.k && v2.x === v1.x && v2.y === v1.y && lr1 > lr0, '放射：他动过以后窗口变小（1520 → 1280 宽）：布局按新窗口重算了（orgMapLayout 又调了 ' + (lr1 - lr0) + ' 次），画布不替他放回窗口里', JSON.stringify({ v1, v2, lay: [lr0, lr1] }));
+  await page.setViewportSize({ width: 1520, height: 900 }); await sleep(1000);
+  // 右下角三个按钮
+  g = await mapOf(page);
+  ok(!!g.ctl && JSON.stringify(g.ctl.btns.map((b) => [b.k, b.text])) === '[["out","−"],["fit","适应窗口"],["in","+"]]' && g.ctl.label === '画布' && g.ctl.btns[0].label === '画布缩小' && g.ctl.btns[2].label === '画布放大' && /双击空白处/.test(g.ctl.btns[1].title)
+    && g.ctl.r.r <= g.omv.r - 12 && g.ctl.r.r >= g.omv.r - 24 && g.ctl.r.b <= g.omv.b - 12 && g.ctl.r.b >= g.omv.b - 24,
+    '放射：画布右下角三个按钮「− 适应窗口 +」（离右边、下边 16 px；读屏名 画布缩小 / 画布放大，「适应窗口」提示可以双击空白处）', JSON.stringify(g.ctl && { btns: g.ctl.btns, r: g.ctl.r, omv: g.omv }));
+  const mid = g.omv ? { x: (g.omv.l + g.omv.r) / 2, y: (g.omv.t + g.omv.b) / 2 } : { x: 0, y: 0 };
+  const btnZoom = async (k) => { const c0 = await rects(page, A); await tap(page, '#org .omctl [data-omz="' + k + '"]'); await sleep(600); const c1 = await rects(page, A); if (!A.every((n) => c0[n] && c1[n])) return null;
+    const f = c1[A[0]].w / c0[A[0]].w; return { f: Math.round(f * 1000) / 1000, err: A.map((n) => Math.round(Math.max(Math.abs((c1[n].l - mid.x) - f * (c0[n].l - mid.x)), Math.abs((c1[n].t - mid.y) - f * (c0[n].t - mid.y))) * 10) / 10) }; };
+  const zo = await btnZoom('out'), zi = await btnZoom('in');
+  ok(!!zo && !!zi && near(zo.f, 0.8, 0.01) && near(zi.f, 1.25, 0.01) && zo.err.concat(zi.err).every((e) => e <= 2), '放射：点「−」以画布正中为中心缩到 0.8 倍，点「+」放大 1.25 倍', JSON.stringify({ zo, zi }));
+  await tap(page, '#org .omctl [data-omz="fit"]'); await sleep(700); g = await mapOf(page); const kFit = g.V && g.V.k;
+  ok(allIn(g) && !!g.V && !g.V.user, '放射：点「适应窗口」→ 整张图放回窗口里，之后又按「他没动过」处理', JSON.stringify({ V: g.V, out: outOf(g) }));
+  // 他没动过时窗口变大小：重新放回窗口里
+  await page.setViewportSize({ width: 1180, height: 760 }); await sleep(1100); const gs = await mapOf(page);
+  await page.setViewportSize({ width: 1520, height: 900 }); await sleep(1100); const gb = await mapOf(page);
+  ok(allIn(gs) && allIn(gb) && !!gs.V && !gs.V.user && gs.V.k < kFit, '放射：他没动过时窗口变小（1180 × 760）再变回来：每次都把整张图重新放回窗口里', JSON.stringify({ small: gs.V, back: gb.V, kFit, out: [outOf(gs), outOf(gb)] }));
+  // 双击空白处 = 放回窗口里
+  p = await emptyAt(page, 0.4, 0.5); if (p) { await page.mouse.move(p.x, p.y); await page.mouse.wheel(220, 140); } await sleep(250); const gw = await mapOf(page);
+  p = await emptyAt(page, 0.5, 0.5); if (p) await page.mouse.dblclick(p.x, p.y); await sleep(700); g = await mapOf(page);
+  ok(!!gw.V && gw.V.user && !allIn(gw) && allIn(g) && !!g.V && !g.V.user && near(g.V.k, gb.V ? gb.V.k : -1, 0.002), '放射：挪开以后双击空白处 → 整张图放回窗口里（和「适应窗口」一样）', JSON.stringify({ moved: gw.V, after: g.V, out: outOf(g) }));
+  // 点一个方块 = 放大看
+  const dn = g.nodes.done; if (dn) { await page.mouse.move(dn.r.l + dn.r.w / 2, dn.r.t + dn.r.h / 2); await sleep(300); await page.mouse.click(dn.r.l + dn.r.w / 2, dn.r.t + dn.r.h / 2); } await sleep(700);
+  const zd = await ev(page, () => ({ open: document.querySelector('#detail').open, title: document.querySelector('#dTitle').textContent })); await page.keyboard.press('Escape'); await sleep(400);
+  ok(!!dn && zd.open && zd.title === 'w-done', '放射：点一个方块照旧放大看它（和墙上 ⌘O、层级图里点方块同一个大窗口）', JSON.stringify(zd));
+  // main 不滚：画布自己挪
+  const ms = await ev(page, () => { const m = document.querySelector('main'); m.scrollTop = 400; m.scrollLeft = 200; return { top: m.scrollTop, left: m.scrollLeft, sh: m.scrollHeight - m.clientHeight, sw: m.scrollWidth - m.clientWidth, ov: getComputedStyle(m).overflow }; });
+  ok(!!ms && ms.top === 0 && ms.left === 0 && ms.sh <= 0 && ms.sw <= 0, '放射：页面（main）不滚：没有可滚的内容，硬设 scrollTop / scrollLeft 也还是 0（挪图靠画布自己）', JSON.stringify(ms));
+  // 别的视图里没有这个开关；切回架构还是放射、重新放回窗口里
+  const shapeShown = () => ev(page, () => { const s = document.querySelector('#oshape'); return !!s && getComputedStyle(s).display !== 'none' && s.getClientRects().length > 0; });
+  await tap(page, '#modes [data-mode="wall"]'); await sleep(1000); const onWall = await shapeShown();
+  await tap(page, '#modes [data-mode="flow"]'); await sleep(1000); const onFlow = await shapeShown();
+  ok(onWall === false && onFlow === false, '放射：墙和封面里不显示「层级 | 放射」（只在架构视图里）', JSON.stringify({ onWall, onFlow }));
+  await tap(page, '#modes [data-mode="org"]'); await sleep(1800); g = await mapOf(page);
+  ok(g.map && g.shape.shown && allIn(g) && !!g.V && !g.V.user, '放射：从封面切回架构还是放射，整张图重新放回窗口里', JSON.stringify({ map: g.map, shown: g.shape.shown, V: g.V, out: outOf(g) }));
+  await page.reload(); await page.waitForSelector('#org .onode .ot', { timeout: 10000 }).catch(() => {}); await sleep(2600); g = await mapOf(page);
+  ok(g.map && g.store === '"map"' && allIn(g), '放射：重开总控台还是放射（记在本机的 ccb_orgshape）', JSON.stringify({ map: g.map, store: g.store }));
+  // 纯函数：orgMapRound（扇区绕圈的先后）。临时清掉页面自己记的那份，算完还原
+  const rd = await ev(page, () => { const keep = orgMapKeys; try { const c = (o) => Object.entries(o).map(([key, n]) => ({ key, n })), k = (l) => orgMapRound(l).map((x) => x.key);
+    orgMapKeys = null; const a = k(c({ a: 10, b: 8, c: 5, d: 2 })), b = k(c({ a: 1, b: 3, c: 9, d: 20 })), d = k(c({ a: 10, b: 8, c: 5, d: 2, e: 1 }));
+    orgMapKeys = null; const e = k(c({ a: 10, b: 8, f: 7, c: 5, d: 2, e: 1 })); return { a, b, d, e }; } finally { orgMapKeys = keep; } });
+  same(rd, { a: ['a', 'c', 'b', 'd'], b: ['a', 'c', 'b', 'd'], d: ['a', 'c', 'e', 'b', 'd'], e: ['a', 'f', 'd', 'b', 'e', 'c'] },
+    '放射：扇区绕圈的先后（orgMapRound）：最大的排第一（正右）、第二大的在它对面（左），其余一下一上往两边填；项目没增没减时各项目的窗口数变了也不换位，项目增减了才重排');
+  // 纯函数：orgMapLayout。把页面里这个函数的原文放进一个 Worker 跑（有环时要是死循环，8 秒后整个 Worker 扔掉，算变红），结果拿回来在这边核
+  const HUB = { w: 276, h: 118 };
+  const gen = (sizes, seed) => {      // 每个扇区：一个负责人（宽方块），其余六成挂进树里（最深 4 层），四成是没人带的根；方块宽 90–230、两成高 40（要你动手的多一行）
+    let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    const sectors = [], kids = {}, size = {};
+    sizes.forEach((n, si) => {
+      const key = 'p' + si, roots = [], all = [], add = (id, par, d) => { all.push({ id, d }); if (par) (kids[par] = kids[par] || []).push(id); else roots.push(id); };
+      add(key + 'L', null, 1); size[key + 'L'] = [276, 44];
+      for (let i = 1; i < n; i++) { const id = key + '-' + i, cs = all.filter((x) => x.d < 4);
+        if (rnd() < 0.6) { const par = cs[Math.floor(rnd() * cs.length)]; add(id, par.id, par.d + 1); } else add(id, null, 1);
+        size[id] = [Math.round(90 + rnd() * 140), rnd() < 0.2 ? 40 : 22]; }
+      sectors.push({ key, roots });
+    });
+    return { hub: HUB, sectors, kids: Object.entries(kids), size };
+  };
+  const leafs = (ids, w = 150) => Object.fromEntries(ids.map((id, i) => [id, [w + (i % 3) * 20, 22]]));
+  const CASES = {
+    '1 个扇区 1 个窗口': { hub: HUB, sectors: [{ key: 'a', roots: ['a1'] }], kids: [], size: { a1: [180, 22] } },
+    '2 个扇区各 3 个': { hub: HUB, sectors: [{ key: 'a', roots: ['aL'] }, { key: 'b', roots: ['b1', 'b2', 'b3'] }], kids: [['aL', ['a1', 'a2']]], size: { aL: [276, 44], ...leafs(['a1', 'a2', 'b1', 'b2', 'b3']) } },
+    '4 个扇区各 3 个（右下左上）': { hub: HUB, sectors: ['r', 'd', 'l', 'u'].map((k) => ({ key: k, roots: [k + '1', k + '2', k + '3'] })), kids: [], size: leafs(['r', 'd', 'l', 'u'].flatMap((k) => [k + '1', k + '2', k + '3'])) },
+    '4 个扇区 60 个混合深度': gen([28, 16, 10, 6], 7),
+    '8 个扇区 200 个': gen([60, 40, 30, 22, 18, 14, 10, 6], 11),
+    '一条深度 5 的链': { hub: HUB, sectors: [{ key: 'c', roots: ['c1'] }], kids: [['c1', ['c2']], ['c2', ['c3']], ['c3', ['c4']], ['c4', ['c5']]], size: { c1: [276, 44], ...leafs(['c2', 'c3', 'c4', 'c5']) } },
+    '只带 1 个下级的上级': { hub: HUB, sectors: [{ key: 'p', roots: ['pL'] }, { key: 'q', roots: ['q1', 'q2', 'q3', 'q4'] }], kids: [['pL', ['p1']]], size: { pL: [276, 44], p1: [130, 22], ...leafs(['q1', 'q2', 'q3', 'q4']) } },
+    'kids 里有环': { hub: HUB, sectors: [{ key: 'r', roots: ['r0'] }, { key: 's', roots: ['s1', 's2'] }], kids: [['r0', ['r1']], ['r1', ['r2']], ['r2', ['r1', 'r0']]], size: { r0: [276, 44], ...leafs(['r1', 'r2', 's1', 's2']) }, back: [['r2', 'r1'], ['r2', 'r0']] },
+  };
+  const TAIL = '\nself.onmessage = (e) => { const c = e.data, t0 = Date.now(); const sp = () => ({ hub: c.hub, sectors: c.sectors, kids: new Map(c.kids), size: (id) => ({ w: c.size[id][0], h: c.size[id][1] }) });' +
+    ' try { const a = orgMapLayout(sp()), b = orgMapLayout(sp()), pk = (L) => JSON.stringify({ pos: [...L.pos], secs: L.secs, box: L.box, s: L.s });' +
+    ' self.postMessage({ ms: Date.now() - t0, same: pk(a) === pk(b), pos: [...a.pos], box: a.box, s: a.s }); } catch (err) { self.postMessage({ err: String(err) }); } };';
+  const PURE = await ev(page, async ([cases, tail]) => {
+    let src; try { src = orgMapLayout.toString(); } catch (e) { return { err: String(e) }; }
+    const url = URL.createObjectURL(new Blob([src + tail], { type: 'text/javascript' })), out = {};
+    for (const [name, c] of Object.entries(cases)) {
+      const w = new Worker(url);
+      out[name] = await new Promise((res) => { const t = setTimeout(() => res({ timeout: true }), 8000); w.onmessage = (e) => { clearTimeout(t); res(e.data); }; w.onerror = (e) => { clearTimeout(t); res({ err: e.message || 'error' }); }; w.postMessage(c); });
+      w.terminate();
+    }
+    return out; }, [CASES, TAIL]);
+  const F = { run: [], overlap: [], hub: [], ring: [], leaf: [], same: [], first: [], al: [], order: [] }, seen = { left: 0, right: 0, bottom: 0, top: 0 }, ms0 = [];
+  for (const [name, c] of Object.entries(CASES)) {
+    const res = PURE && PURE[name];
+    if (!res || res.timeout || res.err || !res.pos) { F.run.push(name + '：' + (res ? (res.timeout ? '8 秒没排完' : res.err) : (PURE && PURE.err) || '没有结果')); continue; }
+    ms0.push(res.ms); const pos = new Map(res.pos), ids = Object.keys(c.size), K = new Map(c.kids), back = (p, k) => (c.back || []).some(([a, b]) => a === p && b === k);
+    if (pos.size !== ids.length || ids.some((id) => !pos.has(id))) F.run.push(name + '：排上了 ' + pos.size + ' / ' + ids.length + ' 个');
+    const R = ids.filter((id) => pos.has(id)).map((id) => { const q = pos.get(id); return [id, { l: q.l, r: q.l + q.w, t: q.t, b: q.t + q.h }]; });
+    const hubR = { l: -c.hub.w / 2, r: c.hub.w / 2, t: -c.hub.h / 2, b: c.hub.h / 2 };
+    for (let i = 0; i < R.length; i++) { if (overlap(R[i][1], hubR, 0)) F.hub.push(name + '：' + R[i][0]); for (let j = i + 1; j < R.length; j++) if (overlap(R[i][1], R[j][1], 0)) F.overlap.push(name + '：' + R[i][0] + '/' + R[j][0]); }
+    for (const [par, ks] of K) for (const k of ks) if (!back(par, k) && pos.has(par) && pos.has(k) && !(pos.get(k).d > pos.get(par).d)) F.ring.push(name + '：' + par + '(' + pos.get(par).d + ')→' + k + '(' + pos.get(k).d + ')');
+    for (const id of ids) if (!K.has(id) && pos.has(id) && pos.get(id).d < 2) F.leaf.push(name + '：' + id);
+    if (!res.same) F.same.push(name);
+    const sub = new Set(), walk = (id) => { if (sub.has(id)) return; sub.add(id); for (const k of K.get(id) || []) if (!back(id, k)) walk(k); }; c.sectors[0].roots.forEach(walk);
+    const xs = [...sub].filter((id) => pos.has(id)).map((id) => pos.get(id).x); if (!(xs.length && xs.reduce((a, b) => a + b, 0) / xs.length > 0)) F.first.push(name);
+    for (const [id, q] of pos) if ((q.x < -0.5 && !(q.al < 0)) || (q.x > 0.5 && !(q.al > 0))) F.al.push(name + '：' + id + ' x=' + Math.round(q.x) + ' al=' + q.al);
+    // 排第一的在上面（左右两边的扇区）或左边（上下两边的）：同一圈上的根，按给的先后比第一个和最后一个的屏幕位置。扇区朝哪边看这些根在圈上的角度（th）的平均，
+    // 只核离界面那条分界线（|cos| = 0.38）够远的：左右 |cos| ≥ 0.6、上下 |cos| ≤ 0.3，夹在中间的不核
+    for (const S of c.sectors) {
+      const byD = new Map(); for (const r of S.roots) if (pos.has(r)) { const d = pos.get(r).d; if (!byD.has(d)) byD.set(d, []); byD.get(d).push(pos.get(r)); }
+      for (const [, l] of byD) { if (l.length < 2) continue;
+        const th = l.reduce((a, q) => a + q.th, 0) / l.length, cs = Math.cos(th), sn = Math.sin(th);
+        const kind = cs <= -0.6 ? 'left' : cs >= 0.6 ? 'right' : Math.abs(cs) <= 0.3 ? (sn > 0 ? 'bottom' : 'top') : null; if (!kind) continue;
+        seen[kind]++; const a = l[0], b = l[l.length - 1], okd = kind === 'left' || kind === 'right' ? b.y > a.y : b.x > a.x;
+        if (!okd) F.order.push(name + ' / ' + S.key + '（' + kind + '）：' + l.map((q) => '(' + Math.round(q.x) + ',' + Math.round(q.y) + ')').join(' → ')); }
+    }
+  }
+  const nC = Object.keys(CASES).length, ran = Object.values(PURE || {}).filter((r) => r && r.pos).length;      // 下面几条只看排完了的那几组；一组都没排完（底上没有这个函数）算红
+  ok(F.run.length === 0, '放射 · orgMapLayout：' + nC + ' 组输入（1 个扇区 1 个窗口、2 × 3、4 × 3、4 个扇区 60 个混合深度、8 个扇区 200 个、深度 5 的链、只带 1 个下级、kids 里有环）都在 8 秒内排完，每个窗口都排上了（最慢一组 ' + (ms0.length ? Math.max(...ms0) : '-') + ' ms，两遍）', JSON.stringify(F.run));
+  ok(ran > 0 && F.overlap.length === 0, '放射 · orgMapLayout：任意两个方块不相交', JSON.stringify(F.overlap.slice(0, 8)));
+  ok(ran > 0 && F.hub.length === 0, '放射 · orgMapLayout：没有方块压着圆心那一块（你 + 总管）', JSON.stringify(F.hub.slice(0, 8)));
+  ok(ran > 0 && F.ring.length === 0, '放射 · orgMapLayout：下级的圈号比上级大（环里往回指的那两条不算）', JSON.stringify(F.ring.slice(0, 8)));
+  ok(ran > 0 && F.leaf.length === 0, '放射 · orgMapLayout：没带人的不在圈 1（圈 1 只放带着人的）', JSON.stringify(F.leaf.slice(0, 8)));
+  ok(ran > 0 && F.same.length === 0, '放射 · orgMapLayout：同样的输入排两遍，结果逐字相同', JSON.stringify(F.same));
+  ok(ran > 0 && F.first.length === 0, '放射 · orgMapLayout：第一个扇区在右边（它的方块 x 均值 > 0）', JSON.stringify(F.first));
+  ok(ran > 0 && F.al.length === 0, '放射 · orgMapLayout：圆心左边的方块往左伸（al < 0）、右边的往右伸（al > 0）', JSON.stringify(F.al.slice(0, 8)));
+  ok(ran > 0 && F.order.length === 0 && seen.left >= 1 && seen.bottom >= 1 && seen.right >= 1, '放射 · orgMapLayout：左边、下边的扇区倒着排：排第一的总在上面（左右两边）或左边（上下两边）（核了左 ' + seen.left + '、右 ' + seen.right + '、下 ' + seen.bottom + '、上 ' + seen.top + ' 组）', JSON.stringify(F.order.slice(0, 8)));
+  // 切回层级：和切过去之前一样
+  await tap(page, '#oshape [data-oshape="tree"]'); await sleep(1600); const tree1 = await treeOf(page); g = await mapOf(page);
+  ok(!g.map && g.store === '"tree"' && !!tree0 && !!tree1 && tree0.cols.length >= 1 && JSON.stringify(tree1) === JSON.stringify(tree0) && JSON.stringify(g.shape.btns.map((b) => b[2])) === '["true","false"]',
+    '放射：点「层级」切回来：和切过去之前那张一样（列、每个方块画在谁下面），记成层级', JSON.stringify({ map: g.map, store: g.store, cols: [tree0 && tree0.cols, tree1 && tree1.cols] }));
+  ok(errs.length === 0, '放射（中文深色）：页面没有报错', errs.join(' | ')); await ctx.close();
+
+  // ── 二、4 个项目（在浏览器里改 /api/state：负责人下面最早开的 9 个按项目挂到总管下面，5 个改成 Acme、4 个改成 Docs）：其他 19、Acme 5、Docs 4、FretFlow 1
+  {
+    const N = (raw && raw.org && raw.org.nodes) || {};
+    const mv = ((raw && raw.sessions) || []).filter((s) => N[s.sid] && N[s.sid].via === 'dept' && N[s.sid].boss === FX.sids.peerDone).sort((a, b) => a.startedAt - b.startedAt).slice(0, 9).map((s) => s.sid);
+    const PJ = [{ key: 'acme', name: 'Acme App' }, { key: 'docs', name: 'Docs Site' }], to = new Map(mv.map((sid, i) => [sid, PJ[i < 5 ? 0 : 1]]));
+    const route4 = async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }
+      const M = (j.org && j.org.nodes) || {}, ch = j.org && j.org.chief;
+      for (const s of j.sessions || []) { const pj = to.get(s.sid); if (!pj) continue; s.project = pj; if (M[s.sid]) Object.assign(M[s.sid], { boss: ch, via: 'dept', n: 0, last: 0 }); }
+      await route.fulfill({ response: r, json: j }); };
+    const c4 = await ctxOf({ shape: 'map', route: route4 }), pg = c4.page, G = await mapOf(pg), L4 = await linesOf(pg);
+    const proj = (n) => { const sid = FX.sids[n] || n; return to.has(sid) ? to.get(sid).key : ((((raw.sessions || []).find((s) => s.sid === sid) || {}).project || {}).key || 'other'); };
+    const cx = G.top ? (G.top.l + G.top.r) / 2 : 0, cy = G.top ? (G.top.t + G.top.b) / 2 : 0, E = Object.entries(G.nodes || {});
+    const mX = Math.max(1, ...E.map(([, x]) => Math.abs((x.r.l + x.r.r) / 2 - cx))), mY = Math.max(1, ...E.map(([, x]) => Math.abs((x.r.t + x.r.b) / 2 - cy))), dir = {};
+    for (const [n, x] of E) { const k = proj(n), d = dir[k] = dir[k] || { n: 0, x: 0, y: 0 }; d.n++; d.x += ((x.r.l + x.r.r) / 2 - cx) / mX; d.y += ((x.r.t + x.r.b) / 2 - cy) / mY; }
+    for (const d of Object.values(dir)) { d.x = Math.round(d.x / d.n * 100) / 100; d.y = Math.round(d.y / d.n * 100) / 100; }
+    const D = (k) => dir[k] || { n: 0, x: 0, y: 0 };
+    ok(mv.length === 9 && D('other').n === 19 && D('acme').n === 5 && D('docs').n === 4 && D('fretflow').n === 1 && D('other').x > 0 && D('acme').x < 0 && D('acme').x === Math.min(...Object.values(dir).map((d) => d.x)) && D('docs').y > 0 && D('fretflow').y < 0,
+      '放射 · 4 个项目：最大的（其他 19）在右半边、第二大的（Acme 5）在最左边，其余两个（Docs 4、FretFlow 1）一个在下半边一个在上半边', JSON.stringify(dir));
+    const ac = (G.order || []).filter((n) => proj(n) === 'acme').map((n) => G.nodes[n] && Math.round((G.nodes[n].r.t + G.nodes[n].r.b) / 2));
+    ok(ac.length === 5 && ac.every((y, i) => i === 0 || y > ac[i - 1]), '放射 · 4 个项目：左边的 Acme 倒着排：排第一（开得最早）的在最上面，往下一个比一个低', JSON.stringify(ac));
+    const g4 = geo(G);
+    ok(allIn(G) && g4.n === 29 && g4.bad.length === 0 && g4.hub.length === 0 && g4.side.length === 0, '放射 · 4 个项目：整张图在窗口里，方块不重叠、不压圆心，左边的往左伸', JSON.stringify({ g4, out: outOf(G) }));
+    ok(!!L4 && L4.n === 29 && L4.li === 29 && L4.endNot === 0 && L4.startNot === 0 && L4.toYou >= 1 && L4.cross.length === 0,
+      '放射 · 4 个项目：去总管的线要是先碰到「你」就停在「你」的边上（' + (L4 && L4.toYou) + ' 条），去总管、去「你」的线没有一条从「你」或总管的方块底下穿过去；29 条线两头都在方块边上', JSON.stringify(L4));
+    ok(!!L4 && L4.n === 29 && L4.crossKid.length === 0, '放射 · 4 个项目：上级到下级的线也不从「你」和总管的方块底下穿过（' + (L4 && L4.q) + ' 条弧）', JSON.stringify(L4 && { q: L4.q, crossKid: L4.crossKid }));
+    // 项目名（11/18 win-eb 加）：没有单独一个负责人的扇区（Acme、Docs、FretFlow）项目名写在圈 1 上；之前一律居中，左边的「Acme App 5」有半截压着「你」
+    const labHit = G.labs.filter((l) => l.r && ((G.you && overlap(l.r, G.you)) || (G.chief && overlap(l.r, G.chief)) || E.some(([, x]) => overlap(l.r, x.r)))).map((l) => l.text);
+    ok(G.labs.length === 4 && labHit.length === 0, '放射 · 4 个项目：4 个项目名都不压着「你」、总管和任何方块（左右两侧的往外伸）', JSON.stringify({ labHit, labs: G.labs, you: G.you, chief: G.chief }));
+    await pg.screenshot({ path: path.join(OUT, 'orgmap-4proj-zh-dark.png') });
+    ok(c4.errs.length === 0, '放射 · 4 个项目：页面没有报错', c4.errs.join(' | ')); await c4.ctx.close();
+  }
+  {   // 没有总管、没有负责人（刚装的总控台、开源用户默认就是这样；11/18 win-eb 加）：在浏览器里把 org 清成每个窗口都没有上级、都是普通窗口。
+      // 圈 1 上一个方块都没有，三个项目名都写在圈 1 上：左右两侧的往外伸，圈 1 留出项目名的宽度，项目名既不压「你」也碰不到圈 2 的方块
+    const route0 = async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }
+      if (j.org) { j.org.chief = null; j.org.gen = null; for (const x of Object.values(j.org.nodes || {})) Object.assign(x, { role: 'member', boss: null, via: null, n: 0, last: 0, handed: false }); }
+      await route.fulfill({ response: r, json: j }); };
+    const c0 = await ctxOf({ shape: 'map', route: route0 }), G0 = await mapOf(c0.page), E0 = Object.entries(G0.nodes || {}), g0 = geo(G0);
+    const hit0 = G0.labs.filter((l) => l.r && ((G0.you && overlap(l.r, G0.you)) || E0.some(([, x]) => overlap(l.r, x.r)))).map((l) => l.text);
+    ok(G0.map && !G0.chief && E0.length === 30 && G0.labs.length >= 2 && hit0.length === 0 && g0.bad.length === 0 && g0.hub.length === 0 && allIn(G0),
+      '放射 · 没有总管和负责人（每个窗口都你直接带）：30 个方块不重叠、不压圆心、在窗口里，' + G0.labs.length + ' 个项目名都不压着「你」和任何方块', JSON.stringify({ hit0, labs: G0.labs, g0, out: outOf(G0) }));
+    await c0.page.screenshot({ path: path.join(OUT, 'orgmap-nolead-zh-dark.png') });
+    ok(c0.errs.length === 0, '放射 · 没有总管和负责人：页面没有报错', c0.errs.join(' | ')); await c0.ctx.close();
+  }
+  {   // 分支负责人之间的先后和层级图一样（11/17 win-49 的 M.hp；11/18 win-eb 叠到 car4 上时给放射接上）：「X负责人」排在「…分支」前面，不跟着状态挪。
+      // 和「架构」一段「分支先后」那块同样改 /api/state（标题是编的，不抄本机真实会话标题：公开包的个人信息闸会拦）：hint「示例导入线分支」（在跑）、unfin「示例音轨分支交接」（要你动手，下面带着 intr）、links「FretFlow 示例运营负责人」（歇着）。
+      // 夹具里三个开的先后是 unfin < hint < links，只按「分支在前 + 开的先后」排（叠 car4 之前那版）links 落到第三。期望照标题另判，不调界面的 hp
+    const hpRoute = async (route) => { let r, j; try { r = await fullState(route); j = unplace(await r.json()); } catch { return route.abort().catch(() => {}); }
+      const N = j.org && j.org.nodes;
+      for (const [n, t] of [['hint', '示例导入线分支'], ['unfin', '示例音轨分支交接'], ['links', 'FretFlow 示例运营负责人']]) {
+        if (N && N[FX.sids[n]]) Object.assign(N[FX.sids[n]], { role: 'head', boss: FX.sids.peerDone, via: 'seat', n: 0, last: 0, handed: false });
+        const x = (j.sessions || []).find((y) => y.sid === FX.sids[n]); if (x) x.title = t; }
+      await route.fulfill({ response: r, json: j }); };
+    const { ctx: hc, page: hpg, errs: hee } = await ctxOf({ shape: 'map', route: hpRoute });
+    const kidsOf = async () => { const g = await mapOf(hpg), st = await ev(hpg, () => api('/api/state?peek=1')), N = (st && st.org && st.org.nodes) || {};
+      return { map: g.map, kids: g.order.filter((n) => { const x = N[FX.sids[n] || n]; return x && x.boss === FX.sids.peerDone; }) }; };
+    const h1 = await kidsOf(); await sleep(2600); const h2 = await kidsOf();
+    ok(h1.map && h1.kids[0] === 'links' && h1.kids.indexOf('unfin') > 0 && h1.kids.indexOf('unfin') < 3 && h1.kids.indexOf('hint') > 0 && h1.kids.indexOf('hint') < 3 && JSON.stringify(h1.kids) === JSON.stringify(h2.kids),
+      '放射：几个分支负责人里，「FretFlow 示例运营负责人」（X负责人，开得最晚）排在两个「…分支」前面，三个分支都在普通窗口前面，和层级图同一个先后，隔两次轮询不变', JSON.stringify({ h1, k2: h2.kids }));
+    ok(hee.length === 0, '放射：分支先后这一块页面没有报错', hee.join(' | ')); await hc.close();
+  }
+
+  // ── 三、英文浅色：开关、按钮、图上的字都是英文，依据是英文，没报错
+  {
+    const c5 = await ctxOf({ lang: 'en', scheme: 'light', shape: 'map' }), pg = c5.page; const G = await mapOf(pg);
+    const zh = await ev(pg, () => { const bad = []; for (const el of document.querySelectorAll('#oshape, #oshape button, #org .omctl, #org .omctl button, #org .oyou, #org .orole, #org .obr, #org .ow, #org .o3, #org .omlabs > .ghead'))
+      for (const s of [el.textContent, el.getAttribute('aria-label') || '', el.getAttribute('title') || '']) if (/[一-鿿]/.test(s)) bad.push(s.trim().slice(0, 40)); return bad; });
+    ok(G.map && JSON.stringify(G.shape.btns.map((b) => b[1])) === '["Tree","Radial"]' && G.shape.label === 'Org chart layout' && !!G.ctl && JSON.stringify(G.ctl.btns.map((b) => [b.k, b.text])) === '[["out","−"],["fit","Fit"],["in","+"]]'
+      && G.ctl.btns[0].label === 'Zoom out' && G.ctl.btns[2].label === 'Zoom in' && G.ctl.btns[1].title === 'Fit the whole chart in the window (or double-click empty space)' && G.ctl.label === 'Canvas',
+      'en 放射：开关写 Tree / Radial（读屏名 Org chart layout），右下角 − / Fit / +（Zoom out、Zoom in、Fit 的提示、Canvas）', JSON.stringify({ shape: G.shape, ctl: G.ctl && G.ctl.btns, label: G.ctl && G.ctl.label }));
+    ok(Array.isArray(zh) && zh.length === 0 && G.labs.some((l) => /^Other\s*\d+$/.test(l.text)) && G.labs.some((l) => /^FretFlow\s*\d+$/.test(l.text)), 'en 放射：开关、按钮、你那一行、职级、带几个、状态词、第三行、项目名里没有漏翻的中文', JSON.stringify({ zh, labs: G.labs.map((l) => l.text) }));
+    const h = G.nodes.hint; if (h) await pg.mouse.move(h.r.l + h.r.w / 2, h.r.t + h.r.h / 2); await sleep(400); const Gh = await mapOf(pg);
+    ok(!!Gh.tip && Gh.tip.text === 'Opened by win-p2' && !!Gh.nodes.hint && Gh.nodes.hint.hot1, 'en 放射：悬停 hint 原地展开，依据是英文（Opened by win-p2）', JSON.stringify(Gh.tip));
+    await pg.screenshot({ path: path.join(OUT, 'orgmap-hover-en-light.png') });
+    if (h) await pg.mouse.move(5, 300); await sleep(300); await pg.screenshot({ path: path.join(OUT, 'orgmap-en-light.png') });
+    ok(allIn(G) && !!G.V && !G.V.user, 'en 放射（浅色）：整张图放回窗口里', JSON.stringify({ V: G.V, out: outOf(G) }));
+    ok(c5.errs.length === 0, 'en 放射（浅色）：页面没有报错', c5.errs.join(' | ')); await c5.ctx.close();
+  }
+}
+
 try {
   if (process.env.UI_ONLY === 'snooze') { await snoozeCheck(); console.log('\n（UI_ONLY=snooze：只跑了「先放着带时间」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'delta') { await deltaCheck(); console.log('\n（UI_ONLY=delta：只跑了「只回变过的」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'orgmap') { await orgMapCheck(); console.log('\n（UI_ONLY=orgmap：只跑了「架构 · 放射」这一段，不是整套）'); throw ONLY_DONE; }
   let ctx, page, errs;                                   // 架构那一段也用这三个；UI_ONLY=org 时它前面的整段不跑，所以提到这里声明
   if (process.env.UI_ONLY !== 'org') {
   if (process.env.UI_ONLY === 'dock') { await dockCheck(); console.log('\n（UI_ONLY=dock：只跑了「弹层里回话」这一段，不是整套）'); throw ONLY_DONE; }
@@ -1604,6 +2027,7 @@ try {
     // 入口：点「架构」切过去。不用 open()：它的 initScript 每次载入都把 ccb_mode 写回去，测不了「重开还在」
     ctx = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: 'dark', deviceScaleFactor: 2 }); page = await ctx.newPage(); errs = [];
     page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await page.route('**/api/state*', unplaceRoute);      // 这一块测「你直接带」的画法（见 unplace），按项目挂上的在后面单独一块
     await page.goto(FX.url + '&lang=zh'); await page.waitForSelector('.card'); await sleep(2600);
     await tryEval(page, () => { const b = document.querySelector('#modes [data-mode="wall"]'); if (b) b.click(); }); await sleep(1200);
     const wallFont = await tryEval(page, () => { const h = document.querySelector('.gcol .ghead'); return h ? getComputedStyle(h).fontFamily : null; });
@@ -1736,7 +2160,7 @@ try {
       const c7 = await browser.newContext({ viewport: { width: 1520, height: 1000 }, colorScheme: 'light' });
       await c7.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('org')); } catch (e) {} });
       const pg = await c7.newPage(); const e7 = []; pg.on('pageerror', (e) => e7.push(String(e)));
-      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json();
+      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = unplace(await r.json());
         if (kind === 'empty') j.org = { chief: null, gen: null, nodes: {} }; else if (kind === 'missing') delete j.org; else if (j.org && j.org.nodes) delete j.org.nodes[FX.sids.hint];
         await route.fulfill({ response: r, json: j }); });
       await pg.goto(FX.url + '&lang=zh'); await pg.waitForSelector('#org .onode .ot', { timeout: 8000 }).catch(() => {}); await sleep(2800);
@@ -1753,7 +2177,7 @@ try {
       const c8 = await browser.newContext({ viewport: { width: 1520, height: 1000 }, colorScheme: 'dark' });
       await c8.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('org')); } catch (e) {} });
       const pg = await c8.newPage(); const e8 = []; pg.on('pageerror', (e) => e8.push(String(e))); pg.on('console', (m) => { if (m.type() === 'error') e8.push(m.text()); });
-      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); const N = j.org && j.org.nodes;
+      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = unplace(await r.json()); const N = j.org && j.org.nodes;
         if (N && N[FX.sids.done]) Object.assign(N[FX.sids.done], { via: 'report', handed: false, n: 2, last: Date.now() - 5 * 60e3 });
         if (N && N[FX.sids.unfin]) N[FX.sids.unfin].from = [];
         if (N && N[FX.sids.links]) Object.assign(N[FX.sids.links], { boss: FX.sids.projC, via: 'msg', n: 3, last: Date.now() - 10 * 60e3, from: [[FX.sids.projC, 3, Date.now() - 10 * 60e3]] });
@@ -1785,7 +2209,7 @@ try {
       const c9 = await browser.newContext({ viewport: { width: 1520, height: 1000 }, colorScheme: scheme });
       await c9.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('org')); } catch (e) {} });
       const pg = await c9.newPage(); const e9 = []; pg.on('pageerror', (e) => e9.push(String(e))); pg.on('console', (m) => { if (m.type() === 'error') e9.push(m.text()); });
-      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); const N = j.org && j.org.nodes;
+      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = unplace(await r.json()); const N = j.org && j.org.nodes;
         if (N && N[FX.sids.links]) Object.assign(N[FX.sids.links], { role: 'head', boss: FX.sids.peerDone, via: 'seat', n: 0, last: 0, handed: false });
         if (N && N[FX.sids.limit]) Object.assign(N[FX.sids.limit], { role: 'head', boss: FX.sids.projC, via: 'seat', n: 0, last: 0, handed: false });
         // 真实的分支负责人都开在总控台的 tmux 里（线上的分支窗口都是 channel: tmux），回话框才能打字；夹具里的 links 没有通道，这里补上
@@ -1812,8 +2236,60 @@ try {
       ok(e9.length === 0, lang + '/' + scheme + ' 架构（分支负责人）：页面没有报错', e9.join(' | ')); await c9.close();
     }
   }
+  {   // 分支负责人之间的先后（11/17 win-49）：「X负责人」排在「…分支」前面，不跟着状态挪。夹具里三个都改成分支、挂在 peerDone 下面：
+      // hint「字体与排版分支」（在跑）、unfin「录音与混音分支交接」（要你动手）、links「FretFlow 推广负责人」（歇着）。按状态排 links 会落到第三
+    const c = await browser.newContext({ viewport: { width: 1520, height: 1000 }, colorScheme: 'dark' });
+    await c.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('org')); } catch (e) {} });
+    const pg = await c.newPage(); const ee = []; pg.on('pageerror', (e) => ee.push(String(e)));
+    await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = unplace(await r.json()); const N = j.org && j.org.nodes;
+      for (const [n, t] of [['hint', '字体与排版分支'], ['unfin', '录音与混音分支交接'], ['links', 'FretFlow 推广负责人']]) {
+        if (N && N[FX.sids[n]]) Object.assign(N[FX.sids[n]], { role: 'head', boss: FX.sids.peerDone, via: 'seat', n: 0, last: 0, handed: false });
+        const x = (j.sessions || []).find((y) => y.sid === FX.sids[n]); if (x) x.title = t;
+      }
+      await route.fulfill({ response: r, json: j }); });
+    await pg.goto(FX.url + '&lang=zh'); await pg.waitForSelector('#org .onode .ot', { timeout: 8000 }).catch(() => {}); await sleep(2800);
+    const g1 = await orgOf(pg); await sleep(2600); const g2 = await orgOf(pg);
+    const k1 = ((g1.nodes || {}).peerDone || { kids: [] }).kids, k2 = ((g2.nodes || {}).peerDone || { kids: [] }).kids;
+    ok(k1[0] === 'links' && k1.indexOf('unfin') > 0 && k1.indexOf('hint') > 0 && k1.indexOf('unfin') < 3 && k1.indexOf('hint') < 3 && JSON.stringify(k1) === JSON.stringify(k2),
+      '架构：几个分支负责人里，「FretFlow 推广负责人」（X负责人，歇着）排在「…分支」（在跑的、要你动手的）前面，三个分支都在普通窗口前面，隔两次轮询顺序不变（11/17 win-49）', JSON.stringify({ k1, k2 }));
+    ok(ee.length === 0, '架构：分支先后这一块页面没有报错', ee.join(' | ')); await c.close();
+  }
+  {   // 按项目挂上（11/17 作者：「如果我自己新建一个任务……不能说是我直接带的，要归类到它在这个架构里面的位置」）。用服务的真实输出，不改 /api/state：
+      // 夹具里「其他」列的负责人是 peerDone、FretFlow 列没有负责人，总管 projC 在总控台列；原来 23 个「你直接带」现在其他列的挂到 peerDone 下面、projF 进 FretFlow 列的「总管带」。
+      // 期望值从 /api/state 原始数据另数，不读界面自己的模型
+    for (const lang of ['zh', 'en']) {
+      ({ ctx, page, errs } = await open({ mode: 'org', lang }));
+      const g = await orgOf(page);
+      const j = await tryEval(page, () => api('/api/state?peek=1')), N = (j.org && j.org.nodes) || {}, ch = j.org && j.org.chief, name = Object.fromEntries(Object.entries(FX.sids).map(([k, v]) => [v, k]));
+      const placed = Object.entries(N).filter(([, x]) => x.via === 'dept'), direct = Object.values(N).filter((x) => !x.boss).length, led = Object.values(N).filter((x) => x.boss && x.via !== 'dept').length;
+      const toLead = placed.filter(([, x]) => x.boss === FX.sids.peerDone).map(([k]) => name[k] || k), toChief = placed.filter(([, x]) => x.boss === ch).map(([k]) => name[k] || k);
+      const pd = g.nodes.peerDone || { kids: [] }, pf = g.nodes.projF || {}, lk = g.nodes.links || {};
+      const youLabs = (g.cols || []).flatMap((c) => c.labs.filter((l) => /^(你直接带|Directly under you) · \d+$/.test(l)));
+      if (lang === 'zh') {
+        ok(placed.length === 22 && direct === 1 && led === 7 && toLead.length === 21 && JSON.stringify(toChief) === '["projF"]' && youLabs.length === 0 && (N[FX.sids.run] || {}).via === 'contact',
+          '架构 · 按项目挂上：原来没人管的 23 个都挂上了（run 收过负责人 1 条，挂到 peerDone 走 via contact、算「有窗口在带」；其余 22 个按项目：其他列 21 个到负责人 peerDone、FretFlow 的 projF 到总管），哪一列都不再有「你直接带」', JSON.stringify({ placed: placed.length, direct, led, toLead: toLead.length, toChief, youLabs }));
+        const bk = await bucketsOf(page), raw = await rawOrg(page), wantKids = sortWant(pd.kids, bk, raw), nUnder = Object.values(N).filter((x) => x.boss === FX.sids.peerDone).length;
+        ok(pd.kids.length === nUnder && nUnder === 26 && pd.br === '带 26 个' && toLead.every((n) => (g.nodes[n] || {}).parent === 'peerDone') && JSON.stringify(pd.kids) === JSON.stringify(wantKids) && pd.kids[pd.kids.length - 1] === 'askQ',
+          '架构 · 按项目挂上：它们画在负责人 peerDone 的树里（带 26 个），和原来的下级一起按状态排、前任 askQ 仍在最后', JSON.stringify({ br: pd.br, n: pd.kids.length, kids: pd.kids, wantKids }));
+        const fc = (g.cols || []).find((c) => c.key === 'fretflow') || { kids: {}, labs: [] };
+        ok(pf.grp === 'chief' && JSON.stringify(fc.kids.chief) === '["projF"]' && fc.labs.includes('总管带 · 1'), '架构 · 按项目挂上：没有负责人的 FretFlow 列，projF 进「总管带 · 1」', JSON.stringify({ grp: pf.grp, labs: fc.labs }));
+        ok(g.youLine2 === direct + ' 个你直接带 · ' + led + ' 个有窗口在带 · ' + placed.length + ' 个按项目挂上', '架构 · 按项目挂上：「你」第二行分三个数：你直接带（总管）· 有窗口在带 · 按项目挂上，加起来是窗口数', JSON.stringify({ l2: g.youLine2, direct, led, placed: placed.length }));
+      }
+      const tips = {}; for (const n of ['links', 'projF', 'run']) { const h = await hoverTip(page, FX.sids[n]); tips[n] = h && h.tip; }
+      const hl = await hoverTip(page, FX.sids.links), hot = hl && Object.entries(hl.nodes).filter(([, x]) => x.hot).map(([k]) => k).sort().join();
+      await page.mouse.move(5, 300); await sleep(200);
+      const want = lang === 'zh' ? ['没有窗口在管它，按项目挂在 win-p2 下面', '没有窗口在管它，按项目挂在总管下面'] : ['No window manages it; placed under win-p2 by project', 'No window manages it; placed under the chief by project'];
+      ok(tips.links === want[0] && tips.projF === want[1], lang + ' 架构 · 按项目挂上：悬停依据照实写「没有窗口在管它，按项目挂在 X 下面」（挂到总管的写总管）', JSON.stringify(tips));
+      const wantRun = lang === 'zh' ? /^win-p2 给它发过 1 条消息（最近一条 (?:.+前|刚刚)），挂在它下面$/ : /^win-p2 sent it 1 message \(the latest (?:.+ ago|just now)\), so it sits under win-p2$/;
+      ok(wantRun.test(tips.run || ''), lang + ' 架构 · 负责人发过消息的（via contact，11/17 win-49）：悬停写「win-p2 给它发过 1 条消息（最近一条 …），挂在它下面」，条数照服务给的 n', JSON.stringify(tips.run));
+      ok(lk.parent === 'peerDone' && hot === 'links,peerDone,projC' && hl.youHot && hl.trunkHot.every(Boolean), lang + ' 架构 · 按项目挂上：悬停 links，它、负责人、总管和「你」这一串加重（经过总管那条线，不再是「你直接带」）', JSON.stringify({ parent: lk.parent, hot }));
+      if (lang === 'en') ok(g.youLine2 === direct + ' directly under you · ' + led + ' led by a window · ' + placed.length + ' placed by project', 'en 架构 · 按项目挂上：「你」第二行是英文', g.youLine2);
+      await page.screenshot({ path: path.join(OUT, 'org-placed-' + lang + '.png') });
+      ok(errs.length === 0, lang + ' 架构 · 按项目挂上：页面没有报错', errs.join(' | ')); await ctx.close();
+    }
+  }
   {   // 英文界面：新加的字都有英文
-    ({ ctx, page, errs } = await open({ mode: 'org', lang: 'en' })); const g = await orgOf(page);
+    ({ ctx, page, errs } = await open({ mode: 'org', lang: 'en', unplaced: true })); const g = await orgOf(page);
     const zh = await tryEval(page, () => { const bad = []; for (const el of document.querySelectorAll('#modes button, #org .oyou, #org .orole, #org .obr, #org .ow, #org .o3, #org .olab, #org .ghead')) if (/[一-鿿]/.test(el.textContent)) bad.push(el.textContent.trim().slice(0, 40)); return bad; });
     const nd = g.nodes || {}, pd = nd.peerDone || {};
     ok(Array.isArray(zh) && zh.length === 0 && g.nodes && Object.keys(g.nodes).length === 30, 'en 架构：视图按钮、你那一行、职级、带几个、状态词、第三行、组名、列头里没有漏翻的中文', JSON.stringify(zh));
@@ -1831,7 +2307,7 @@ try {
     ok(errs.length === 0, 'en 架构：页面没有报错', errs.join(' | ')); await ctx.close();
   }
   {   // 窄窗口（和墙同一个断点 700 px）：各列上下叠成一列，页面不横向溢出
-    ({ ctx, page, errs } = await open({ mode: 'org', w: 420, h: 900 })); const g = await orgOf(page);
+    ({ ctx, page, errs } = await open({ mode: 'org', w: 420, h: 900, unplaced: true })); const g = await orgOf(page);
     const bar = await tryEval(page, () => { const b = document.querySelector('header.bar'), nb = document.querySelector('#newBtn'); return { over: b.scrollWidth > b.clientWidth, newIn: nb.getBoundingClientRect().right <= innerWidth }; });
     ok(g.cols && g.cols.length === 2 && g.cols[1].top >= g.cols[0].bottom && Math.abs(g.cols[1].left - g.cols[0].left) <= 1 && g.sw <= 420 && g.mainSW <= 0 && Object.keys(g.nodes).length === 30, '架构 420 px：各列上下叠成一列往下排，页面不横向溢出', JSON.stringify({ cols: g.cols && g.cols.map((c) => [c.key, c.top, c.bottom, c.left]), sw: g.sw, mainSW: g.mainSW }));
     ok(!bar.over && bar.newIn, '架构 420 px：顶栏放得下（多了「架构」按钮以后「新任务」还在视口里）', JSON.stringify(bar));
@@ -1842,6 +2318,7 @@ try {
   }
   // ── 架构 · 完 ──
   if (process.env.UI_ONLY === 'org') { console.log('\n（UI_ONLY=org：只跑了「架构」这一段，不是整套）'); throw ONLY_DONE; }
+  await orgMapCheck();      // 架构 · 放射（11/17 win-e7）：同一份 org 换成你在圆心的摆法，见上面 orgMapCheck()
 
   // ── 一起退出 · 横幅（P0-0，win-bf）：10 秒内 ≥ 3 个窗口一起退出时墙顶一条横幅，「全部接回」交给服务端排队。
   //    在浏览器里拦下 /api/state 换上各种状态的 crash（服务端的状态机在 state.test.mjs [5b] 测），拦下 POST /api/crash 记下发了什么 ──

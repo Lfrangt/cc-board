@@ -140,15 +140,26 @@ const LSOF = process.env.CCBOARD_LSOF || '/usr/sbin/lsof', PS = process.env.CCBO
 // ───────────── config.json：项目表、自动点信任、Codex ─────────────
 // 数据目录里一个文件，启动时读一次（./build.sh update 会重启服务）。没有或读不了就用默认值，记一行日志，不崩。
 // 键：projects [{key, name, dir, word}]、neutral、roots（交给 projects.mjs 的 useRules）；autoTrust、codex、autoTidy、tidyJudge（true / false，默认都是 false）；accounts [{id, name}]（accounts.mjs）；
-//     org { chief, chiefWords, leadWords, headWords }（架构视图，见 parseOrg）
+//     org { chief, seats, chiefWords, leadWords, headWords }（架构视图，见 parseOrg）
 const CONFIG_FILE = path.join(DATA, 'config.json');
 // 架构视图：chief = 点名总管的那个 JSON 文件（~ 或 / 开头；读它的 session_id 和 generation）；chiefWords / leadWords / headWords = 名字或标题里带什么字算总管 / 负责人 / 分支负责人（正则原文，不分大小写）
 // headWords（11/17）：「X负责人」，X 是一个汉字、不是「总」（增长负责人、设计负责人），或英文 head of；去掉它以后还带 leadWords 的照旧是负责人，见 org.mjs
-const ORG_DEF = { chief: '', chiefWords: '总管|chief of staff', leadWords: '总指挥|负责人|(?:^|[^a-z])lead(?:$|[^a-z])', headWords: '(?<=[\\u4e00-\\u9fff])(?<!总)负责人|head of' };
+//   11/17 22:xx（khalil-49）加第三种：标题以「<至少两个汉字的话题>分支」结尾（后面可以跟 交接 / 接手 / 开工 / 接班），话题不是 git 用语（合并、清理、切到、主…分支）。
+//   起因：当晚总指挥开出去的几条分支，标题只写到「…分支」、没有「负责人」三个字，一条也没被认出来，有一条还被画到了它自己手下的窗口下面。
+// seats（11/17 khalil-49）：{ 项目 key: 文件路径 }，文件点名这个项目的现任负责人（见 seatsNow）。写错的那一条丢掉、记进 seatsBad，不让整份 config 不用：架构图出错不该连累开窗口。
+const BRANCH_TAIL = '(?<=[\\u4e00-\\u9fff]{2})(?<!合并|合进|合入|并入|清理|删除|删掉|切换|切到|新建|新开|拉取|拉出|推送|远程|本地|临时|功能|特性|发布|开发|修复|热修|上线|回滚|[主旧切删拉推建合])分支(?=\\s*(?:交接|接手|开工|接班)?\\s*$)';
+const ORG_DEF = { chief: '', seats: {}, seatsBad: 0, chiefWords: '总管|chief of staff', leadWords: '总指挥|负责人|(?:^|[^a-z])lead(?:$|[^a-z])', headWords: '(?<=[\\u4e00-\\u9fff])(?<!总)负责人|head of|' + BRANCH_TAIL };
 function parseOrg(o) {                   // 写错了就抛出去，和别的键一样：整份 config 不用，记一行日志
   if (o === undefined) return { ...ORG_DEF };
   if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('org 要是一个对象');
-  const out = { ...ORG_DEF };
+  const out = { ...ORG_DEF, seats: {}, seatsBad: 0 };
+  if ('seats' in o) {                    // 宽松：整段不是对象、某一条 key / 路径写错，都只丢掉那些，照旧按字样认负责人
+    const v = o.seats;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) out.seatsBad = 1;
+    else for (const [k, f] of Object.entries(v)) {
+      if (/^[a-z][a-z0-9_.:-]{0,63}$/i.test(k) && typeof f === 'string' && /^(?:~\/|\/)./.test(f)) out.seats[k] = f; else out.seatsBad++;
+    }
+  }
   if ('chief' in o) {
     if (typeof o.chief !== 'string' || (o.chief && !/^(?:~\/|\/)./.test(o.chief))) throw new Error('org.chief 要是 ~/ 或 / 开头的文件路径');
     out.chief = o.chief;
@@ -176,7 +187,7 @@ const CONFIG = (() => {
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，org.chief=${org.chief || '无'}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
     return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto };
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
@@ -1779,8 +1790,15 @@ function watchTidy() {
   const now = Date.now();
   if (now - uiFocusAt < 6000) return;                    // 他正看着总控台：卡片不在他眼前消失，等他离开再收
   const due = [];
+  // 坐在岗位上的窗口（总管 / 负责人 / 分支负责人，架构视图 org.mjs 认的）不自动收，也不去问小模型（11/17 khalil-49）。
+  // 起因：自动收拾曾经把一个分支负责人收掉了（它最后一条交付是好几个小时没动静的【进展】，小模型判成做完了），
+  // 图上那个岗位就这么空了。长期带人的窗口交付多半是回别的窗口的【进展】，按交付判不出它还要不要在。
+  let held = null;
+  const seated = (sid) => { if (!held) { const N = orgSafe().nodes || {}; held = new Map(Object.entries(N).filter(([, x]) => x && ['chief', 'lead', 'head'].includes(x.role)).map(([k, x]) => [k, x.role])); } return held.get(sid) || null; };
   for (const s of sessions) {
     const d = tidyDue(s, now); if (!d) continue;
+    const role = seated(s.sid);
+    if (role) { const k = 'seat:' + s.sid + '@' + s.resultAt; if (!tidyLogged.has(k)) { tidyLogged.add(k); console.log(`tidy ${new Date().toISOString()} seat ${s.sid.slice(0, 8)} ${d.line} 不收：它是${{ chief: '总管', lead: '负责人', head: '分支负责人' }[role]}`); } continue; }
     if (d.line === 'judge') { if (!judgeBusy) askJudge(s); continue; }                     // 一次只问一个，问完下一轮扫描再看答案
     due.push({ s, d });
   }
@@ -2196,6 +2214,49 @@ function chiefNow() {
   chiefMemo = { at: Date.now(), sid, gen }; return chiefMemo;
 }
 
+// config 里 org.seats 指的文件（11/17 khalil-49）：每个项目一份，点名这个项目的现任负责人，最多每 10 秒读一次，不往里写。
+//   例：一份纯文本，第一行是「窗口名 [短号]」，会话号（UUID）在下面随便哪一行。
+//   认法：JSON 带 session_id 的用它；文本取第一行开头的窗口名（到空格 / [ / （ 为止）和文件里所有的会话号（前 64 KB）。
+// seatSids() 把它认成墙上的会话：会话号在文件里、名字也对得上的那一个（名字可以是登记名，或登记名末尾括号里的短名）；
+//   文件里没写会话号 → 名字对得上的正好一个；没写名字 → 文件里第一个在墙上的会话号；两样都写了却对不上同一个会话 → 认不出。
+//   文件不在、读坏、认不出、点名的不在墙上，都当这个项目没点名：org.mjs 照旧按字样认，整份 config 照常用。认的结果变了记一行日志。
+let seatMemo = { at: 0, map: {} }, seatLog = '';
+// 会话号的样子：8-4-4-4-12。真会话号是十六进制的 UUID；不限十六进制，是因为测试夹具的会话号带字母（unfin000-0000-…），限了会认不出、两样对不上时也退不回去（11/17 state.test 抓到的）
+const UUID_RE = /[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}/gi;
+function seatsNow() {
+  const conf = CONFIG.org.seats || {}, keys = Object.keys(conf); if (!keys.length) return {};
+  if (Date.now() - seatMemo.at < CHIEF_MS) return seatMemo.map;
+  const map = {};
+  for (const k of keys) {
+    let txt; try { txt = fs.readFileSync(conf[k].replace(/^~(?=\/)/, HOME), 'utf8').slice(0, 65536); } catch (e) { map[k] = { err: '读不了文件（' + (e.code || e.message) + '）' }; continue; }
+    let ids = null, name = '';
+    try { const j = JSON.parse(txt); if (j && typeof j === 'object') { if (typeof j.session_id === 'string' && j.session_id) ids = [j.session_id.toLowerCase()]; if (typeof j.window === 'string') name = j.window; } } catch {}
+    if (!ids) ids = [...new Set((txt.match(UUID_RE) || []).map((x) => x.toLowerCase()))];
+    name = (String(name || txt.split('\n')[0] || '').trim().match(/^[^\s\[（(]+/) || [''])[0].slice(0, 80);
+    map[k] = { ids, name };
+  }
+  seatMemo = { at: Date.now(), map }; return map;
+}
+function seatSids(live) {
+  const out = {}, notes = [];
+  const nameIs = (x, n) => { const r = String(x.regName || ''); return !!n && (r === n || r.endsWith('（' + n + '）') || r.endsWith('(' + n + ')')); };
+  for (const [k, p] of Object.entries(seatsNow())) {
+    let hit = null, why = p.err || '';
+    if (!why) {
+      const byId = p.ids.map((id) => live.find((x) => String(x.sid).toLowerCase() === id)).filter(Boolean);
+      if (p.ids.length && p.name) hit = byId.find((x) => nameIs(x, p.name)) || null;
+      else if (p.name) { const c = live.filter((x) => nameIs(x, p.name)); hit = c.length === 1 ? c[0] : null; }
+      else hit = byId[0] || null;
+      if (!hit) why = p.ids.length || p.name ? '点名的窗口不在墙上，或名字和会话号对不上（' + (p.name || '没写名字') + ' / ' + (p.ids[0] ? p.ids[0].slice(0, 8) : '没写会话号') + '）' : '文件里没有窗口名和会话号';
+    }
+    if (hit) out[k] = hit.sid;
+    notes.push(k + ' → ' + (hit ? (hit.regName || '?') + '（' + String(hit.sid).slice(0, 8) + '）' : '认不出：' + why));
+  }
+  const line = notes.join('；');
+  if (line !== seatLog) { seatLog = line; if (line) console.log(`org ${new Date().toISOString()} 点名负责人 ${line}`); }
+  return out;
+}
+
 // 发信人 → 活会话的 sid。先按进程号：活着、pid 相同、而且在那条消息之前就开了（防进程号被别的进程重用）；窗口会改名，所以不拿名字核 pid
 // （khalil-a5 发消息时叫 khalil-a5，后来改名成「总指挥 · Fable（khalil-a5）」）。
 // pid 认不出再按名字：活会话里 regName 包含这个名字、或这个名字包含 regName 的正好一个才算（真实数据里有两个窗口都叫 khalil-0b，重名的不认）。
@@ -2246,7 +2307,7 @@ function orgView() {
   }
   for (const g of ghostItems(ghosts)) list.push(g);
   const ch = chiefNow();
-  const o = buildOrg(list, { now, chief: ch.sid, chiefWords: CONFIG.org.chiefWords, leadWords: CONFIG.org.leadWords, headWords: CONFIG.org.headWords });
+  const o = buildOrg(list, { now, chief: ch.sid, seats: seatSids(sessions), chiefWords: CONFIG.org.chiefWords, leadWords: CONFIG.org.leadWords, headWords: CONFIG.org.headWords });
   const nodes = {};
   for (const [sid, n] of Object.entries(o.nodes)) {
     if (sid.startsWith(GONE)) continue;             // org.mjs 本来就不出 gone 项；这里再挡一道，界面拿到的键都是活会话
