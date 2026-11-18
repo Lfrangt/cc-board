@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
  * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口：网页、PDF、图、音视频、文本，含 Esc 转发脚本）/ 「归档」自己定删还是留；
- *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
+ *        服务端另测英文摘要标签和自动收工（`--ui` 不放）：自动收工只收过线的会话，他正看着时不收，只读预览只记不动。
  *        完全隔离：假的主目录、自己的端口、自己的 tmux 目录，服务因此自认是试验场（不碰 Ghostty、不发系统通知）。收尾只按记下的进程号停。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -110,6 +110,14 @@ mk('atStale', 'idle', [R.human('改一下配色'), R.tool('Edit'), R.result(), R
 // 正文里的本机路径（界面测试核它们变成可点的链接）
 mk('links', 'idle', [R.human('整理资料'), R.final('资料在这里：\n\n- 文件夹 ~/Desktop/总控台_封面新版/\n- `~/Library/Application Support/cc-board`\n- [讲解页](file:///Users/khalil/Desktop/x%20y.html)\n- 网址 https://example.com')]);
 mk('askTag', 'idle', [R.human('出两版首页'), R.tool(), R.result(), R.final('两版都做好了。\n\n做了什么：出了两版首页\n【待跟进】回 A 或 B，图在桌面')]);
+if (!process.argv.includes('--ui')) {
+  mk('engAsk', 'idle', [R.human('Prepare two drafts'), R.final('The drafts are ready.\n\n[Needs you] Pick a draft')]);
+  mk('engReview', 'idle', [R.human('Prepare a report'), R.final('I need your input on the earlier draft.\n\n**[REVIEW]**: The final report is ready')]);
+  mk('engFyi', 'idle', [R.human('Send a progress update'), R.final('I need your input on the earlier draft.\n\n[FYI] The preview built successfully')]);
+  mk('engGuess', 'idle', [R.human('Prepare two drafts'), R.final('Both drafts are ready. I need your approval to continue.')]);
+  mk('engNone', 'idle', [R.human('Send a progress update'), R.final('The preview built successfully. No reply is required.')]);
+  mk('engQuestion', 'idle', [R.human('Prepare two drafts'), R.final('Both drafts are ready. Which option works best?')]);
+}
 
 // ── 假的 claude：记下收到的参数和所在的文件夹，然后睡着。服务的 PATH 里只有它，真的 claude 够不着 ──
 const BIN = path.join(ROOT, 'bin'); const ARGV = path.join(ROOT, 'argv'); fs.mkdirSync(BIN);
@@ -224,6 +232,12 @@ try {
   ok(dg('noneDone').need === 'fyi', 'digest: 写明「不需要你做什么」= 无需处理', JSON.stringify(dg('noneDone')));
   ok(dg('peerAsk').need === 'reply' && /要不要现在提审/.test(dg('peerAsk').ask || ''), 'digest: 别的窗口开的头、但确实要你本人决定 = 待跟进', JSON.stringify(dg('peerAsk')));
   ok(dg('askTag').need === 'reply' && dg('askTag').tag === true && dg('askTag').ask === '回 A 或 B，图在桌面' && !/【待跟进】/.test(by(st, 'askTag').result || '【待跟进】'), 'digest: 它自己写的【待跟进】以它为准，那一行从正文拿掉', JSON.stringify(dg('askTag')) + ' / ' + (by(st, 'askTag') || {}).result);
+  ok(dg('engAsk').tag && dg('engAsk').need === 'reply' && dg('engAsk').ask === 'Pick a draft' && !by(st, 'engAsk').result.includes('[Needs you]'), 'digest: [Needs you] supplies the ask and leaves the displayed text', JSON.stringify(dg('engAsk')));
+  ok(dg('engReview').tag && dg('engReview').need === 'review' && dg('engReview').head === 'The final report is ready', 'digest: bold English [REVIEW] overrides guessed follow-up', JSON.stringify(dg('engReview')));
+  ok(dg('engFyi').tag && dg('engFyi').need === 'fyi' && dg('engFyi').head === 'The preview built successfully', 'digest: [FYI] overrides guessed follow-up', JSON.stringify(dg('engFyi')));
+  ok(!dg('engGuess').tag && dg('engGuess').need === 'reply', 'digest: English request for approval implies follow-up', JSON.stringify(dg('engGuess')));
+  ok(!dg('engNone').tag && dg('engNone').need === 'fyi', 'digest: English no-reply text implies FYI', JSON.stringify(dg('engNone')));
+  ok(!dg('engQuestion').tag && dg('engQuestion').need === 'reply', 'digest: English question about a choice implies follow-up', JSON.stringify(dg('engQuestion')));
   // 正文里的路径点了（/api/open）：看的东西打开，能执行的只在访达里选中；试验场里只写日志、不真打开
   const OD = path.join(FH, 'Desktop', '资料 夹'); fs.mkdirSync(path.join(OD, 'Foo.app'), { recursive: true });
   fs.writeFileSync(path.join(OD, '讲解.html'), '<p>x</p>'); fs.writeFileSync(path.join(OD, 'run.sh'), 'echo hi'); fs.symlinkSync(path.join(OD, 'run.sh'), path.join(OD, 'pic.png'));

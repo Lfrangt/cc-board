@@ -108,7 +108,7 @@ Pills appear after any session replies. If you run several Claude accounts, set 
 
 - **Usage numbers are as fresh as the last session that spoke.** Claude's come from status-line updates, Codex's from its last turn; the hover text says how old they are.
 
-- **Follow-up detection is Chinese-first.** The reliable signal is a last line the agent writes itself: `【待跟进】…` (needs you), `【待审阅】…` (ready to review), `【进展】…` (progress). Without it, cc-board guesses from the text; the guesses are tuned for Chinese and cover only a few English phrasings ("please confirm", "your call"). English status tags are the first thing we want to add.
+- **Follow-up detection without a status tag is heuristic.** For reliable status, have the agent end its reply with `[Needs you] …` (`【待跟进】…`), `[Review] …` (`【待审阅】…`), or `[FYI] …` (`【进展】…`). Without a tag, cc-board looks for wording such as “I need your approval” or “no reply is required.”
 - **Replying into a session you started in a terminal tab works for Ghostty only.** Sessions started from cc-board work without it.
 - **New sessions start in your home directory** with a short note (in Chinese, for now) telling Claude to find or create the right project folder under `~/Projects`.
 - **Apple Silicon only** (`-target arm64-apple-macos13`).
