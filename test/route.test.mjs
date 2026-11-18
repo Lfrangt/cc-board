@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 ../route.mjs（或命令行给的另一份，比如改坏版）。不起服务、不碰 tmux。
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过。带 --mutants 时改跑反向对照：造若干个改坏的 route.mjs，每个都必须让本测试变红
  * [POS]: test/ 的「新窗口档位」测试。测：没声明档位原样放行（界面「默认」不变）；三档各自的模型和强度；显式给的 model / effort 压过档位；
- *        不认识的档位报错（含 __proto__、constructor 这类原型上的名字，和非字符串）；任何档位都不会给出 xhigh / max；Codex 的档位只管强度。
+ *        不认识的档位报错（含 __proto__、constructor 这类原型上的名字，和非字符串）；任何档位都不会给出 max（11/15 20:4x 起 Claude 的 heavy / standard 给 xhigh，护栏从「不给 xhigh / max」收到「不给 max」）；Codex 的档位只管强度。
  *        /api/new 接上它之后的端到端断言在 state.test.mjs 的 [7g]。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -23,8 +23,9 @@ if (process.argv.includes('--mutants')) {
     'no-tier-forces-standard': ["if (tier === undefined || tier === null || tier === '') {", "if (false) {"],
     'light-is-opus':      ["light:    { claude: { model: 'sonnet'", "light:    { claude: { model: 'opus'"],
     'standard-is-fable':  ["standard: { claude: { model: 'opus'", "standard: { claude: { model: 'fable'"],
-    'heavy-is-max':       ["heavy:    { claude: { model: 'fable',  effort: 'high' }", "heavy:    { claude: { model: 'fable',  effort: 'max' }"],
-    'light-is-xhigh':     ["light:    { claude: { model: 'sonnet', effort: 'medium' }", "light:    { claude: { model: 'sonnet', effort: 'xhigh' }"],
+    'heavy-is-max':       ["heavy:    { claude: { model: 'fable',  effort: 'xhigh' }", "heavy:    { claude: { model: 'fable',  effort: 'max' }"],
+    'light-is-xhigh':     ["light:    { claude: { model: 'sonnet', effort: 'high' }", "light:    { claude: { model: 'sonnet', effort: 'xhigh' }"],
+    'standard-drops-back': ["standard: { claude: { model: 'opus',   effort: 'xhigh' }", "standard: { claude: { model: 'opus',   effort: 'high' }"],
     'codex-gets-claude-model': ["const outModel = m || t.model || '';", "const outModel = m || t.model || TIERS[key].claude.model;"],
     'provider-ignored':   ["const pv = provider === 'codex' ? 'codex' : 'claude';", "const pv = 'claude';"],
     'object-tier-accepted': ["const key = text(tier).toLowerCase();", "const key = String(tier).toLowerCase();"],
@@ -57,15 +58,15 @@ same(pick(R.routeNew({ tier: null })), { ok: true, tier: null, model: '', effort
 same(pick(R.routeNew()), { ok: true, tier: null, model: '', effort: '' }, '连参数对象都没给也不崩');
 
 console.log('\n三档（Claude Code）');
-same(pick(R.routeNew({ provider: 'claude', tier: 'heavy' })), { ok: true, tier: 'heavy', model: 'fable', effort: 'high' }, 'heavy → fable + high');
-same(pick(R.routeNew({ provider: 'claude', tier: 'standard' })), { ok: true, tier: 'standard', model: 'opus', effort: 'high' }, 'standard → opus + high');
-same(pick(R.routeNew({ provider: 'claude', tier: 'light' })), { ok: true, tier: 'light', model: 'sonnet', effort: 'medium' }, 'light → sonnet + medium');
-same(pick(R.routeNew({ tier: 'light' })), { ok: true, tier: 'light', model: 'sonnet', effort: 'medium' }, '没写 provider 按 Claude Code 算');
-same(pick(R.routeNew({ provider: 'claude', tier: '  Light ' })), { ok: true, tier: 'light', model: 'sonnet', effort: 'medium' }, '大小写和空白不挑（总指挥写成 Light 也认）');
+same(pick(R.routeNew({ provider: 'claude', tier: 'heavy' })), { ok: true, tier: 'heavy', model: 'fable', effort: 'xhigh' }, 'heavy → fable + xhigh');
+same(pick(R.routeNew({ provider: 'claude', tier: 'standard' })), { ok: true, tier: 'standard', model: 'opus', effort: 'xhigh' }, 'standard → opus + xhigh');
+same(pick(R.routeNew({ provider: 'claude', tier: 'light' })), { ok: true, tier: 'light', model: 'sonnet', effort: 'high' }, 'light → sonnet + high');
+same(pick(R.routeNew({ tier: 'light' })), { ok: true, tier: 'light', model: 'sonnet', effort: 'high' }, '没写 provider 按 Claude Code 算');
+same(pick(R.routeNew({ provider: 'claude', tier: '  Light ' })), { ok: true, tier: 'light', model: 'sonnet', effort: 'high' }, '大小写和空白不挑（总指挥写成 Light 也认）');
 
 console.log('\n显式给的 model / effort 压过档位，没给的那一半才用档位的');
 same(pick(R.routeNew({ tier: 'light', effort: 'xhigh' })), { ok: true, tier: 'light', model: 'sonnet', effort: 'xhigh' }, 'light + 显式强度 xhigh → 模型 sonnet、强度 xhigh');
-same(pick(R.routeNew({ tier: 'light', model: 'opus' })), { ok: true, tier: 'light', model: 'opus', effort: 'medium' }, 'light + 显式模型 opus → 模型 opus、强度 medium');
+same(pick(R.routeNew({ tier: 'light', model: 'opus' })), { ok: true, tier: 'light', model: 'opus', effort: 'high' }, 'light + 显式模型 opus → 模型 opus、强度 high（档位的）');
 same(pick(R.routeNew({ tier: 'heavy', model: 'opus', effort: 'max' })), { ok: true, tier: 'heavy', model: 'opus', effort: 'max' }, '两样都显式：档位只当记录');
 const withExplicit = R.routeNew({ tier: 'light', effort: 'xhigh' });
 ok(/强度按你传的/.test(withExplicit.why) && !/模型按你传的/.test(withExplicit.why), 'why 说清哪一半是你传的', withExplicit.why);
@@ -86,11 +87,12 @@ for (const bad of [0, 1, true, false, {}, [], ['light'], { toString: () => 'ligh
 ok(R.routeNew({ tier: 'x'.repeat(5000) }).error.length < 400, '很长的档位值不会把错误信息撑爆');
 ok(R.routeNew({ tier: 'bogus', model: 'opus', effort: 'low' }).ok === false, '档位不对时就算 model / effort 都给了也报错（不放行半个请求）');
 
-console.log('\n成本护栏：任何档位都不会替你选 xhigh / max');
+console.log('\n成本护栏：任何档位都不会替你选 max；xhigh 只有 Claude 的 heavy / standard 给');
 for (const name of R.TIER_NAMES) for (const pv of ['claude', 'codex']) {
   const r = R.routeNew({ provider: pv, tier: name });
-  ok(r.ok && !['xhigh', 'max'].includes(r.effort), name + ' / ' + pv + ' 的强度是 ' + r.effort + '，不是 xhigh / max');
+  ok(r.ok && r.effort !== 'max', name + ' / ' + pv + ' 的强度是 ' + r.effort + '，不是 max');
 }
+ok(['heavy', 'standard'].every((k) => R.routeNew({ provider: 'claude', tier: k }).effort === 'xhigh') && R.routeNew({ provider: 'claude', tier: 'light' }).effort === 'high' && R.TIER_NAMES.every((k) => R.routeNew({ provider: 'codex', tier: k }).effort !== 'xhigh'), 'xhigh 只给 Claude 的 heavy / standard：light 是 high，Codex 三档都不给 xhigh');
 ok(R.TIER_NAMES.join() === 'heavy,standard,light', '档位恰好三个：heavy / standard / light（再加要有理由）', R.TIER_NAMES.join());
 ok(R.TIERS.heavy.claude.model === 'fable' && ['standard', 'light'].every((k) => R.TIERS[k].claude.model !== 'fable'), '只有 heavy 开 Fable');
 

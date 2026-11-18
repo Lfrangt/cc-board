@@ -20,8 +20,8 @@ cc-board turns each session into a card and shows three things only: what you as
 
 cc-board never runs an agent loop and never replaces your CLI.
 
-- **Every session is a real `claude` process in a real terminal**: a tab you already have open in Ghostty, or a tmux session cc-board starts for you (`tmux -L ccboard`). You can attach to it and drive it yourself at any time.
-- **It reads what Claude Code already writes**: `~/.claude/sessions/*.json` and the transcripts under `~/.claude/projects`, read-only. No SDK, no `claude -p`, no API proxy. Your login, settings, hooks and `CLAUDE.md` stay exactly as they are.
+- **Every session is a real `claude` process in a real terminal**: a tab you already have open in Ghostty, or a tmux session cc-board starts for you (each one on its own tmux server under `~/.cc-board/tmux/`, so a crash takes no other session with it; `tmux -S ~/.cc-board/tmux/<name>.sock attach -t <name>`). You can attach to it and drive it yourself at any time.
+- **It reads what Claude Code already writes**: `~/.claude/sessions/*.json` and the transcripts under `~/.claude/projects`, read-only. No SDK, no API proxy, and your sessions never run through `claude -p`. The only `claude -p` calls come from two optional helpers, both off by default: auto-continue and the tidy-up check (`tidyJudge`), each a single `claude -p --model haiku` with no tools, no MCP servers and none of your settings files. Your login, settings, hooks and `CLAUDE.md` stay exactly as they are.
 - **It types the way you would**: paste, then Enter. It refuses to type into a session that is showing a selection dialog, so it can't answer a permission prompt for you by accident.
 - **Local only**: the server binds to `127.0.0.1`, every endpoint needs a token, and nothing leaves your machine. No telemetry, no outbound requests, no remote assets in the UI.
 - **Delete it and nothing changes** in your Claude Code setup.
@@ -32,8 +32,9 @@ cc-board never runs an agent loop and never replaces your CLI.
 - **Why it stopped**, written on the card: running (with how long), or stopped because the quota ran out, the login expired, the model's safeguards blocked the message, the API errored, you interrupted it, it never finished, or its process exited. A session that is "running" but has been silent for 20 minutes says so. You also get a system notification and a Dock badge when you're not looking.
 - **What it delivered**: a one-line conclusion and the single thing it wants from you. *Needs follow-up* (it wants a decision) is separate from *ready to review* (here is a result) and *no action needed*.
 - **Start and tidy up from the board**: new tasks (⌘N, or the "+ New task" in a project column), image and file attachments, zoom a card (⌘O or double-click), archive (empty sessions are deleted, the rest are kept with a note, undo for 8 seconds).
-- **Previews inside the board**: click a local path in a delivery and web pages, PDFs, images, video, audio, Markdown and plain text open in a near-full-window preview; folders and files a browser cannot show (Word, Keynote, apps) still go to macOS as before, and ⌘-click (or "Open in browser") always does. Pages and media are served read-only from a second local port (main port + 1000), so a page's scripts cannot reach the board's token or `/api`; each preview URL opens only its own folder (a fixed list of web file types, no dot-folders, no symlinks leading out). Esc closes the preview even after you click into a page.
+- **Previews inside the board**: click a local path in a delivery and web pages, PDFs, images, video, audio, Markdown and plain text open in a near-full-window preview. A folder that is mostly images or video opens as a gallery (click one to enlarge, ← → to flip, Esc goes back to the grid), and a delivery that mentions two or more images gets a "Gallery" button at the top of its text, so a batch of screenshots is one click instead of one per file. Other folders and files a browser cannot show (Word, Keynote, apps) still go to macOS as before, and ⌘-click (or "Open in browser" / "Show in Finder") always does. Pages and media are served read-only from a second local port (main port + 1000), so a page's scripts cannot reach the board's token or `/api`; each preview URL opens only its own folder (a fixed list of web file types, no dot-folders, no symlinks leading out). Esc closes the preview even after you click into a page.
 - **Next-step suggestions in the reply box**: for sessions in cc-board's own tmux, the ghost-text suggestion Claude Code shows in its prompt, and the numbered next steps a next-steps plugin draws above it, are read off the terminal screen (read-only) and shown on the card. Press Tab in the empty box to take the suggestion, or click a step (or press 1–3 on the card you are looking at) to drop it into the box as a draft. Nothing is sent until you press Return. Step 1 uses the full suggestion; steps 2 and 3 use their short label, because that is all the screen shows.
+- **Auto-continue** (off by default, `autoContinue` below): when a session in cc-board's own tmux finishes a turn that needs nothing from you (not *needs review*, not *needs follow-up*) and its prompt shows a ghost-text suggestion, cc-board can tell it to carry on with the next step it proposed itself. The suggestion is only used to decide and is never sent: it is the CLI's guess at what you would say, and it can claim things you never did. A keyword gate stops anything that posts, pays, submits for review, signs in, deletes or pushes; those become *needs follow-up*. It also stops shell and built-in slash commands, and any suggestion that speaks for you ("I listened to it", "looks good, ship it"): those are simply not sent, the card stays as it is and says why, because a guess is no reason to change what you see. The rest goes to one `claude -p --model haiku` call that answers go, wait or yours. On go the card counts down 30 seconds with *Send* and *Cancel*; typing in that card also cancels. What gets sent is one fixed sentence that starts with a marker saying you did not type it and tells the session to stop at anything that needs you. It stops after five automatic turns in a row without a word from you, and when that account's 5-hour or weekly usage passes its limit.
 - **Subscription usage in the top bar**: one grey pill per subscription showing its weekly limit, for example `Claude · ben 1%` and `Codex 34%`. A pill turns amber once any of its windows reaches 85%. Hover for each window's usage, when it resets and how old the number is. Codex's numbers come from the rate limits Codex writes into its own session logs (only when the `codex` option is on). Claude Code only reports usage to a status-line command, so a Claude pill stays empty (`—`) until you set that up, see [Usage in the top bar](#usage-in-the-top-bar-optional).
 - English and Chinese UI; it follows the system language, or add `?lang=en` to the URL.
 
@@ -55,11 +56,11 @@ You need macOS 13+ on Apple Silicon, Node 22+, `tmux`, the Xcode Command Line To
 ```sh
 git clone https://github.com/Lfrangt/cc-board.git
 cd cc-board
-./build.sh                       # compiles the small Swift/WKWebView shell, installs ~/Applications/总控台.app
-open ~/Applications/总控台.app
+CCBOARD_APP_NAME=cc-board ./build.sh   # compiles the small Swift/WKWebView shell, installs ~/Applications/cc-board.app
+open ~/Applications/cc-board.app
 ```
 
-The app bundle is still called 总控台 ("main console" in Chinese); an English name is an open question. Node is looked up at `~/.local/node/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. On first launch macOS asks whether the app may control Ghostty. Every rebuild changes the ad-hoc signature, so it asks again.
+Without `CCBOARD_APP_NAME` the bundle is called 总控台 ("main console" in Chinese), which is the author's own build. The app looks for Node 22 or later in this order: a path you write into `~/Library/Application Support/cc-board/node`, then `~/.local/node/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, then Homebrew's `node@NN` kegs, then nvm, fnm, Volta, mise, asdf and nodenv (newest version first), then your login shell's `PATH`. On first launch macOS asks whether the app may control Ghostty. Every rebuild changes the ad-hoc signature, so it asks again.
 
 After you pull changes, `./build.sh update` swaps in the new `ui.html`, `server.mjs`, `projects.mjs`, `suggest.mjs`, `limits.mjs`, `statusline-tap.mjs` and `accounts.mjs` and restarts the service. No recompile, no new permission prompt.
 
@@ -72,7 +73,7 @@ open "http://127.0.0.1:4747/?k=$(cat ~/Library/Application\ Support/cc-board/.to
 
 ## Configuration
 
-One optional file: `config.json` in the data directory (`~/Library/Application Support/cc-board`, or `$CCBOARD_DATA`). It is read once at startup; run `./build.sh update` to restart the service after editing. A missing file, invalid JSON, a wrongly typed key or a bad regex means the whole file is ignored: defaults apply and one line is logged.
+One optional file: `config.json` in the data directory (`~/Library/Application Support/cc-board`, or `$CCBOARD_DATA`). It is read once at startup (only `autoContinue` is re-read every 10 seconds); run `./build.sh update` to restart the service after editing. A missing file, invalid JSON, a wrongly typed key or a bad regex means the whole file is ignored: defaults apply and one line is logged.
 
 | Key | Default | What it does |
 |---|---|---|
@@ -80,6 +81,9 @@ One optional file: `config.json` in the data directory (`~/Library/Application S
 | `neutral` | `"^Projects/shared$"` | Regex for folder roots that don't count as evidence of a project (shared locks, scratch space). |
 | `roots` | `["Projects", "Desktop"]` | Parent folders, relative to your home, whose direct subfolders count as evidence of a project. Longest match wins; list `Projects/shared` next to `Projects` if you want both. |
 | `autoTrust` | `false` | For Claude sessions cc-board itself starts, in whatever folder (including ones an agent opens through `/api/new`), answer Claude Code's "trust this folder" prompt for you, only when the option reads exactly `Yes, I trust this folder`. Any other dialog is left alone. Off means the dialog stays on the card and you choose. |
+| `autoContinue` | `false` | Auto-continue (see above). Re-read every 10 seconds, so removing it or setting it to `false` stops it without a restart. `true` turns it on with the defaults; an object turns it on and changes some of them: `{ "weekMax": 90, "fiveMax": 85, "maxRun": 5, "skip": "<regex>" }` (stop at this weekly / 5-hour usage %, at most this many automatic turns in a row, never for sessions whose title or name matches `skip`). Each check costs one small Haiku call on your default sign-in. |
+| `autoTidy` | `false` | Archive finished sessions for you, the same way the Archive button does. Only idle sessions whose turn finished with a delivery; never one that is running, waiting on a choice, stopped, or *needs follow-up*. A *ready to review* delivery goes 10 minutes after you mark it reviewed and it stays quiet, or after 24 hours if you never mark it; a *no action needed* delivery goes after 24 hours with nobody touching it. Nothing is archived while you are looking at the board. |
+| `tidyJudge` | `false` | With `autoTidy` on: once a *no action needed* delivery has been quiet for 4 hours, one `claude -p --model haiku` call (no tools, no MCP servers, none of your settings files) reads its last delivery. *Done* archives it now, *waiting* keeps the 24-hour rule, and *yours* keeps it and turns the card into *needs follow-up*. If the call fails, nothing changes. |
 | `codex` | `false` | Experimental: also list and start Codex CLI sessions. Everything else in this README is about Claude Code. |
 | `accounts` | `[]` | Extra Claude subscriptions a new task can run on: `{ "id", "name" }`. `id` is letters, digits, `_ . -`, up to 40 characters. Each one needs a long-lived token from `claude setup-token`, stored in your Keychain under the service `ccboard-account-<id>` (see below). Listed accounts appear as an **Account** menu in the new-task dialog; **Default** is whoever Claude Code is signed in as. |
 
@@ -119,7 +123,9 @@ Pills appear after any session replies. If you run several Claude accounts, set 
 ```sh
 npm install                       # only for the UI tests (playwright-core)
 node test/projects.test.mjs       # project-grouping rules, under a second
+node test/app-shell.test.mjs      # the native shell: where it looks for Node, how a release bundle installs its code; about 8 s
 node test/limits.test.mjs         # usage-limit parsing and the status-line tap, under a second
+node test/org.test.mjs            # who-reports-to-whom rules, under a second
 node test/state.test.mjs          # the server, in a throwaway fake $HOME, about 90 s
 node test/mutants.mjs             # deliberately broken servers; each must turn the suite red, about 7 min
 node test/state.test.mjs --ui &   # then:
@@ -136,6 +142,8 @@ suggest.mjs    reads Claude Code's ghost-text suggestion and next-step options o
 limits.mjs     weekly usage per subscription: Codex's session logs, plus the files the status-line tap wrote
 statusline-tap.mjs   the status-line command that saves Claude Code's rate limits for limits.mjs
 accounts.mjs   which Claude subscription a new task runs on (token read from the Keychain)
+org.mjs        who reports to whom (pure function): /api/state's `org` field, built from the messages sessions sent each other and which session opened which
+autopilot.mjs  auto-continue (pure functions): whether an idle session's own ghost-text suggestion may be sent for you, after a keyword gate and a Haiku check
 app/           the native shell (Swift, WKWebView)
 test/          isolated tests
 CLAUDE.md      long-form design notes in Chinese: each rule, why it is that way, and the feedback behind it

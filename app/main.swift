@@ -9,6 +9,11 @@ let home = FileManager.default.homeDirectoryForCurrentUser.path
 let dataDir = home + "/Library/Application Support/cc-board"
 let liveDir = dataDir + "/app"       // 界面和服务的代码放在包外面：改它们不用重新编译，也不用重新授权
 let barHeight: CGFloat = 52          // 和 ui.html 里的 --bar-h 一致，红绿灯在里面垂直居中
+// 名字和语言：名字取包信息（Khalil 本机是「总控台」，公开版是「cc-board」）；系统首选语言是中文就说中文，否则英文（和 ui.html 一致）
+let appName = (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+    ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "cc-board"
+let zh = Locale.preferredLanguages.first?.hasPrefix("zh") ?? false
+func L(_ zhText: String, _ en: String) -> String { zh ? zhText : en }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     var window: NSWindow!
@@ -31,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window = NSWindow(contentRect: NSRect(x: vf.midX - w / 2, y: vf.midY - h / 2, width: w, height: h),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
-        window.title = "总控台"
+        window.title = appName
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
@@ -45,19 +50,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         placeTrafficLights()
-        showMessage("正在启动…")
-        DispatchQueue.global(qos: .userInitiated).async { self.startAndLoad() }
+        showMessage(L("正在启动…", "Starting…"))
+        DispatchQueue.global(qos: .userInitiated).async { self.startAndLoad(launch: true) }
     }
 
     // ── 服务 ──
-    func health() -> String? {          // 返回服务的数据目录；没在跑返回 nil
+    func health() -> String? { healthInfo()?.data }      // 返回服务的数据目录；没在跑返回 nil
+    func healthInfo() -> (data: String, pid: Int32)? {    // 服务自己报的数据目录和进程号（pid 没报是 0）
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
         req.timeoutInterval = 0.8
         let sem = DispatchSemaphore(value: 0)
-        var out: String?
+        var out: (data: String, pid: Int32)?
         URLSession.shared.dataTask(with: req) { data, _, _ in
             if let data = data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], j["app"] as? String == "cc-board" {
-                out = (j["data"] as? String) ?? dataDir
+                out = ((j["data"] as? String) ?? dataDir, (j["pid"] as? NSNumber)?.int32Value ?? 0)
             }
             sem.signal()
         }.resume()
@@ -65,7 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return out
     }
 
-    func startAndLoad() {
+    func startAndLoad(launch: Bool = false) {
+        if launch { prepareReleaseCode() }
         var dir = health()
         if dir == nil {
             let err = spawnServer()
@@ -73,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             for _ in 0..<60 { Thread.sleep(forTimeInterval: 0.25); dir = health(); if dir != nil { break } }
         }
         guard let d = dir, let token = try? String(contentsOfFile: d + "/.token", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
-            DispatchQueue.main.async { self.showMessage("服务没起来。日志在 \(dataDir)/server.log") }
+            DispatchQueue.main.async { self.showMessage(L("服务没起来。日志在 \(dataDir)/server.log", "The server didn't start. The log is in \(dataDir)/server.log")) }
             return
         }
         DispatchQueue.main.async {
@@ -81,11 +88,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
 
+    // 公开的安装包（release/release.sh 打的，Info.plist 里 CCBoardSyncCode = true）：包里带的代码换了版本，就先换进 liveDir 再起服务（启动时的 prepareReleaseCode）。
+    // 这样换新版 dmg 后跑的是新代码，README 里状态栏命令写的 liveDir/statusline-tap.mjs 也一直在。
+    // build.sh 装的（Khalil 本机、一行安装脚本）没有这个键：liveDir 由 build.sh 管，这里不碰，和以前一样。
+    // 只在应用启动那一刻做一次。服务重启、⌘R 都不再做：两个版本同时开着时，每次都换会互相停掉对方的服务，来回打架。
+    //  - 数据目录的 app/ 归 build.sh 管（有 server.mjs、没有 .bundle-version），而且服务正在跑：什么都不动，直接连上。
+    //    作者本机开着总控台时误开了公开包、一行安装脚本的用户开着旧版时打开 dmg 版，都是这种；盖掉它的代码、停掉它的服务都不对。
+    //  - 其余：把包里的代码换进去。真换了、而端口上答话的是同一个数据目录的旧服务（上一版被强退留下的），按它自己报的进程号停掉，
+    //    下面再起新的；不停的话新外壳会一直连着旧代码，直到重启电脑。
+    // build.sh 装的没有 CCBoardSyncCode，第一行就回去了。
+    func prepareReleaseCode() {
+        guard Bundle.main.object(forInfoDictionaryKey: "CCBoardSyncCode") as? Bool == true else { return }
+        var running: (data: String, pid: Int32)?
+        for _ in 0..<3 { running = healthInfo(); if running != nil { break } }   // 没有服务时连接立刻被拒，试三次不费时间；机器卡时多两次机会
+        let fm = FileManager.default
+        let buildManaged = fm.fileExists(atPath: liveDir + "/server.mjs") && !fm.fileExists(atPath: liveDir + "/" + BundledCode.stampName)
+        if running != nil && buildManaged { return }
+        guard syncBundledCode(), let h = running, h.data == dataDir, h.pid > 1 else { return }
+        kill(h.pid, SIGTERM)
+        for _ in 0..<20 { Thread.sleep(forTimeInterval: 0.25); if health() == nil { break } }
+    }
+
+    func syncBundledCode() -> Bool {                     // 换了返回 true
+        guard Bundle.main.object(forInfoDictionaryKey: "CCBoardSyncCode") as? Bool == true, let res = Bundle.main.resourcePath else { return false }
+        let info = Bundle.main.infoDictionary ?? [:]
+        return BundledCode.sync(from: res, to: liveDir, stamp: "\(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))")
+    }
+
     func spawnServer() -> String? {
         let fm = FileManager.default
-        guard let res = [liveDir, Bundle.main.resourcePath ?? ""].first(where: { fm.fileExists(atPath: $0 + "/server.mjs") && fm.fileExists(atPath: $0 + "/ui.html") }) else { return "找不到 server.mjs（跑一下 ccboard update）" }
-        let nodes = [home + "/.local/node/bin/node", "/opt/homebrew/bin/node", "/usr/local/bin/node"]
-        guard let node = nodes.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return "这台机器上没找到 node" }
+        guard let res = [liveDir, Bundle.main.resourcePath ?? ""].first(where: { fm.fileExists(atPath: $0 + "/server.mjs") && fm.fileExists(atPath: $0 + "/ui.html") }) else {
+            return L("找不到 server.mjs（跑一下 ccboard update）", "server.mjs is missing. Reinstall cc-board.")
+        }
+        let node: String
+        switch NodeLookup.find(home: home, dataDir: dataDir) {
+        case .found(let p): node = p
+        case .tooOld(let p, let v):
+            return L("找到的 node 是 \(v)（\(p)），要 Node 22 以上：brew upgrade node",
+                     "cc-board needs Node.js 22 or later, and the one it found is \(v) at \(p). Upgrade it (brew upgrade node) and reopen cc-board.")
+        case .none:
+            return L("这台机器上没找到 Node 22 以上的 node。装一个（brew install node），或把路径写进 \(dataDir)/node",
+                     "cc-board needs Node.js 22 or later and couldn't find it. Install it (brew install node, or from nodejs.org) and reopen cc-board. If it's somewhere unusual, put its path in \(dataDir)/node")
+        }
         try? FileManager.default.createDirectory(atPath: dataDir, withIntermediateDirectories: true)
         let log = dataDir + "/server.log"
         if !FileManager.default.fileExists(atPath: log) { FileManager.default.createFile(atPath: log, contents: nil) }
@@ -101,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let self = self, !self.quitting else { return }
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.6) { self.server = nil; self.startAndLoad() }
         }
-        do { try p.run() } catch { return "服务启动失败：\(error.localizedDescription)" }
+        do { try p.run() } catch { return L("服务启动失败：", "Couldn't start the server: ") + error.localizedDescription }
         server = p
         return nil
     }
@@ -146,8 +190,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if let u = a.request.url { NSWorkspace.shared.open(u) }
         return nil
     }
-    func webView(_ w: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { showMessage("页面没打开：\(error.localizedDescription)") }
-    func webView(_ w: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { showMessage("页面没打开：\(error.localizedDescription)") }
+    func webView(_ w: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { showMessage(L("页面没打开：", "Couldn't open the page: ") + error.localizedDescription) }
+    func webView(_ w: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { showMessage(L("页面没打开：", "Couldn't open the page: ") + error.localizedDescription) }
 
     // ── 红绿灯在 52pt 的顶栏里垂直居中 ──
     func placeTrafficLights() {
@@ -182,16 +226,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         func item(_ t: String, _ a: Selector?, _ k: String = "", _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
             let i = NSMenuItem(title: t, action: a, keyEquivalent: k); i.keyEquivalentModifierMask = mods; return i
         }
-        add("总控台", [item("关于总控台", #selector(NSApplication.orderFrontStandardAboutPanel(_:))), .separator(),
-                     item("隐藏总控台", #selector(NSApplication.hide(_:)), "h"),
-                     item("隐藏其他", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]), .separator(),
-                     item("退出总控台", #selector(NSApplication.terminate(_:)), "q")])
-        add("文件", [item("新会话", #selector(newBlank(_:)), "t"), item("新任务…", #selector(newTask(_:)), "n"), .separator(), item("关闭窗口", #selector(NSWindow.performClose(_:)), "w")])
-        add("编辑", [item("撤销", Selector(("undo:")), "z"), item("重做", Selector(("redo:")), "z", [.command, .shift]), .separator(),
-                    item("剪切", #selector(NSText.cut(_:)), "x"), item("拷贝", #selector(NSText.copy(_:)), "c"),
-                    item("粘贴", #selector(NSText.paste(_:)), "v"), item("全选", #selector(NSText.selectAll(_:)), "a")])
-        add("显示", [item("重新载入", #selector(reloadPage(_:)), "r"), item("进入全屏", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])])
-        add("窗口", [item("最小化", #selector(NSWindow.performMiniaturize(_:)), "m"), item("缩放", #selector(NSWindow.performZoom(_:)))])
+        add(appName, [item(L("关于", "About ") + appName, #selector(NSApplication.orderFrontStandardAboutPanel(_:))), .separator(),
+                     item(L("隐藏", "Hide ") + appName, #selector(NSApplication.hide(_:)), "h"),
+                     item(L("隐藏其他", "Hide Others"), #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]), .separator(),
+                     item(L("退出", "Quit ") + appName, #selector(NSApplication.terminate(_:)), "q")])
+        add(L("文件", "File"), [item(L("新会话", "New Session"), #selector(newBlank(_:)), "t"), item(L("新任务…", "New Task…"), #selector(newTask(_:)), "n"), .separator(),
+                               item(L("关闭窗口", "Close Window"), #selector(NSWindow.performClose(_:)), "w")])
+        add(L("编辑", "Edit"), [item(L("撤销", "Undo"), Selector(("undo:")), "z"), item(L("重做", "Redo"), Selector(("redo:")), "z", [.command, .shift]), .separator(),
+                               item(L("剪切", "Cut"), #selector(NSText.cut(_:)), "x"), item(L("拷贝", "Copy"), #selector(NSText.copy(_:)), "c"),
+                               item(L("粘贴", "Paste"), #selector(NSText.paste(_:)), "v"), item(L("全选", "Select All"), #selector(NSText.selectAll(_:)), "a")])
+        add(L("显示", "View"), [item(L("重新载入", "Reload"), #selector(reloadPage(_:)), "r"),
+                               item(L("进入全屏", "Enter Full Screen"), #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])])
+        add(L("窗口", "Window"), [item(L("最小化", "Minimize"), #selector(NSWindow.performMiniaturize(_:)), "m"), item(L("缩放", "Zoom"), #selector(NSWindow.performZoom(_:)))])
         NSApp.mainMenu = main
     }
 }

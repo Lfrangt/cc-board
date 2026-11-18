@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 node:http / fs / path / crypto；不依赖 server.mjs 的任何状态
- * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), port() }；kindOf(ext)（能预览的类型：page / pdf / image / video / audio / text / markdown）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）
- * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register() 拿一个网址和类型，ui.html 按类型显示：网页、PDF 用 iframe，图和音视频用自己的元素，文本由 register() 直接读出内容。
+ * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), registerMany(files), port() }；kindOf(ext)（能预览的类型：page / pdf / image / video / audio / text / markdown；register 对「多半是图 / 视频的文件夹」另回 gallery）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）
+ * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register() 或 registerMany() 拿网址和类型，ui.html 按类型显示：网页、PDF 用 iframe，图和音视频用自己的元素，文本由 register() 直接读出内容，gallery（文件夹 / 一批图）排成格子墙。
  *        预览页跑在另一个端口（另一个源），所以页面里的脚本读不到总控台的口令、localStorage 和 /api；
  *        网址里的随机编号就是钥匙：一个编号只开一个文件夹，只发白名单里的文件类型，不进点开头的文件夹，不顺着符号链接出去。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
@@ -37,6 +37,13 @@ const MIME = {
   pdf: 'application/pdf',
 };
 const KEEP = 64;                                  // 最多记住 64 个预览；再多就忘掉最早的那个
+// 图集（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」「打开预览的时候，不想切到外面去看」）：
+// 点一个文件夹、或一条交付里提到的好几张图，在总控台里排成一面格子墙。只放图和视频；一个图集最多 GALLERY_MAX 个。
+const GALLERY_MAX = 200;
+// 文件夹要「多半是图 / 视频」才当图集：至少 2 个，且占这个文件夹里文件的 60% 以上。
+// 不然 ~/Projects/某项目/ 里只要躺着一个 logo.png，他点文件夹想进访达，却看到一面只有 logo 的墙。
+const GALLERY_MIN = 2, GALLERY_SHARE = 0.6;
+const isMedia = (kind) => kind === 'image' || kind === 'video';
 
 // 焦点在预览页里时，按键只到预览页，到不了总控台（两个源）。所以发 HTML 时在末尾加这一小段：
 // 页面自己没用掉的 Esc（没 preventDefault）告诉父页面，由总控台关预览。磁盘上的文件不动。
@@ -54,21 +61,69 @@ export function startPreview({ port, home, log = () => {} }) {
   const byFile = new Map();                       // 文件真身 → 编号（同一个文件再点，网址不变）
   let bound = 0;
 
+  // 页面就在主目录或更上层（/Users、/）时，只发和它同一层的文件，不往下钻：不然一张页面就能读走整个主目录
+  const isShallow = (root) => inside(root, home) || root.split(path.sep).length <= 2;   // 前一条：root 是主目录或它的上层；后一条：/tmp、/Volumes 这种顶层
+  const evict = () => { while (byId.size > KEEP) { const old = byId.keys().next().value; const it = byId.get(old); byId.delete(old); byFile.delete(path.join(it.root, it.entry)); } };
+  // 一个文件夹一把钥匙：图集里这个文件夹的每一张图共用它（entry 空着，byFile 的键就是文件夹自己）
+  function claimDir(root) {
+    let id = byFile.get(root);
+    if (!id || !byId.has(id)) { id = crypto.randomBytes(16).toString('hex'); byId.set(id, { root, entry: '', shallow: isShallow(root) }); byFile.set(root, id); evict(); }
+    return id;
+  }
+  const mediaUrl = (id, name) => `http://127.0.0.1:${bound}/${id}/${encodeURIComponent(name)}`;
+
+  // 一个文件夹 → 图集。多半是图 / 视频才算（见 GALLERY_SHARE）；主目录、/tmp 这种顶层不当图集。
+  // 列文件的规矩和 resolve() 一致：点开头的不列，符号链接指到文件夹外面的不列（列出来也是 404）。
+  function gallery(dir) {
+    if (!bound) return { ok: false, error: 'not-ready' };
+    if (isShallow(dir)) return { ok: false, error: 'no-preview' };
+    let names; try { names = fs.readdirSync(dir); } catch { return { ok: false, error: 'missing' }; }
+    let files = 0; const media = [];
+    for (const name of names) {
+      if (name.startsWith('.')) continue;
+      let real, st; try { real = fs.realpathSync(path.join(dir, name)); st = fs.statSync(real); } catch { continue; }
+      if (!st.isFile()) continue;
+      files++;
+      const kind = kindOf(path.extname(real).slice(1));
+      if (isMedia(kind) && inside(dir, real)) media.push({ name, kind });
+    }
+    if (media.length < GALLERY_MIN || media.length < files * GALLERY_SHARE) return { ok: false, error: 'no-preview' };
+    media.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));   // 01、02、…、10：按数字排，不是按字母排
+    const id = claimDir(dir), shown = media.slice(0, GALLERY_MAX);
+    return { ok: true, kind: 'gallery', name: path.basename(dir), dir, total: media.length, truncated: media.length > shown.length,
+      items: shown.map((m) => ({ name: m.name, kind: m.kind, url: mediaUrl(id, m.name) })) };
+  }
+
+  // 一批文件 → 图集（一条交付里写了好几个图片路径）。不在了的、不是图 / 视频的、点开头的跳过，同一个文件只放一次；
+  // 同一个文件夹里的图共用一把钥匙。
+  function registerMany(files) {
+    if (!bound) return { ok: false, error: 'not-ready' };
+    const seen = new Set(), items = []; let skipped = 0;
+    for (const f of files) {
+      let real, st; try { real = fs.realpathSync(f); st = fs.statSync(real); } catch { skipped++; continue; }
+      const kind = kindOf(path.extname(real).slice(1)), name = path.basename(real);
+      if (!st.isFile() || !isMedia(kind) || name.startsWith('.')) { skipped++; continue; }
+      if (seen.has(real)) continue; seen.add(real);
+      if (items.length < GALLERY_MAX) items.push({ name, kind, url: mediaUrl(claimDir(path.dirname(real)), name), dir: path.dirname(real) });
+    }
+    if (!items.length) return { ok: false, error: 'no-preview' };
+    return { ok: true, kind: 'gallery', total: seen.size, truncated: seen.size > items.length, skipped, items };
+  }
+
   // 一个文件 → 预览网址和类型。只认真实存在、类型在 KIND 表里的普通文件，按符号链接的真身算。文本类顺带读出内容（最多 TEXT_MAX）。
+  // 文件夹交给 gallery()：多半是图 / 视频的才有预览，其余照旧 no-preview，界面改走 /api/open。
   function register(file) {
     let real, st;
     try { real = fs.realpathSync(file); st = fs.statSync(real); } catch { return { ok: false, error: 'missing' }; }
     const kind = st.isFile() ? kindOf(path.extname(real).slice(1)) : null;
-    if (!kind) return { ok: false, error: 'no-preview' };
+    if (!kind) return st.isDirectory() ? gallery(real) : { ok: false, error: 'no-preview' };
     if (!bound) return { ok: false, error: 'not-ready' };
     let id = byFile.get(real);
     if (!id || !byId.has(id)) {
       id = crypto.randomBytes(16).toString('hex');
       const root = path.dirname(real);
-      // 页面就在主目录或更上层（/Users、/）时，只发和它同一层的文件，不往下钻：不然一张页面就能读走整个主目录
-      const shallow = inside(root, home) || root.split(path.sep).length <= 2;   // 前一条：root 是主目录或它的上层；后一条：/tmp、/Volumes 这种顶层
-      byId.set(id, { root, entry: path.basename(real), shallow }); byFile.set(real, id);
-      while (byId.size > KEEP) { const old = byId.keys().next().value; const it = byId.get(old); byId.delete(old); byFile.delete(path.join(it.root, it.entry)); }
+      byId.set(id, { root, entry: path.basename(real), shallow: isShallow(root) }); byFile.set(real, id);
+      evict();
     }
     const it = byId.get(id);
     const r = { ok: true, kind, url: `http://127.0.0.1:${bound}/${id}/${encodeURIComponent(it.entry)}`, name: it.entry, dir: it.root };
@@ -135,5 +190,5 @@ export function startPreview({ port, home, log = () => {} }) {
   server.on('listening', () => { bound = server.address().port; log(`http://127.0.0.1:${bound}`); });
   server.listen(port, '127.0.0.1');
 
-  return { register, port: () => bound };
+  return { register, registerMany, port: () => bound };
 }

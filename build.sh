@@ -1,18 +1,21 @@
 #!/bin/zsh
 # 把总控台打成一个 macOS 应用，装到 ~/Applications/总控台.app
 #   ./build.sh          编译 + 打包 + 安装（装完要重新点一次「允许控制 Ghostty」）
-#   ./build.sh update   只把界面和服务的代码换成新版，不动应用本身（不用重新授权）
+#   ./build.sh update   只把界面和服务的代码（十一个文件）换成新版，不动应用本身（不用重新授权）
 # English: no argument = compile the Swift shell, sign it ad hoc, install it (macOS asks again before it may control Ghostty);
-#          `update`   = copy server.mjs / ui.html / projects.mjs / suggest.mjs / limits.mjs / statusline-tap.mjs / accounts.mjs / route.mjs / preview.mjs into the data dir and restart the service. No rebuild, no re-authorization.
-# NODE=/path/to/node overrides the node that checks syntax (the app itself looks in ~/.local/node/bin, /opt/homebrew/bin, /usr/local/bin).
+#          `update`   = copy server.mjs / ui.html / projects.mjs / suggest.mjs / limits.mjs / statusline-tap.mjs / accounts.mjs / route.mjs / preview.mjs / judge.mjs / org.mjs / autopilot.mjs into the data dir and restart the service. No rebuild, no re-authorization.
+# NODE=/path/to/node overrides the node that checks syntax (the app looks for Node 22+ on its own, see app/node.swift).
+#   ./build.sh stage    只编译打包到 build/，不装、不动数据目录（release/release.sh 用）。Compile into build/ only; install nothing.
+# CCBOARD_APP_NAME=cc-board 换成公开版的名字和包信息（app/public-info.sh）；不设就是「总控台」，和以前一样。
 set -e
 cd "${0:a:h}"
 NODE="${NODE:-$(command -v node || echo "$HOME/.local/node/bin/node")}"
 [ -x "$NODE" ] || { echo "node not found: install Node 22+ or set NODE=/path/to/node" >&2; exit 1; }
-NAME="总控台"; STAGE="build/$NAME.app"; DEST="$HOME/Applications/$NAME.app"
+NAME="${CCBOARD_APP_NAME:-总控台}"; STAGE="build/$NAME.app"; DEST="$HOME/Applications/$NAME.app"
 LIVE="$HOME/Library/Application Support/cc-board/app"
-push_live() { mkdir -p "$LIVE"; /bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs "$LIVE/"; }
+push_live() { mkdir -p "$LIVE"; /bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs judge.mjs org.mjs autopilot.mjs "$LIVE/"; }
 if [ "$1" = "update" ]; then
+  /usr/bin/grep -q 'TMUX_SOCKET' server.mjs || { echo "server.mjs 还是 11/16 之前的 tmux -L ccboard 写法（没有 TMUX_SOCKET），拒绝上线：先合并 sock-fix" >&2; exit 1; }
   "$NODE" --check server.mjs
   "$NODE" --check projects.mjs     # server.mjs 引用它；少拷它服务就起不来
   "$NODE" --check suggest.mjs      # 同上：输入框上的预判
@@ -21,17 +24,22 @@ if [ "$1" = "update" ]; then
   "$NODE" --check accounts.mjs     # server.mjs 引用它：新任务选账号
   "$NODE" --check route.mjs        # 同上：新窗口的档位；少拷它，server.mjs 的 import 失败，整个服务起不来
   "$NODE" --check preview.mjs      # 同上：内置预览
+  "$NODE" --check judge.mjs        # 同上：自动收工收之前看一眼
+  "$NODE" --check org.mjs          # 同上：架构视图（谁归谁管）；少拷它，server.mjs 的 import 失败，整个服务起不来
+  "$NODE" --check autopilot.mjs    # 同上：自动续跑；少拷它，server.mjs 的 import 失败，整个服务起不来
   push_live
   PID=$(/usr/bin/curl -s -m 2 http://127.0.0.1:${CCBOARD_PORT:-4747}/health | /usr/bin/sed -n 's/.*"pid":\([0-9]*\).*/\1/p')
   if [ -n "$PID" ] && /bin/ps -o command= -p "$PID" | /usr/bin/grep -q "server.mjs"; then kill "$PID"; echo "updated; service restarting"; else echo "updated (service not running)"; fi
   exit 0
 fi
 rm -rf build; mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
-/usr/bin/swiftc -O -swift-version 5 -target arm64-apple-macos13 -framework Cocoa -framework WebKit app/main.swift -o "$STAGE/Contents/MacOS/ccboard"
+/usr/bin/swiftc -O -swift-version 5 -target arm64-apple-macos13 -framework Cocoa -framework WebKit app/main.swift app/node.swift app/bundlecode.swift -o "$STAGE/Contents/MacOS/ccboard"
 /bin/cp app/Info.plist "$STAGE/Contents/Info.plist"
-/bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs "$STAGE/Contents/Resources/"
+/bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs judge.mjs org.mjs autopilot.mjs "$STAGE/Contents/Resources/"
 [ -f app/AppIcon.icns ] && /bin/cp app/AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
+[ "$NAME" = "总控台" ] || /bin/sh app/public-info.sh "$STAGE" "$NAME"
 /usr/bin/codesign --force --sign - "$STAGE" >/dev/null 2>&1
+if [ "$1" = "stage" ]; then echo "staged: $STAGE"; exit 0; fi
 push_live
 mkdir -p "$HOME/Applications"; rm -rf "$DEST"; /bin/cp -R "$STAGE" "$DEST"
 echo "installed: $DEST"
