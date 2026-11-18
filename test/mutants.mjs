@@ -218,6 +218,29 @@ const MUTANTS = {
   'bash-write-ignored':  ["for (const dir of bashWriteDirs(b.input.command, d.cwd)) noteWriteDir(st, dir, d.timestamp);", ";"],
   'bash-heredoc-body':   ["if (m) end = m[2];", "if (m) end = null;"],
   'codex-turn-no-clear': ["if (text.trim() && !codexInjected(text)) newTurnWrites(st);", ";"],
+  // 只回变过的（拉数据瘦身，[2v]）：不认 v（每次整份）、不带 v 的老读法也走新格式、quiet 也算变了、不给 gone、不给 ids、全局字段每次都给、不认启动号
+  'delta-ignored':        ["      if (u.searchParams.has('v')) return reply(res, 200, stateSince(out, u.searchParams.get('v')));", ""],
+  'delta-legacy-changed': ["      if (u.searchParams.has('v')) return reply(res, 200, stateSince(out, u.searchParams.get('v')));", "      return reply(res, 200, stateSince(out, u.searchParams.get('v')));"],
+  'delta-quiet-counts':   ["const j = JSON.stringify({ ...s, quiet: undefined }), c = stSess.get(s.sid);", "const j = JSON.stringify(s), c = stSess.get(s.sid);"],
+  'delta-no-gone':        ["  for (const [sid, a] of stGone) if (a > base) d.gone.push(sid);\n", ""],
+  'delta-no-ids':         ["  const glob = { ids: out.sessions.map((s) => s.sid) };", "  const glob = {};"],
+  'delta-globals-always': ["  for (const [k, c] of stGlob) if (c.at > base) d[k]", "  for (const [k, c] of stGlob) if (c.at > -1) d[k]"],
+  'delta-no-boot':        ["base = m && m[1] === ST_BOOT ? Number(m[2]) : -1;", "base = m ? Number(m[2]) : -1;"],
+  // 审查后加（fable 11/17 15:1x）：全局字段变了也不给（只给 ids）、不认「比忘掉的还早」（stFloor）
+  'delta-globals-never':  ["  for (const [k, c] of stGlob) if (c.at > base) d[k] = glob[k] ?? null;", "  for (const [k, c] of stGlob) if (c.at > base && k === 'ids') d[k] = glob[k] ?? null;"],
+  'delta-no-floor':       ["if (base < stFloor || base > stSeq) return", "if (base > stSeq) return"],
+  // 先放着带时间（[3s]）：不存文件（重启丢推迟）、什么交付都叫醒、新的待跟进不叫醒、等你选不叫醒、到点不醒、刚发了话也让推迟、/api/state 不带 snooze
+  'snooze-not-saved':     ["snoozes[sid] = { until: Math.round(until), at: String(s.resultAt), setAt: now, ask }; saveSnoozes();", "snoozes[sid] = { until: Math.round(until), at: String(s.resultAt), setAt: now, ask };"],
+  'snooze-wakes-any':     ["if (s.done && s.resultAt && String(s.resultAt) !== z.at && s.digest && s.digest.need === 'reply') return 'reply';", "if (s.done && s.resultAt && String(s.resultAt) !== z.at) return 'reply';"],
+  'snooze-no-wake-reply': ["if (s.done && s.resultAt && String(s.resultAt) !== z.at && s.digest && s.digest.need === 'reply') return 'reply';", ";"],
+  'snooze-no-wake-ask':   ["  if (s.status === 'waiting' || s.ask) return 'ask';\n", ""],
+  'snooze-no-due':        ["const s = by.get(sid), why = !(now < z.until) ? 'due' : s ? snoozeWake(s, z, now) : null;", "const s = by.get(sid), why = s && now < z.until ? snoozeWake(s, z, now) : null;"],
+  'snooze-allows-sent':   ["if (s.status === 'busy' || !(s.done && s.result && s.resultAt) || (s.promptAt && Date.parse(s.promptAt) > Date.parse(s.resultAt))) return", "if (false) return"],
+  'snooze-not-in-state':  ["      out.sessions = out.sessions.map(withSnooze);", "      ;"],
+  // 审查后加（fable 11/17 16:0x）：他回了话不醒、到点不把被盖住的那件事翻回来、不核界面看到的那一次交付
+  'snooze-no-wake-you':   ["  if (s.promptAt && Date.parse(s.promptAt) > Date.parse(z.at) && !isAutoPrompt(s.prompt || '')) return 'you';", "  ;"],
+  'snooze-no-raise':      ["  for (const o of out) applyRaised(o);", "  ;"],
+  'snooze-ignores-at':    ["if (body.at !== undefined && String(body.at) !== String(s.resultAt)) return", "if (false) return"],
 };
 for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边
@@ -253,6 +276,7 @@ for (const r of res) { if (!r.red.length && !r.hung) bad++;
   // 只认 undici 的等回应超时：服务起不来是 ECONNREFUSED、少文件是 ERR_MODULE_NOT_FOUND，照旧报「没跑起来」（11/17 restore-stop-ignored 就是这样被报成没跑起来的）
   if (!r.red.length && r.hung) { console.log(`  ok   ${r.name.padEnd(22)} 服务卡死、不再应答（测试等回应超时，按变红算）`); continue; }
   if (!r.red.length && !r.ran) { console.log(`  FAIL ${r.name.padEnd(22)} 没跑起来（不是没抓到，先修环境）：${r.tail.slice(0, 160)}`); continue; }   // 11/12：改坏版找不到 projects.mjs，20 个全报「没抓到」
-  console.log(`${r.red.length ? '  ok  ' : '  FAIL'} ${r.name.padEnd(22)} 变红 ${r.red.length} 条${r.red.length ? '：' + r.red[0].replace('  FAIL ', '').slice(0, 60) : '（测试没发现它被改坏了）'}`); }
+  console.log(`${r.red.length ? '  ok  ' : '  FAIL'} ${r.name.padEnd(22)} 变红 ${r.red.length} 条${r.red.length ? '：' + r.red[0].replace('  FAIL ', '').slice(0, 60) : '（测试没发现它被改坏了）'}`);
+  if (process.env.M_ALL_RED) for (const l of r.red) console.log('         · ' + l.replace('  FAIL ', '').slice(0, 110)); }   // M_ALL_RED=1：列出每一条变红的断言（核对改坏版红在它该守的那几条上，不是别处的偶发）
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log(`\n${res.length} 个改坏版，${res.length - bad} 个被测试抓到`); process.exit(bad ? 1 : 0);

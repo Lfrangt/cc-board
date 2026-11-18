@@ -387,7 +387,7 @@ body.flow .sg{padding:0 14px 8px}
 .md th{font-weight:600;color:var(--text-2)}
 
 /* 菜单、提示条 */
-.menu{position:fixed;z-index:300;min-width:148px;padding:4px;border-radius:10px;background:var(--raised);box-shadow:var(--shadow-pop);display:none}
+.menu{position:fixed;z-index:300;min-width:148px;padding:4px;border-radius:10px;background:var(--raised);box-shadow:var(--shadow-pop);display:none} .menu .mz{color:var(--text-3);font-variant-numeric:tabular-nums;margin-left:6px}
 .menu.on{display:block}
 .menu button{display:block;width:100%;text-align:left;height:28px;padding:0 10px;border-radius:6px}
 .menu button:hover{background:var(--hover)} .menu .danger{color:var(--danger)} .menu hr{border:0;border-top:1px solid var(--hair);margin:4px 6px}
@@ -669,6 +669,9 @@ const EN = {
   '做到一半，它的进程退出了（终端被关、崩溃或重启）。对话还在。': 'Its process exited mid-task (terminal closed, crash or restart). The conversation is kept.',
   '开工前要你先选一下': 'Choose before it starts', '无需处理': 'No action needed',
   '待审阅': 'To review', '处理过': 'Handled', '审完了': 'Reviewed', '先放着': 'Later',
+  '1 小时': '1 hour', '今晚': 'Tonight', '明早 9 点': 'Tomorrow 9 AM', '等它下次交付': 'Until its next delivery', '不放了': 'Bring back', '它刚又交付了一次，先看一眼新的': 'It just delivered again — take a look first', '刚发了话，等它做完这一轮再先放着': 'You just sent it a message — wait for this turn to finish',
+  '墙上没有这个会话': 'That session is not on the wall', '时间不对：要在现在之后、48 小时以内': 'Pick a time later than now and within 48 hours', '它在等你选，先放着会马上醒': 'It is waiting for your choice — it would wake right away',
+'刚发了话、它还没做完这一轮，不能先放着': 'You just sent it a message and this turn is not done yet',
   '只有点这里、或回它一句，才算处理过': 'Only this button or a reply marks it handled',
   '你点过「审完了」': 'you marked it reviewed', '无需处理的交付': 'a no-action delivery', '待审阅的交付': 'a delivery to review', '几十秒': 'under a minute', '要你：': 'Needs you: ',
   '重新载入': 'Reload', '在浏览器打开': 'Open in browser', '在默认浏览器里打开（也可以 ⌘ 点链接）': 'Open in your default browser (or ⌘-click the link)', '预览': 'Preview',
@@ -696,7 +699,8 @@ const RULES = [
   [/^运行中 · (\d+) 分钟没动静$/, 'Running · no activity for $1 min'], [/^运行中 · (.+)$/, 'Running · $1'],
   [/^停住了 · (.+)$/, (m, a) => 'Stopped · ' + (EN[a] || a)], [/^「(.*)」停住了：(.+)$/, (m, a, b) => '“' + a + '” stopped: ' + (EN[b] || b)], [/^(\d+) 个窗口停住了$/, '$1 windows stopped'],
   [/^在做 (.+)$/, 'Working · $1'],
-  [/^(待跟进|待审阅|处理过|无需处理) · (.+)$/, (m, a, b) => EN[a] + ' · ' + b], [/^已处理「(.*)」$/, 'Handled “$1”'], [/^后台在跑 · (.+)$/, 'Background task · $1'],
+  [/^(待跟进|待审阅|处理过|无需处理) · (.+)$/, (m, a, b) => EN[a] + ' · ' + b], [/^已处理「(.*)」$/, 'Handled “$1”'],
+  [/^先放着 · 到 明天 (\d+:\d+)$/, 'Later · until tomorrow $1'], [/^先放着 · 到 (\d+:\d+)$/, 'Later · until $1'], [/^先放着到 明天 (\d+:\d+)$/, 'Later until tomorrow $1'], [/^先放着到 (\d+:\d+)$/, 'Later until $1'], [/^明天 (\d+:\d+)$/, 'tomorrow $1'], [/^后台在跑 · (.+)$/, 'Background task · $1'],
   [/^交付 · (.+) · 中间 (\d+) 步没显示$/, 'Delivered · $1 · $2 steps hidden'], [/^最新交付 · (.+) · 中间 (\d+) 步没显示$/, 'Latest delivery · $1 · $2 steps hidden'], [/^最新交付 · (.+)$/, 'Latest delivery · $1'],
   [/^(交付|上一次交付) · (.+?)( · 后台任务还在跑)?$/, (m, a, b, c) => EN[a] + ' · ' + b + (c ? ' · background task still running' : '')],
   [/^这一轮还没有交付，已经做了 (\d+) 步$/, 'No delivery in this turn yet · $1 steps so far'],
@@ -955,7 +959,7 @@ function view(s) {
   const open = !!(s.result && s.resultAt && !(done[s.sid] && done[s.sid] >= s.resultAt));
   const justSent = sentAt[s.sid] && Date.now() - sentAt[s.sid] < 9000;
   if (sentAt[s.sid] && !justSent) delete sentAt[s.sid];
-  let k = 'idle', label = '空闲', need = '', bg = false, quiet = '';
+  let k = 'idle', label = '空闲', need = '', bg = false, quiet = '', snoozed = false;
   const a = justSent ? null : s.alert;       // 服务端判的：这一轮为什么停了（额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 很久没动静）
   if (s.ask || s.status === 'waiting') { k = 'ask'; label = '等你选'; }
   else if (s.status === 'busy' || justSent) { k = 'busy'; label = '运行中'; }
@@ -965,13 +969,14 @@ function view(s) {
   else if (s.done && s.result) {             // 回给别的窗口的、写明不用你管的：无需处理（灰字、不计数）
     k = 'done'; const fyi = d.need === 'fyi'; need = open && !fyi ? (d.need === 'reply' ? 'reply' : 'review') : '';
     quiet = need ? '' : fyi && open ? 'fyi' : 'handled'; label = need === 'reply' ? '待跟进' : need ? '待审阅' : quiet === 'fyi' ? '无需处理' : '处理过';
+    if (s.snooze && need) { need = ''; quiet = 'handled'; label = '先放着'; snoozed = true; }   // 推迟中：服务只在没到点、没被叫醒时给 snooze；样子同处理过，药丸写到几点
   }
   else if (s.note || s.steps) { k = 'stopped'; label = '停住了'; }
   const alert = !!a && (k === 'stopped' || k === 'busy') && ack[s.sid] !== a.key;     // 要你跟进；点过「先不管」就不再算
   // 排位：等你选 → 停住了要你跟进 → 待跟进 → 待审阅 → 在跑（含后台在跑）→ 处理过 → 停住（你已经知道）/ 空闲
   const rank = k === 'ask' ? 0 : alert ? 1 : need === 'reply' ? 2 : need ? 3 : k === 'busy' ? 4 : k === 'done' ? 5 : k === 'stopped' ? 6 : 7;
   const t = alert ? ms(a.at) || ms(s.lastAt) : k === 'done' || bg ? ms(s.resultAt) : k === 'busy' ? ms(s.turnAt) || s.startedAt : 0;
-  return { k, label, need, quiet, bg, live: k === 'busy', rank, t, back: k === 'busy' && !alert, alert, why: a ? a.kind : k === 'stopped' ? 'unfinished' : '' };
+  return { k, label, need, quiet, bg, snoozed, live: k === 'busy', rank, t, back: k === 'busy' && !alert, alert, why: a ? a.kind : k === 'stopped' ? 'unfinished' : '' };
 }
 // 封面那一截的两行：大字的一句（交付了什么 / 在做什么 / 为什么停），和要你做的那件事
 const firstSentence = (src) => {
@@ -1147,7 +1152,7 @@ function makeCard(sid) {
     if (act && act.dataset.act === 'ack') { doAck(s); return; }
     if (act && act.dataset.act === 'menu') { openMenu(act, s); return; }
     if (act && act.dataset.act === 'archive') { doArchive(s, false); return; }
-    if (act && act.dataset.act === 'done') { markDone(s); return; }
+    if (act && act.dataset.act === 'done') { const cv = cards.get(sid).v; if (cv && cv.snoozed) unsnooze(s); else if (cv && cv.need === 'reply') openSnooze(act, s); else markDone(s); return; }   // 待跟进：先放着到什么时候；待审阅：审完了；推迟中：不放了
     if (act && act.dataset.act === 'detail') { openDetail(s.sid, s.title); return; }   // 点开不算处理过
     if (act && act.dataset.act === 'wmore') { toggleWrote(s, act); return; }            // 这一轮改了哪些文件：展开 / 收起
   });
@@ -1572,7 +1577,7 @@ function paint(st) {
     const tt = $('.title', el); if (tt.textContent !== s.title) tt.textContent = s.title;
     const tg = $('.tag', el); const tgv = s.provider === 'codex' ? 'Codex' : ''; if (tg.textContent !== tgv) { tg.textContent = tgv; tg.hidden = !tgv; }
     const mt = T(v.bg ? '后台在跑 · ' + dur(s.statusAt || s.resultAt, st.now) : v.k === 'busy' ? (v.why === 'stall' ? '运行中 · ' + Math.round((s.quiet || 0) / 60000) + ' 分钟没动静' : '运行中 · ' + dur(s.turnAt || s.promptAt, st.now))
-      : v.k === 'stopped' ? '停住了 · ' + WHY[v.why] : v.k === 'done' ? v.label + ' · ' + when(s.resultAt, st.now, true) : v.label);
+      : v.k === 'stopped' ? '停住了 · ' + WHY[v.why] : v.snoozed ? '先放着 · 到 ' + clockOf(s.snooze.until, st.now) : v.k === 'done' ? v.label + ' · ' + when(s.resultAt, st.now, true) : v.label);
     setMeta($('.meta', el), mt);
     setModel($('.mdl', el), s);
     const you = $('.you', el); const yk = s.prompt || '';
@@ -1582,7 +1587,7 @@ function paint(st) {
     if (hd.textContent !== cv.head) hd.textContent = cv.head;
     if (ak.dataset.k !== cv.ask) { ak.dataset.k = cv.ask; ak.hidden = !cv.ask; ak.innerHTML = cv.ask ? '<b>↩</b>' + esc(cv.ask) : ''; }
     paintClash($('.clash', el), s, bySid);
-    const dl = v.need ? T(v.need === 'reply' ? '先放着' : '审完了') : ''; if (dn.textContent !== dl) dn.textContent = dl; if (dn.hidden === !!v.need) dn.hidden = !v.need;
+    const dl = v.need ? T(v.need === 'reply' ? '先放着' : '审完了') : v.snoozed ? T('不放了') : ''; if (dn.textContent !== dl) dn.textContent = dl; if (dn.hidden === !!dl) dn.hidden = !dl;
     const key = [v.k, s.status, s.resultAt, s.noteAt, s.ask ? JSON.stringify(s.ask) : '', s.screen || '', s.dialog ? JSON.stringify(s.dialog.options) : '', v.why, s.alert ? s.alert.key : '', v.alert,
       v.need === 'review' && Array.isArray(s.wrote) && s.wrote.length ? JSON.stringify([s.wrote, s.wroteMore]) : ''].join('|');
     const body = $('.body', el);
@@ -1742,11 +1747,37 @@ $('#crash').addEventListener('click', async (e) => {
   if (!r.ok) { b.disabled = false; toast(r.error || '没成功'); }
   crashK = ''; refresh();
 });
-let pollT, polling = false, synced = false;
+let pollT, polling = false, synced = false, sv = null, heldNotices = [];   // sv：拼好的上一份状态，带服务给的版本号 v；heldNotices：拼不上那一拍带来的提示（服务已经取走了，整份里不会再有）
+// 带版本号拉，服务只回变过的（server.mjs 的 stateSince）：changed 换上、gone 拿掉、ids 定先后、q 是在跑的会话多久没动静，
+// 别的字段有就换。整份（full、或者老服务不认 v）原样用。拼不上（版本号对不上、ids 里有没见过的）回 null，马上要一次整份
+function mergeState(prev, d) {
+  if (d.full || !d.v) return d;
+  if (!prev || d.base !== prev.v) return null;
+  const S = new Map(prev.sessions.map((s) => [s.sid, s]));
+  for (const id of d.gone || []) S.delete(id);
+  for (const s of d.changed || []) S.set(s.sid, s);
+  const q = d.q || {}, sessions = [];
+  for (const id of d.ids || prev.sessions.map((s) => s.sid)) {
+    let s = S.get(id); if (!s) return null;
+    if ('quiet' in s && s.quiet !== (q[id] || 0)) s = { ...s, quiet: q[id] || 0 };
+    sessions.push(s);
+  }
+  const st = { ...prev, ...d, sessions };
+  for (const k of ['base', 'changed', 'gone', 'ids', 'q', 'full']) delete st[k];
+  return st;
+}
 async function poll() {
-  if (polling) return; polling = true; clearTimeout(pollT);
-  try { paint(await api('/api/state' + (document.hasFocus() && !document.hidden ? '?f=1' : ''))); if (!synced) { synced = true; syncDone(done); } } catch (e) { $('#hint').textContent = T('总控台服务没应答'); }
-  polling = false; pollT = setTimeout(poll, document.hidden ? 4000 : 1500);
+  if (polling) return; polling = true; clearTimeout(pollT); let again = false;
+  try {
+    const d = await api('/api/state?v=' + encodeURIComponent((sv && sv.v) || '0') + (document.hasFocus() && !document.hidden ? '&f=1' : ''));
+    sv = mergeState(sv, d); again = !sv;
+    if (!sv) heldNotices = heldNotices.concat(d.notices || []);
+    else {
+      if (heldNotices.length) { sv.notices = heldNotices.concat(sv.notices || []); heldNotices = []; }
+      paint(sv); if (!synced) { synced = true; syncDone(done); }
+    }
+  } catch (e) { $('#hint').textContent = T('总控台服务没应答'); }
+  polling = false; pollT = setTimeout(poll, again ? 60 : document.hidden ? 4000 : 1500);
 }
 const refresh = () => { clearTimeout(pollT); pollT = setTimeout(poll, 60); };
 
@@ -1762,7 +1793,41 @@ function openMenu(btn, s) {
     if (b.dataset.m === 'focus') goTerminal(s); if (b.dataset.m === 'archive') doArchive(s, false); if (b.dataset.m === 'delete') doDelete(s.sid, s.title); };
 }
 function closeMenu() { if (menuFor) menuFor.setAttribute('aria-expanded', 'false'); menuFor = null; $('#menu').classList.remove('on'); }
-document.addEventListener('pointerdown', (e) => { if (menuFor && !e.target.closest('#menu') && !e.target.closest('[data-act="menu"]')) closeMenu(); }, true);
+document.addEventListener('pointerdown', (e) => { if (menuFor && !e.target.closest('#menu') && !e.target.closest('[data-act="menu"]') && e.target.closest('button') !== menuFor) closeMenu(); }, true);
+
+// 「先放着」带时间：待跟进的卡点「先放着」，选 1 小时 / 今晚（20 点以后不出）/ 明早 9 点，记在服务（POST /api/snooze）。
+// 推迟中只有它又交付了一次【待跟进】、或停下来等你选，才提前回到「要你处理」；【进展】【待审阅】不叫醒。「等它下次交付」是原来的先放着（它下一次交付就回来，记在本机）
+function snoozeTimes(now) {
+  const d = new Date(now), at = (dd, h) => { const x = new Date(now); x.setDate(x.getDate() + dd); x.setHours(h, 0, 0, 0); return x.getTime(); };
+  const out = [['1 小时', now + 3600e3, true]];
+  if (d.getHours() < 20) out.push(['今晚', at(0, 21), false]);
+  out.push(['明早 9 点', d.getHours() < 5 ? at(0, 9) : at(1, 9), false]);
+  return out;
+}
+function clockOf(t, now) {       // 今天写钟点，别的日子前面加「明天」（最多 48 小时，只会是今天或明天）
+  const d = new Date(t), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  return d.toDateString() === new Date(now).toDateString() ? hm : '明天 ' + hm;
+}
+function openSnooze(btn, s) {
+  const m = $('#menu'); if (menuFor === btn) return closeMenu();
+  closeMenu(); menuFor = btn; btn.setAttribute('aria-expanded', 'true'); const now = Date.now();
+  m.innerHTML = snoozeTimes(now).map(([lb, t, clock]) => '<button role="menuitem" data-z="' + t + '">' + esc(T(lb)) + (clock ? ' <span class="mz">' + esc(T(clockOf(t, now))) + '</span>' : '') + '</button>').join('') +
+    '<button role="menuitem" data-z="next">' + esc(T('等它下次交付')) + '</button>';
+  m.classList.add('on'); const r = btn.getBoundingClientRect(), w = m.offsetWidth;
+  m.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w)) + 'px'; m.style.top = Math.min(innerHeight - m.offsetHeight - 8, r.bottom + 4) + 'px';
+  m.onclick = (e) => { const b = e.target.closest('[data-z]'); if (!b) return; closeMenu(); if (b.dataset.z === 'next') markDone(s); else snoozeTo(s, Number(b.dataset.z)); };
+}
+async function snoozeTo(s, until) {
+  if (sentAt[s.sid] && Date.now() - sentAt[s.sid] < 9000) { toast('刚发了话，等它做完这一轮再先放着'); return; }
+  const r = await api('/api/snooze', { sid: s.sid, until, at: s.resultAt }).catch(() => ({ ok: false, error: '总控台服务没应答' }));
+  if (!r.ok) { toast(r.error || '没成功'); refresh(); return; }
+  if (mode === 'flow' && cur === s.sid) pickNext = s.sid;     // 封面：和「审完了」一样，顶上下一张要你处理的
+  toast('先放着到 ' + clockOf(r.until, Date.now()), { action: '撤销', ms: 6000, onAction: () => api('/api/snooze', { sid: s.sid, clear: true }).then(refresh, refresh) });
+  refresh();
+}
+function unsnooze(s) {           // 推迟中的卡点「不放了」：服务清掉，回到待跟进
+  api('/api/snooze', { sid: s.sid, clear: true }).then((r) => { if (!r.ok) toast(r.error || '没成功'); refresh(); }, () => toast('总控台服务没应答'));
+}
 
 // ── 提示条 / 确认 ──
 let toastT;

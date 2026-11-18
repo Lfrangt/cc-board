@@ -57,6 +57,8 @@ const chipsOf = (page) => page.evaluate((sids) => {
 // UI_ONLY=wrote 只跑这一段（红阶段、改坏对照用），跑完直接出结果
 // UI_ONLY=org 只跑「架构」那一段（11/17 分支负责人的红阶段、改坏对照用）
 const ONLY_DONE = Symbol('only');
+// 界面带 ?v= 拉 /api/state，服务只回变过的（第 2 条）。拦下来改应答的测试要整份：把 v 换成 0，服务回整份（full: true），界面整份换上
+const fullState = (route) => route.fetch({ url: route.request().url().replace(/([?&]v=)[^&]*/, (m, p) => p + '0') });
 const ev = (pg, fn, arg) => pg.evaluate(fn, arg).catch((e) => ({ err: String(e).slice(0, 160) }));
 const wroteOf = (page, n) => ev(page, (sid) => {
   const el = document.querySelector('.card[data-sid="' + sid + '"]'); if (!el) return { missing: true };
@@ -89,7 +91,7 @@ async function dockCheck() {
   const D = FX.sids.done, K = FX.sids.links;
   const setup = async (page, opt = {}) => {
     const h = { sent: [], auto: [], turns: 0, drop: false };
-    await page.route('**/api/state*', async (route) => { let r, j; try { r = await route.fetch(); j = await r.json(); } catch { return route.abort().catch(() => {}); }   // 夹具服务偶尔断一次连接：这一次轮询作罢，界面下一拍再取
+    await page.route('**/api/state*', async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }   // 夹具服务偶尔断一次连接：这一次轮询作罢，界面下一拍再取
       for (const x of j.sessions) if (x.sid === D || x.sid === K) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; if (x.sid === D) { x.suggest = DSG; x.auto = DAUTO; } }
       if (h.drop) j.sessions = j.sessions.filter((x) => x.sid !== D);
       await route.fulfill({ response: r, json: j }); });
@@ -214,6 +216,108 @@ async function dockCheck() {
   }
 }
 
+// ── 「先放着」带时间：待跟进的卡点「先放着」出三档（20 点以后没有「今晚」）+ 原来的「等它下次交付」；选 1 小时 → 服务记着（/api/state 里有 snooze），
+//    卡片样子同处理过、药丸写到几点，不再算待跟进；提示条「撤销」→ 服务清掉、回到待跟进。待审阅的「审完了」照旧一点就处理、不出菜单。
+//    中文浅色、英文深色各一遍，截图。服务端的醒 / 不醒在 state.test.mjs 的 [3s]。单独跑：UI_ONLY=snooze
+async function snoozeCheck() {
+  console.log('\n[先放着带时间]');
+  const X = FX.sids.askTag, sel = '.card[data-sid="' + X + '"]';
+  const card = (page) => page.evaluate((sel) => { const c = document.querySelector(sel); return c ? { cls: c.className, meta: c.querySelector('.meta').textContent, btn: c.querySelector('.done').textContent } : null; }, sel);
+  const srv = (page) => page.evaluate((sid) => api('/api/state?peek=1').then((p) => (p.sessions.find((s) => s.sid === sid) || {}).snooze || null), X);
+  for (const [lang, scheme] of [['zh', 'light'], ['en', 'dark']]) {
+    const { ctx, page, errs } = await open({ mode: 'wall', lang, scheme });
+    await page.evaluate((sid) => api('/api/snooze', { sid, clear: true }), X).catch(() => {}); await sleep(1600);     // 上一次在同一份夹具上跑到一半留下的推迟先清掉
+    const zh = lang === 'zh', b0 = await card(page), hour = await page.evaluate(() => new Date().getHours());
+    await page.click(sel + ' .done'); await sleep(400);
+    const menu = await page.evaluate(() => { const m = document.querySelector('#menu');
+      return { on: m.classList.contains('on'), items: [...m.querySelectorAll('[data-z]')].map((b) => [...b.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()), clock: (m.querySelector('.mz') || {}).textContent || '' }; });
+    await page.screenshot({ path: path.join(OUT, `snooze-menu-${lang}-${scheme}.png`) });
+    const want = zh ? ['1 小时', ...(hour < 20 ? ['今晚'] : []), '明早 9 点', '等它下次交付'] : ['1 hour', ...(hour < 20 ? ['Tonight'] : []), 'Tomorrow 9 AM', 'Until its next delivery'];
+    ok(!!b0 && /s-reply/.test(b0.cls) && b0.btn === (zh ? '先放着' : 'Later') && menu.on && JSON.stringify(menu.items) === JSON.stringify(want) && (zh ? /^(明天 )?\d\d:\d\d$/ : /^(tomorrow )?\d\d:\d\d$/).test(menu.clock),
+      `先放着（${lang}）：待跟进的卡点「先放着」出 ${want.length} 项（${hour} 点${hour < 20 ? '，有今晚' : '，20 点以后没有今晚'}），1 小时那项带钟点`, JSON.stringify({ b0, menu }));
+    const t0 = Date.now(); await page.click('#menu [data-z]:first-child'); await sleep(1800);
+    const a1 = await card(page), z1 = await srv(page), toast = await page.evaluate(() => ({ on: document.querySelector('#toast').classList.contains('on'), text: document.querySelector('#toast span').textContent }));
+    ok(!!z1 && Math.abs(z1.until - (t0 + 3600e3)) < 15000 && !!a1 && !/s-reply/.test(a1.cls) && /s-handled/.test(a1.cls) && (zh ? /^先放着 · 到 (明天 )?\d\d:\d\d$/ : /^Later · until (tomorrow )?\d\d:\d\d$/).test(a1.meta) && a1.btn === (zh ? '不放了' : 'Bring back')
+      && toast.on && (zh ? /^先放着到 (明天 )?\d\d:\d\d$/ : /^Later until (tomorrow )?\d\d:\d\d$/).test(toast.text),
+      `先放着（${lang}）：选 1 小时 → 服务记到一小时后，卡片样子同处理过、不再算待跟进，药丸「${a1 && a1.meta}」，按钮换成「${a1 && a1.btn}」，提示条「${toast.text}」`, JSON.stringify({ z1, a1, toast }));
+    await page.screenshot({ path: path.join(OUT, `snooze-card-${lang}-${scheme}.png`) });
+    await page.click('#toast button'); await sleep(1800);
+    const a2 = await card(page), z2 = await srv(page);
+    ok(!z2 && !!a2 && /s-reply/.test(a2.cls), `先放着（${lang}）：提示条点「撤销」→ 服务清掉，回到待跟进`, JSON.stringify({ z2, a2 }));
+    if (zh) {      // 待审阅的「审完了」照旧：一点就处理，不出菜单
+      const R = '.card[data-sid="' + FX.sids.tidyWork + '"]'; const r0 = await page.evaluate((R) => { const c = document.querySelector(R); return c ? { cls: c.className, btn: c.querySelector('.done').textContent } : null; }, R);
+      await page.click(R + ' .done'); await sleep(600);
+      const r1 = await page.evaluate((R) => ({ cls: document.querySelector(R).className, menu: document.querySelector('#menu').classList.contains('on') }), R);
+      ok(!!r0 && /s-review/.test(r0.cls) && r0.btn === '审完了' && !r1.menu && /s-handled/.test(r1.cls), '先放着：待审阅的「审完了」照旧一点就算处理过，不出时间菜单', JSON.stringify({ r0, r1 }));
+      await page.click('#toast button').catch(() => {}); await sleep(600);     // 撤销：服务那边的「审完了」也清掉，不让自动收工的快线在后面的段里收走它
+    }
+    await page.evaluate((sid) => api('/api/snooze', { sid, clear: true }), X).catch(() => {});     // 不管上面过没过，都别把推迟留给后面的段
+    ok(errs.length === 0, `先放着（${lang}）：页面没报错`, errs.join(' | ')); await ctx.close();
+  }
+}
+
+// ── 只回变过的（拉数据瘦身）：界面带 ?v= 拉 /api/state，第一次整份、之后只收变过的，拼出来的墙和服务的整份一样；
+//    会话真的不见了（这里用真的「归档」，所以放在整套最后），卡也真的没了；拼不上马上要一次整份。服务端的断言在 state.test.mjs 的 [2v]。
+//    单独跑：UI_ONLY=delta node test/ui-check.mjs
+async function deltaCheck() {
+  console.log('\n[只回变过的（拉数据瘦身）]');
+  const { ctx, page, errs } = await open({ mode: 'wall' });
+  const got = [];      // 界面每次轮询 /api/state 的应答（不含下面核对用的 peek 读法）：带的 v、字节数、整份还是只回变过的、changed / gone
+  page.on('response', async (res) => { const u = res.url(); if (!u.includes('/api/state?') || /[?&]peek=1/.test(u)) return; const t = Date.now();
+    try { const b = await res.body(), j = JSON.parse(b.toString('utf8')); got.push({ t, v: new URL(u).searchParams.get('v'), n: b.length, full: j.full === true, sessions: 'sessions' in j, changed: (j.changed || []).map((s) => s.sid), gone: j.gone || [] }); } catch {} });
+  // 和服务同一个版本号下的整份逐字段比：先让界面拉一拍，紧跟着带 v=0 要一份整份（peek，不取走提示）；两边版本号一样（中间服务没扫出新东西）才比，不一样就重来。
+  // 比：会话的先后、每个会话的每个字段（quiet 差 3 秒以内算一样：服务每 1.2 秒扫一次，在跑的会话 quiet 每扫一次都涨）、每个全局字段、每个会话都有卡
+  const wallNow = () => page.evaluate(async () => {
+    const SKIP = new Set(['now', 'notices', 'v', 'full', 'peek', 'sessions']);
+    for (let i = 1; i <= 20; i++) {
+      await poll(); const p = await api('/api/state?peek=1&v=0');
+      if (!sv || p.v !== sv.v) { await new Promise((r) => setTimeout(r, 150)); continue; }
+      const diffs = [], ids = p.sessions.map((s) => s.sid), mine = sv.sessions.map((s) => s.sid);
+      if (JSON.stringify(ids) !== JSON.stringify(mine)) diffs.push('先后：' + mine.length + ' 对 ' + ids.length);
+      const S = new Map(sv.sessions.map((s) => [s.sid, s])); let busyQ = 0;
+      for (const s of p.sessions) { const m = S.get(s.sid); if (!m) continue;
+        if (JSON.stringify({ ...m, quiet: 0 }) !== JSON.stringify({ ...s, quiet: 0 })) diffs.push('会话 ' + s.sid.slice(0, 8));
+        if (Math.abs((m.quiet || 0) - (s.quiet || 0)) > 3000) diffs.push('quiet ' + s.sid.slice(0, 8) + ' ' + m.quiet + ' 对 ' + s.quiet);
+        busyQ = Math.max(busyQ, s.quiet || 0); }
+      const keys = new Set([...Object.keys(p), ...Object.keys(sv)].filter((k) => !SKIP.has(k)));
+      for (const k of keys) if (JSON.stringify(sv[k]) !== JSON.stringify(p[k])) diffs.push('全局 ' + k);
+      const cards = new Set([...document.querySelectorAll('#stage .card[data-sid]')].map((c) => c.dataset.sid));
+      return { tries: i, n: ids.length, diffs, busyQ, missing: ids.filter((x) => !cards.has(x)), sids: ids };
+    }
+    return { tries: 20, sameV: false, diffs: ['20 次都没对上版本号'], missing: [], sids: [] };
+  });
+  const fresh = await page.evaluate((x) => api('/api/state?peek=1').then((p) => x.every((sid) => p.sessions.some((s) => s.sid === sid))), [FX.sids.intrIdle, FX.sids.stall]);
+  ok(fresh, '只回变过的：夹具还新鲜（intrIdle、stall 这两个 15 分钟后会退出的会话都还在墙上；不在的话下面几条红是夹具过期，不是这一段的毛病）', '');
+  const tReload = Date.now(); await page.reload(); await page.waitForSelector('.card'); await sleep(6000);
+  const fi = got.findIndex((g) => g.t >= tReload && g.v === '0'), first = got[fi] || {}, rest = fi >= 0 ? got.slice(fi + 1) : [];
+  ok(fi >= 0 && first.full && first.sessions, '页面打开后第一次拉：带 v=0，拿到整份', JSON.stringify(first).slice(0, 200));
+  ok(rest.length >= 2 && rest.every((g) => g.v && g.v !== '0' && !g.full && !g.sessions && g.n < first.n / 3),
+    '之后每一拍带着上一次的版本号，只收变过的（夹具里 run / compact / hint 一直在加记录）：整份 ' + first.n + ' 字节，之后 ' + rest.map((g) => g.n).join(' / ') + ' 字节', JSON.stringify(rest.map((g) => ({ v: g.v, n: g.n, full: g.full, ch: g.changed.length }))));
+  const w1 = await wallNow();
+  ok(w1.diffs.length === 0 && w1.missing.length === 0 && w1.n > 4, '拼出来的状态和服务同一个版本号下的整份一样：' + w1.n + ' 个会话的先后、每个字段、每个全局字段，每个会话都有卡（对上版本号试了 ' + w1.tries + ' 次）',
+    JSON.stringify({ diffs: (w1.diffs || []).slice(0, 8), missing: w1.missing }));
+  ok(w1.busyQ > 3000, '在跑没动静的会话（stall）的 quiet 跟着涨：拼出来的和整份差不到 3 秒，最大的 ' + w1.busyQ + ' ms（不套 q 的话停在页面打开那一刻）', JSON.stringify({ busyQ: w1.busyQ }));
+  // 拼不上（应答的 base 对不上界面手上的版本号）：不画半张墙，马上（不等 1.5 秒）要一次整份
+  let bent = 0, bentV = null;
+  await page.route('**/api/state*', async (route) => { const url = route.request().url(); if (bent || /[?&]peek=1/.test(url) || /[?&]v=0(&|$)/.test(url)) return route.continue(); bent++; bentV = new URL(url).searchParams.get('v');
+    const r = await route.fetch(); const j = await r.json(); j.base = 'deadbeef.1'; await route.fulfill({ response: r, json: j }); });
+  const nB = got.length; await sleep(3500); await page.unroute('**/api/state*');
+  const after = got.slice(nB), bi = after.findIndex((g) => g.v === bentV && !g.full), nx = after[bi + 1] || {};
+  ok(bent === 1 && bi >= 0 && nx.v === '0' && nx.full && nx.t - after[bi].t < 1000, '拼不上的那一拍：马上带 v=0 再要一次整份（隔 ' + (nx.t - (after[bi] || {}).t) + ' ms）', JSON.stringify({ bentV, after: after.map((g) => ({ v: g.v, full: g.full })) }));
+  const w2 = await wallNow();
+  ok(w2.diffs.length === 0 && w2.missing.length === 0, '拼不上之后墙照旧和服务同一个版本号下的整份一样', JSON.stringify({ diffs: (w2.diffs || []).slice(0, 8), missing: w2.missing }));
+  // 会话真的不见了：用服务真的「归档」拿掉一个（不拦），下一拍只回变过的里 gone 带着它，卡从墙上没了
+  const X = FX.sids.intrIdle, nG = got.length;
+  const ar = await page.evaluate((sid) => api('/api/archive', { sid }), X);
+  await page.waitForFunction((sid) => !document.querySelector('#stage .card[data-sid="' + sid + '"]'), X, { timeout: 8000 }).catch(() => {});
+  const g = await page.evaluate((sid) => ({ card: !!document.querySelector('#stage .card[data-sid="' + sid + '"]'), inSv: sv.sessions.some((s) => s.sid === sid) }), X);
+  const via = got.slice(nG).find((x) => x.gone.includes(X));
+  ok(!!ar && ar.ok && !g.card && !g.inSv && !!via && !via.full && !via.sessions, '服务那边真的拿掉一个会话（归档）：只回变过的那一拍 gone 里有它，卡从墙上没了', JSON.stringify({ ar, g, via }));
+  const w3 = await wallNow();
+  ok(w3.diffs.length === 0 && w3.missing.length === 0 && !w3.sids.includes(X), '拿掉以后墙和服务同一个版本号下的整份还是一样（归档数、架构这些全局字段也跟着变了）', JSON.stringify({ diffs: (w3.diffs || []).slice(0, 8), missing: w3.missing }));
+  ok(errs.length === 0, '只回变过的：页面没报错', errs.join(' | ')); await ctx.close();
+}
+
 
 // ── 图集 · 视频在格子里播（11/17 作者：「我想直接播放……不用把它放到全屏」「甚至你可以加入这个同时播放」，win-35）──
 // 夹具：假主目录 Desktop/galv/ 放三段没有声音的 VP8（a、b 6 秒，c 4 秒，test/clips.mjs）；Desktop/galone/ 一段视频 + 一张图。/api/preview 把夹具路径换成真文件，走真的预览端口。
@@ -322,6 +426,8 @@ async function galVideoCheck() {
 }
 
 try {
+  if (process.env.UI_ONLY === 'snooze') { await snoozeCheck(); console.log('\n（UI_ONLY=snooze：只跑了「先放着带时间」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'delta') { await deltaCheck(); console.log('\n（UI_ONLY=delta：只跑了「只回变过的」这一段，不是整套）'); throw ONLY_DONE; }
   let ctx, page, errs;                                   // 架构那一段也用这三个；UI_ONLY=org 时它前面的整段不跑，所以提到这里声明
   if (process.env.UI_ONLY !== 'org') {
   if (process.env.UI_ONLY === 'dock') { await dockCheck(); console.log('\n（UI_ONLY=dock：只跑了「弹层里回话」这一段，不是整套）'); throw ONLY_DONE; }
@@ -1183,7 +1289,7 @@ try {
   for (const off of [false, true]) {
     const c3 = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: 'dark' }); const pg = await c3.newPage(); const e3 = [];
     pg.on('pageerror', (e) => e3.push(String(e)));
-    if (off) await pg.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json(); if (j.providers) delete j.providers.codex; await route.fulfill({ response: r, json: j }); });
+    if (off) await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); if (j.providers) delete j.providers.codex; await route.fulfill({ response: r, json: j }); });
     await pg.goto(FX.url + '&lang=zh'); await pg.waitForSelector('.card'); await sleep(1800);
     await pg.click('#newBtn'); await sleep(400);
     const v = await pg.evaluate(() => ({ field: getComputedStyle(document.querySelector('#nProvField')).display, provs: [...document.querySelectorAll('#nProv button')].map((b) => b.textContent) }));
@@ -1195,7 +1301,7 @@ try {
   const SGX = { ghost: '把这个改动提交，然后跑一遍全部测试，再把结果和耗时逐项写进说明里，最后把说明发到群里让大家看一眼', options: [{ n: 1, label: '提交并跑测试' }, { n: 2, label: '看一下改动' }, { n: 3, label: '先放着' }] };
   for (const lang of ['zh', 'en']) {
     ({ ctx, page, errs } = await open({ mode: 'wall', lang })); let sentTo = [];
-    await page.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json();
+    await page.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json();
       for (const x of j.sessions) if (x.sid === FX.sids.done || x.sid === FX.sids.run) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; x.suggest = SGX; }      // done 是空闲的，run 是忙着的
       await route.fulfill({ response: r, json: j }); });
     await page.route('**/api/send', async (route) => { sentTo.push(JSON.parse(route.request().postData() || '{}')); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, delivered: true }) }); });
@@ -1233,7 +1339,7 @@ try {
   // 封面视图（一张一张翻）和浅色：灰字和三条的样子
   for (const scheme of ['light', 'dark']) {
     ({ ctx, page, errs } = await open({ mode: 'flow', scheme }));
-    await page.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json(); for (const x of j.sessions) if (x.sid === FX.sids.done) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; x.suggest = SGX; } await route.fulfill({ response: r, json: j }); });
+    await page.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); for (const x of j.sessions) if (x.sid === FX.sids.done) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; x.suggest = SGX; } await route.fulfill({ response: r, json: j }); });
     await sleep(2800);
     const fr = await page.evaluate((sid) => { const c = document.querySelector('.card[data-sid="' + sid + '"]'); const sg = c.querySelector('.sg'), rp = c.querySelector('.reply'); return { side: c.classList.contains('side'), sg: sg.hidden ? null : sg.getBoundingClientRect().height, above: sg.getBoundingClientRect().bottom <= rp.getBoundingClientRect().top + 1 }; }, FX.sids.done);
     if (!fr.side) { ok(fr.sg > 40 && fr.above, `封面（${scheme}）：三条在输入框上面、不压住它`, JSON.stringify(fr)); await page.screenshot({ path: path.join(OUT, `suggest-flow-${scheme}.png`) }); }
@@ -1256,7 +1362,7 @@ try {
   for (const lang of ['zh', 'en']) {
     ({ ctx, page, errs } = await open({ mode: 'wall', lang })); const autoPosts = [];
     const due = Date.now() + 25000; let armAll = false;   // armAll：量宽度时把墙上每张歇着的卡都挂上倒数
-    await page.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json();
+    await page.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json();
       for (const x of j.sessions) {
         if (armAll && x.status === 'idle' && !x.auto && x.sid !== FX.sids.links && x.sid !== FX.sids.noneDone) { x.channel = 'tmux'; x.tmux = x.tmux || 'ccb-w' + x.sid.slice(0, 6); x.auto = { state: 'armed', text: ATEXT, basis: '量宽度', fireIn: 29500 }; }   // 30 秒：最宽的秒数
         if (x.sid === FX.sids.done) { FYI(x); x.channel = 'tmux'; x.tmux = 'ccb-fake'; x.suggest = SGX; x.auto = { state: 'armed', text: ATEXT, basis: SGX.ghost, fireIn: Math.max(0, due - Date.now()) }; }
@@ -1604,7 +1710,7 @@ try {
           .observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] }); });
       const pg = await c6.newPage(); const e6 = []; pg.on('pageerror', (e) => e6.push(String(e)));
       let bump = 0;
-      await pg.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json(); const x = j.org && j.org.nodes && j.org.nodes[FX.sids.unfin];
+      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); const x = j.org && j.org.nodes && j.org.nodes[FX.sids.unfin];
         if (bump && x && Array.isArray(x.from)) { const f = x.from.find((y) => y[0] === FX.sids.peerDone); if (f) { f[1] = 4; f[2] = bump; } } await route.fulfill({ response: r, json: j }); });
       await pg.goto(FX.url + '&lang=zh'); await pg.waitForSelector('#org .onode .ot', { timeout: 8000 }).catch(() => {}); await sleep(3000);
       const f0 = await tryEval(pg, () => [window.__fly.length, window.__ping.length]);
@@ -1628,7 +1734,7 @@ try {
       const c7 = await browser.newContext({ viewport: { width: 1520, height: 1000 }, colorScheme: 'light' });
       await c7.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('org')); } catch (e) {} });
       const pg = await c7.newPage(); const e7 = []; pg.on('pageerror', (e) => e7.push(String(e)));
-      await pg.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json();
+      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json();
         if (kind === 'empty') j.org = { chief: null, gen: null, nodes: {} }; else if (kind === 'missing') delete j.org; else if (j.org && j.org.nodes) delete j.org.nodes[FX.sids.hint];
         await route.fulfill({ response: r, json: j }); });
       await pg.goto(FX.url + '&lang=zh'); await pg.waitForSelector('#org .onode .ot', { timeout: 8000 }).catch(() => {}); await sleep(2800);
@@ -1645,7 +1751,7 @@ try {
       const c8 = await browser.newContext({ viewport: { width: 1520, height: 1000 }, colorScheme: 'dark' });
       await c8.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('org')); } catch (e) {} });
       const pg = await c8.newPage(); const e8 = []; pg.on('pageerror', (e) => e8.push(String(e))); pg.on('console', (m) => { if (m.type() === 'error') e8.push(m.text()); });
-      await pg.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json(); const N = j.org && j.org.nodes;
+      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); const N = j.org && j.org.nodes;
         if (N && N[FX.sids.done]) Object.assign(N[FX.sids.done], { via: 'report', handed: false, n: 2, last: Date.now() - 5 * 60e3 });
         if (N && N[FX.sids.unfin]) N[FX.sids.unfin].from = [];
         if (N && N[FX.sids.links]) Object.assign(N[FX.sids.links], { boss: FX.sids.projC, via: 'msg', n: 3, last: Date.now() - 10 * 60e3, from: [[FX.sids.projC, 3, Date.now() - 10 * 60e3]] });
@@ -1677,7 +1783,7 @@ try {
       const c9 = await browser.newContext({ viewport: { width: 1520, height: 1000 }, colorScheme: scheme });
       await c9.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('org')); } catch (e) {} });
       const pg = await c9.newPage(); const e9 = []; pg.on('pageerror', (e) => e9.push(String(e))); pg.on('console', (m) => { if (m.type() === 'error') e9.push(m.text()); });
-      await pg.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json(); const N = j.org && j.org.nodes;
+      await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); const N = j.org && j.org.nodes;
         if (N && N[FX.sids.links]) Object.assign(N[FX.sids.links], { role: 'head', boss: FX.sids.peerDone, via: 'seat', n: 0, last: 0, handed: false });
         if (N && N[FX.sids.limit]) Object.assign(N[FX.sids.limit], { role: 'head', boss: FX.sids.projC, via: 'seat', n: 0, last: 0, handed: false });
         // 真实的分支负责人都开在总控台的 tmux 里（线上的分支窗口都是 channel: tmux），回话框才能打字；夹具里的 links 没有通道，这里补上
@@ -1744,7 +1850,7 @@ try {
     const at1143 = (page) => page.evaluate(() => { const d = new Date(); d.setHours(11, 43, 0, 0); return d.getTime(); });
     const C = (o) => ({ id: 'cTEST', at: null, n: 20, done: 0, fail: 0, why: null, load: null, waitSince: null, next: null, max: 30, ...o });
     const hook = async (page) => {
-      await page.route('**/api/state*', async (r) => { const res = await r.fetch(); const j = await res.json(); j.crash = CR; for (const x of j.lost || []) { x.crash = CR ? CR.id : null; x.idle = !!CR; } await r.fulfill({ response: res, json: j }); });
+      await page.route('**/api/state*', async (r) => { const res = await fullState(r); const j = await res.json(); j.crash = CR; for (const x of j.lost || []) { x.crash = CR ? CR.id : null; x.idle = !!CR; } await r.fulfill({ response: res, json: j }); });
       await page.route('**/api/crash', async (r) => { posts.push(JSON.parse(r.request().postData() || '{}')); await r.fulfill({ json: { ok: true } }); });
     };
     const setCR = async (page, c) => { CR = c && c.at === null ? { ...c, at: await at1143(page) } : c; await page.evaluate(() => refresh()); await sleep(1200); };
@@ -1810,6 +1916,8 @@ try {
       ok(errs.length === 0, '横幅 · 浅色：页面没报错', errs.join(' | ')); await ctx.close();
     }
   }
+  await snoozeCheck();     // 先放着带时间（会在服务里记推迟，段末清掉）
+  await deltaCheck();      // 只回变过的（拉数据瘦身）：会真的归档一个夹具会话，所以放在最后
 } catch (e) { if (e !== ONLY_DONE) throw e; } finally { await browser.close(); }
 console.log(`\n界面结果：${pass} 过，${fail} 没过；截图在 ${OUT}`);
 process.exit(fail ? 1 : 0);

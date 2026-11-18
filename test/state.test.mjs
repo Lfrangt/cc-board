@@ -1333,6 +1333,222 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     const rd = (f) => { try { return fs.readFileSync(path.join(D2, f), 'utf8'); } catch { return null; } };
     ok(roUp && rd('pins.json') === pinsTxt && rd('spawn.json') === spawnTxt && rd('server.json') === null, 'datalock: 只读的服务（CCBOARD_READONLY=1）不往数据目录写：tmux 里没有的窗格照样不从 pins / spawn 里删，也不记 server.json', JSON.stringify({ roUp, pins: rd('pins.json'), spawn: rd('spawn.json'), server: rd('server.json') }));
   }
+
+  // ── 只回变过的（拉数据瘦身）：另起一份服务（T_PORT + 400），自己的假主目录里 60 个不动的会话（3 个在跑但没有新记录、57 个歇着）。
+  //    主夹具里 run / compact / hint 每 0.8 秒加记录，凑不出「60 个都没变」，所以单独搭。放在 [8] 前面：和 datalock 一样要等十几秒 ──
+  const V_CAP = 512;   // 60 个会话都没变时一次应答的上限（字节）：外壳 + 3 个在跑会话的 quiet。实际字节数和同一刻整份的字节数都打在断言名里
+  console.log('\n[2v] 只回变过的：界面带版本号拉 /api/state，60 个会话都没变时应答 ≤ ' + V_CAP + ' 字节；改了一个只回那一个；不见了的给名单；两个页面各拿各的；重启后整份；不带版本号的老读法一个字段都不变');
+  {
+    const VPORT = PORT + 400, VH = path.join(ROOT, 'vhome'), VSESS = path.join(VH, '.claude/sessions'), VCWD = path.join(VH, 'work');
+    const VPROJ = path.join(VH, '.claude/projects', VCWD.replace(/[^A-Za-z0-9]/g, '-')), VDATA = path.join(ROOT, 'vdata');
+    for (const d of [VSESS, VCWD, VPROJ, VDATA]) fs.mkdirSync(d, { recursive: true });
+    const V = [], vT0 = Date.now() - 600000;
+    for (let i = 0; i < 60; i++) {
+      const c = spawn('/bin/sleep', ['900'], { stdio: 'ignore' }); kids.push(c.pid);
+      const x = { sid: 'v' + String(i).padStart(7, '0') + '-0000-4000-8000-' + String(c.pid).padStart(12, '0'), pid: c.pid, busy: i < 3 };
+      x.file = path.join(VPROJ, x.sid + '.jsonl');
+      fs.writeFileSync(x.file, [R.human('第 ' + i + ' 件事'), R.tool(), R.result(), ...(x.busy ? [] : [R.final('第 ' + i + ' 件做完了。')])].map((r) => JSON.stringify(r)).join('\n') + '\n');
+      fs.writeFileSync(path.join(VSESS, x.pid + '.json'), JSON.stringify({ pid: x.pid, sessionId: x.sid, cwd: VCWD, startedAt: vT0 + i * 1000, kind: 'interactive', entrypoint: 'cli',
+        name: 'v-' + i, nameSource: 'derived', status: x.busy ? 'busy' : 'idle', statusUpdatedAt: vT0, updatedAt: vT0 }));
+      V.push(x);
+    }
+    // 自己的 tmux 套接字目录（不存在的服务器）：不和主夹具共用 <TMUXDIR>/tmux/，免得它的「启动中」跟着主夹具的窗口变
+    // CCBOARD_STATE_GONE_MAX=2：不见了的名单只记 2 个，第 3 个不见了就忘掉最早那个（第 7b 步测「拿着比忘掉的还早的版本号来 → 整份」）
+    const venv = { ...env, HOME: VH, CCBOARD_PORT: String(VPORT), CCBOARD_PREVIEW_PORT: String(VPORT + 1000), CCBOARD_DATA: VDATA, CCBOARD_TMUX_SOCKET: path.join(TMUXDIR, 'v', 'ccboard.sock'), CCBOARD_STALL_MS: '3600000', CCBOARD_STATE_GONE_MAX: '2' };
+    let vsrv = null, VTOK = '';
+    const vStart = async (extra = {}) => {      // 起来了回 true；端口先被别人占着、10 秒没起来回 false（调用的地方记一条红、跳过这一段，不让整份测试崩掉）
+      for (const p of [VPORT, VPORT + 1000]) { try { await fetch('http://127.0.0.1:' + p + '/health', { signal: AbortSignal.timeout(1500) }); return false; } catch {} }
+      const o = fs.openSync(path.join(ROOT, 'server-v.out'), 'a'); vsrv = spawn(NODE, [SERVER], { env: { ...venv, ...extra }, stdio: ['ignore', o, o] }); kids.push(vsrv.pid);
+      for (let i = 0; i < 50; i++) { await sleep(200); try { VTOK = fs.readFileSync(path.join(VDATA, '.token'), 'utf8').trim(); const h = await (await fetch('http://127.0.0.1:' + VPORT + '/health')).json(); if (h.ok && h.pid === vsrv.pid) return true; } catch {} }
+      return false;
+    };
+    const vStop = async () => { const p = vsrv && vsrv.pid; if (!(p > 1)) return; try { process.kill(p, 'SIGTERM'); } catch {} for (let i = 0; i < 25; i++) { await sleep(200); try { await fetch('http://127.0.0.1:' + VPORT + '/health'); } catch { break; } } };
+    const vraw = async (p) => { const r = await fetch('http://127.0.0.1:' + VPORT + p, { headers: { 'x-ccboard': VTOK } }); const b = Buffer.from(await r.arrayBuffer()); return { n: b.length, j: JSON.parse(b.toString('utf8')) }; };
+    const vget = async (p) => (await vraw(p)).j;
+    const LEGACY = ['now', 'sessions', 'others', 'ghostty', 'pending', 'home', 'notices', 'providers', 'archived', 'lost', 'crash', 'stallMs', 'sandbox', 'limits', 'org'];
+    const keysOf = (o) => Object.keys(o || {}).sort().join();
+    const noQuiet = (o) => JSON.stringify({ ...o, now: 0, v: undefined, full: undefined, peek: undefined, sessions: (o.sessions || []).map((s) => ({ ...s, quiet: 0 })) });
+    const vUp = await vStart();
+    ok(vUp, '[2v] 另起的一份服务（端口 ' + VPORT + '）起来了（没起来时这一段后面全跳过；先看端口 ' + VPORT + ' / ' + (VPORT + 1000) + ' 是不是被别人占着）', fs.existsSync(path.join(ROOT, 'server-v.out')) ? fs.readFileSync(path.join(ROOT, 'server-v.out'), 'utf8').slice(-300) : '');
+    v2: if (vUp) {
+    await until(async () => { try { return (await vget('/api/state?peek=1')).sessions.length === 60; } catch { return false; } }, 15000);
+    await sleep(2500);                                                         // 让几轮扫描过去：在跑的 3 个 quiet 涨起来
+
+    // 1) 不带版本号：和以前逐字段一样（总管、值班、脚本都这么读）
+    const L1 = await vget('/api/state?peek=1'), L2 = await vget('/api/state');
+    ok(keysOf(L1) === [...LEGACY, 'peek'].sort().join() && keysOf(L2) === [...LEGACY].sort().join() && L1.sessions.length === 60,
+      '不带版本号的老读法：字段一个不多一个不少（peek=1 多一个 peek），60 个会话整份给', JSON.stringify({ peek: keysOf(L1), plain: keysOf(L2), n: (L1.sessions || []).length }));
+    // 2) v=0（界面第一次拉、换了一台、拼不上时）：整份 + v + full，内容和老读法一样
+    const F0 = await vget('/api/state?v=0');
+    ok(F0.full === true && /^[0-9a-f]{8}\.\d+$/.test(F0.v || '') && keysOf(F0) === [...LEGACY, 'v', 'full'].sort().join() && noQuiet(F0) === noQuiet(L2),
+      '带 v=0：整份（full: true + 版本号 v），其余字段和内容跟老读法一模一样（quiet、now 除外）', JSON.stringify({ full: F0.full, v: F0.v, keys: keysOf(F0), same: noQuiet(F0) === noQuiet(L2) }));
+    // 3) 都没变：应答很小，没有会话、没有全局字段；在跑的 3 个只在 q 里给 quiet
+    await sleep(2500);
+    const U = await vraw('/api/state?v=' + encodeURIComponent(F0.v || '')), u = U.j;
+    const busySids = V.filter((x) => x.busy).map((x) => x.sid).sort().join();
+    ok(U.n <= V_CAP, '60 个会话都没变：一次应答 ' + U.n + ' 字节（上限 ' + V_CAP + '；同一刻整份是 ' + Buffer.byteLength(JSON.stringify(L2)) + '）', JSON.stringify(u).slice(0, 300));
+    ok(!('sessions' in u) && Array.isArray(u.changed) && u.changed.length === 0 && Array.isArray(u.gone) && u.gone.length === 0 && !('ids' in u) && keysOf(u) === 'base,changed,gone,notices,now,q,v' && u.base === F0.v && u.v !== undefined,
+      '都没变：changed / gone 是空的，不带 ids 和任何全局字段（limits、org、crash…），base 是界面带来的版本号', JSON.stringify({ keys: keysOf(u), changed: (u.changed || []).length, base: u.base }));
+    ok(Object.keys(u.q || {}).sort().join() === busySids && Object.values(u.q || {}).every((x) => x > 2000),
+      '在跑的会话「多久没动静」（quiet）每一拍都在涨，不算变了：只在 q 里给，歇着的（0）不给', JSON.stringify(u.q));
+    // 4) 改了一个：只回那一个
+    const one = V[10];
+    fs.appendFileSync(one.file, [R.human('第 10 件又来一句'), R.tool()].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    await sleep(2500);
+    const C1 = await vget('/api/state?v=' + encodeURIComponent(u.v || '')), Lc = await vget('/api/state?peek=1');
+    const lOne = Lc.sessions.find((s) => s.sid === one.sid), cOne = (C1.changed || [])[0];
+    ok((C1.changed || []).map((s) => s.sid).join() === one.sid && C1.gone.length === 0 && !('ids' in C1),
+      '改了一个会话：changed 里只有它，gone 空，先后没变不带 ids', JSON.stringify({ changed: (C1.changed || []).map((s) => s.sid.slice(0, 8)), gone: C1.gone, ids: 'ids' in C1 }));
+    ok(!!cOne && cOne.prompt === '第 10 件又来一句' && JSON.stringify({ ...cOne, quiet: 0 }) === JSON.stringify({ ...lOne, quiet: 0 }),
+      '改了的那个整个给，内容和同一刻老读法里的它一样', JSON.stringify({ prompt: cOne && cOne.prompt }));
+    // 5) 两个页面：B 拿着新的版本号什么都不收；A 还拿着早先的版本号，照样收到这之后改过的那一个（B 先拉不会吃掉 A 的）
+    const B2 = await vget('/api/state?v=' + encodeURIComponent(C1.v || '')), A2 = await vget('/api/state?v=' + encodeURIComponent(u.v || ''));
+    ok((B2.changed || []).length === 0 && (A2.changed || []).map((s) => s.sid).join() === one.sid,
+      '两个页面同时拉：各拿各的版本号，新的什么都不收，旧的照样收到之后改过的会话', JSON.stringify({ b: (B2.changed || []).length, a: (A2.changed || []).map((s) => s.sid.slice(0, 8)) }));
+    // 6) 不见了一个（进程没了）：gone 给名单，ids 是新的先后，changed 不带它
+    const dead = V[20]; if (dead.pid > 1) try { process.kill(dead.pid, 'SIGTERM'); } catch {}
+    const G1 = await until(async () => { const g = await vget('/api/state?v=' + encodeURIComponent(B2.v || '')); return g.gone && g.gone.length ? g : null; }, 10000) || {};
+    ok(JSON.stringify(G1.gone) === JSON.stringify([dead.sid]) && Array.isArray(G1.ids) && G1.ids.length === 59 && !G1.ids.includes(dead.sid) && !(G1.changed || []).some((s) => s.sid === dead.sid),
+      '会话不见了：gone 里是它，ids 是剩下 59 个的新先后，changed 里没有它', JSON.stringify({ gone: G1.gone, ids: G1.ids && G1.ids.length, changed: (G1.changed || []).map((s) => s.sid.slice(0, 8)) }));
+    ok(Array.isArray(G1.ids) && JSON.stringify(G1.ids) === JSON.stringify((await vget('/api/state?peek=1')).sessions.map((s) => s.sid)),
+      'ids 的先后就是老读法里 sessions 的先后', JSON.stringify((G1.ids || []).slice(0, 3)));
+    ok(!!G1.org && !!G1.org.nodes && Object.keys(G1.org.nodes).length === 59 && !(dead.sid in G1.org.nodes) && !('limits' in G1) && !('providers' in G1),
+      '全局字段变了才给：会话不见了，架构（org）跟着变、这一拍给新的（59 个，没有它）；额度、providers 没变不给', JSON.stringify({ org: !!G1.org, nodes: G1.org && G1.org.nodes && Object.keys(G1.org.nodes).length, limits: 'limits' in G1, providers: 'providers' in G1 }));
+    // 7) 版本号认不出的：乱写的、将来的，都回整份
+    const boot = String(F0.v || '').split('.')[0];
+    const Z1 = await vget('/api/state?v=zz'), Z2 = await vget('/api/state?v=' + boot + '.99999999');
+    ok(Z1.full === true && Z2.full === true && Z1.sessions.length === 59 && Z2.sessions.length === 59, '版本号认不出（乱写的、比现在还新的）：回整份', JSON.stringify({ z1: Z1.full, z2: Z2.full }));
+    // 7b) 不见了的名单记不下（这份服务调成只记 2 个）：又不见了 2 个，最早那个（第 6 步的）被忘掉。
+    //     拿着它不见之前的版本号（B2）来：服务说不清这之后还少了谁，回整份；拿着它不见那一刻的版本号（G1）来：照样只回变过的，gone 是后来的 2 个
+    const dead2 = [V[21], V[22]]; for (const x of dead2) if (x.pid > 1) try { process.kill(x.pid, 'SIGTERM'); } catch {}
+    const H1 = await until(async () => { const h = await vget('/api/state?v=' + encodeURIComponent(G1.v || '')); return h.gone && h.gone.length === 2 ? h : null; }, 10000) || {};
+    const H2 = await vget('/api/state?v=' + encodeURIComponent(B2.v || ''));
+    ok(!H1.full && JSON.stringify((H1.gone || []).slice().sort()) === JSON.stringify(dead2.map((x) => x.sid).sort()) && H2.full === true && (H2.sessions || []).length === 57,
+      '不见了的名单记不下时：拿着比忘掉的还早的版本号来回整份（57 个），拿着忘掉那一刻的版本号来照样只回后来不见的 2 个', JSON.stringify({ h1full: H1.full, h1gone: (H1.gone || []).length, h2full: H2.full, h2n: (H2.sessions || []).length }));
+    // 8) 重启（只读模式重起，顺带核只读的服务也能增量）：拿着上一台的版本号来，回整份、启动号换了；序号恰好落在新一台的范围里也认得出
+    const oldV = H1.v || G1.v || '';
+    await vStop();
+    if (!(await vStart({ CCBOARD_READONLY: '1' }))) { ok(false, '[2v] 只读重起的那份服务没起来', ''); break v2; }
+    await until(async () => { try { return (await vget('/api/state?peek=1')).sessions.length === 57; } catch { return false; } }, 15000);
+    const R0 = await vget('/api/state?v=' + encodeURIComponent(oldV)), R1 = await vget('/api/state?v=' + encodeURIComponent(boot + '.1'));
+    ok(R0.full === true && R0.sessions.length === 57 && String(R0.v || '').split('.')[0] !== boot,
+      '服务重启后拿着上一台的版本号来：回整份（full），启动号换了，界面不会拿旧的接着拼', JSON.stringify({ full: R0.full, v: R0.v, old: oldV }));
+    ok(R1.full === true && R1.sessions.length === 57, '上一台的版本号、序号恰好落在新一台的范围里（.1）：也认得出换了一台，回整份', JSON.stringify({ full: R1.full, v: R1.v }));
+    await sleep(1500);
+    const R2 = await vraw('/api/state?v=' + encodeURIComponent(R0.v || ''));
+    ok(R2.j.full === undefined && Array.isArray(R2.j.changed) && R2.j.changed.length === 0 && R2.n <= V_CAP, '只读的服务（CCBOARD_READONLY=1）照样只回变过的：没变时 ' + R2.n + ' 字节', JSON.stringify(R2.j).slice(0, 200));
+    }
+    await vStop();
+  }
+  // ── 「先放着」带时间：另起一份服务（T_PORT + 500），自己的假主目录里 6 个歇着、刚交付了【待跟进】的会话。
+  //    该醒：又交付了一次【待跟进】、停下来等你选（登记里的状态改成 waiting）、他自己回了话、到点（中间被【进展】盖住的那件事翻回待跟进）；
+  //    不该醒：别的窗口开的轮又交付了【进展】、【待审阅】。服务重启推迟还在；刚发了话、这一轮还没交付的不让推迟；界面看到的不是现在这次交付不让推迟；坏输入 400 ──
+  console.log('\n[3s] 先放着带时间：推迟记在服务（snooze.json）；推迟中只有新的【待跟进】、停下来等你选、到点才醒，【进展】【待审阅】不醒；服务重启照样记得；刚发了话的不让推迟；坏输入');
+  {
+    const ZPORT = PORT + 500, ZH = path.join(ROOT, 'zhome'), ZSESS = path.join(ZH, '.claude/sessions'), ZCWD = path.join(ZH, 'work');
+    const ZPROJ = path.join(ZH, '.claude/projects', ZCWD.replace(/[^A-Za-z0-9]/g, '-')), ZDATA = path.join(ROOT, 'zdata'), ZOUT = path.join(ROOT, 'server-z.out');
+    for (const d of [ZSESS, ZCWD, ZPROJ, ZDATA]) fs.mkdirSync(d, { recursive: true });
+    const Z = {}, zT0 = Date.now() - 600000;
+    const zreg = (x, status) => fs.writeFileSync(path.join(ZSESS, x.pid + '.json'), JSON.stringify({ pid: x.pid, sessionId: x.sid, cwd: ZCWD, startedAt: x.at, kind: 'interactive', entrypoint: 'cli', name: 'z-' + x.name, nameSource: 'derived', status, statusUpdatedAt: zT0, updatedAt: zT0 }));
+    const zadd = (x, recs) => fs.appendFileSync(x.file, recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    ['reply', 'ask', 'due', 'keep', 'sent', 'bad', 'you', 'raise'].forEach((name, i) => {
+      const c = spawn('/bin/sleep', ['900'], { stdio: 'ignore' }); kids.push(c.pid);
+      const x = { name, pid: c.pid, sid: 'z' + String(i).padStart(7, '0') + '-0000-4000-8000-' + String(c.pid).padStart(12, '0'), at: zT0 + i * 1000 };
+      x.file = path.join(ZPROJ, x.sid + '.jsonl'); fs.writeFileSync(x.file, '');
+      zadd(x, [R.human('第 ' + i + ' 件事'), R.tool(), R.result(), R.final('做好了两版。\n\n【待跟进】回 A 或 B')]); zreg(x, 'idle'); Z[name] = x;
+    });
+    const zenv = { ...env, HOME: ZH, CCBOARD_PORT: String(ZPORT), CCBOARD_PREVIEW_PORT: String(ZPORT + 1000), CCBOARD_DATA: ZDATA, CCBOARD_TMUX_SOCKET: path.join(TMUXDIR, 'z', 'ccboard.sock'), CCBOARD_STALL_MS: '3600000' };
+    let zsrv = null, ZTOK = '';
+    const zStart = async () => {      // 起来了回 true；端口先被别人占着、10 秒没起来回 false
+      for (const p of [ZPORT, ZPORT + 1000]) { try { await fetch('http://127.0.0.1:' + p + '/health', { signal: AbortSignal.timeout(1500) }); return false; } catch {} }
+      const o = fs.openSync(ZOUT, 'a'); zsrv = spawn(NODE, [SERVER], { env: zenv, stdio: ['ignore', o, o] }); kids.push(zsrv.pid);
+      for (let i = 0; i < 50; i++) { await sleep(200); try { ZTOK = fs.readFileSync(path.join(ZDATA, '.token'), 'utf8').trim(); const h = await (await fetch('http://127.0.0.1:' + ZPORT + '/health')).json(); if (h.ok && h.pid === zsrv.pid) return true; } catch {} }
+      return false;
+    };
+    const zStop = async () => { const p = zsrv && zsrv.pid; if (!(p > 1)) return; try { process.kill(p, 'SIGTERM'); } catch {} for (let i = 0; i < 25; i++) { await sleep(200); try { await fetch('http://127.0.0.1:' + ZPORT + '/health'); } catch { break; } } };
+    const zget = async (p) => (await fetch('http://127.0.0.1:' + ZPORT + p, { headers: { 'x-ccboard': ZTOK } })).json();
+    const zpost = async (p, body) => { const r = await fetch('http://127.0.0.1:' + ZPORT + p, { method: 'POST', headers: { 'x-ccboard': ZTOK, 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { code: r.status, body: await r.json().catch(() => ({})) }; };
+    const zs = async () => Object.fromEntries((await zget('/api/state?peek=1')).sessions.map((x) => [x.sid, x]));
+    const zlog = () => (fs.existsSync(ZOUT) ? fs.readFileSync(ZOUT, 'utf8') : '').split('\n').filter((l) => l.startsWith('snooze '));
+    const woke = (x, why) => zlog().some((l) => l.includes(' ' + x.sid.slice(0, 8) + ' wake ' + why));
+    const zfile = () => { try { return JSON.parse(fs.readFileSync(path.join(ZDATA, 'snooze.json'), 'utf8')); } catch { return null; } };
+    const zUp = await zStart();
+    ok(zUp, '[3s] 另起的一份服务（端口 ' + ZPORT + '）起来了（没起来时这一段后面全跳过；先看端口 ' + ZPORT + ' / ' + (ZPORT + 1000) + ' 是不是被别人占着）', fs.existsSync(ZOUT) ? fs.readFileSync(ZOUT, 'utf8').slice(-300) : '');
+    z3: if (zUp) {
+      await until(async () => { try { const S = await zs(); return Object.values(Z).every((x) => S[x.sid] && S[x.sid].digest && S[x.sid].digest.need === 'reply'); } catch { return false; } }, 15000);
+      const hour = Date.now() + 3600e3;
+      // 坏输入
+      const b1 = await zpost('/api/snooze', { sid: 'nope0000-0000-4000-8000-000000000000', until: hour });
+      const b2 = await zpost('/api/snooze', { sid: Z.bad.sid, until: Date.now() - 1000 });
+      const b3 = await zpost('/api/snooze', { sid: Z.bad.sid, until: Date.now() + 49 * 3600e3 });
+      const b4 = await zpost('/api/snooze', { sid: Z.bad.sid, until: String(hour) });
+      ok([b1, b2, b3, b4].every((b) => b.code === 400 && b.body.ok === false) && !(await zs())[Z.bad.sid].snooze && zfile() === null,
+        '坏输入一律 400、什么都不记：墙上没有的会话、时间在过去、超过 48 小时、时间不是数字', JSON.stringify([b1, b2, b3, b4].map((b) => [b.code, b.body.error])));
+      // 刚发了话（这一轮还没交付）：不让推迟
+      zadd(Z.sent, [R.human('再改一下 B')]);
+      await until(async () => (await zs())[Z.sent.sid].prompt === '再改一下 B', 8000);
+      const s1 = await zpost('/api/snooze', { sid: Z.sent.sid, until: hour });
+      ok(s1.code === 200 && s1.body.ok === false && /刚发了话/.test(s1.body.error || '') && !(await zs())[Z.sent.sid].snooze,
+        '刚发了话、这一轮还没交付的：不让推迟（回 ok:false 和原因，不记）', JSON.stringify(s1));
+      const s2 = await zpost('/api/snooze', { sid: Z.bad.sid, until: hour, at: '2000-01-01T00:00:00.000Z' });
+      ok(s2.code === 200 && s2.body.ok === false && /又交付/.test(s2.body.error || '') && !(await zs())[Z.bad.sid].snooze,
+        '界面带来的 at（它看到的那一次交付）不是现在这一次：不让推迟（菜单开着时它又交付了）', JSON.stringify(s2));
+      // 推迟 6 个：reply / ask / keep / you 推一小时，due / raise 推 8 秒（界面带上它看到的那一次交付 at）
+      const S0 = await zs(), P = {};
+      for (const n of ['reply', 'ask', 'keep', 'you']) P[n] = await zpost('/api/snooze', { sid: Z[n].sid, until: hour, at: S0[Z[n].sid].resultAt });
+      for (const n of ['due', 'raise']) P[n] = await zpost('/api/snooze', { sid: Z[n].sid, until: Date.now() + 8000, at: S0[Z[n].sid].resultAt });
+      zadd(Z.raise, [R.peer('win-zz', '顺手把 C 也看一下'), R.tool(), R.result(), R.final('C 也看过了。\n\n【进展】C 看完了')]);     // 推迟中别的窗口开的一轮，交付【进展】，到点前盖住「回 A 或 B」
+      const S1 = await zs(), F1 = zfile() || {}, SIX = ['reply', 'ask', 'due', 'keep', 'you', 'raise'];
+      ok(Object.values(P).every((x) => x.code === 200 && x.body.ok && x.body.until > Date.now()) && SIX.every((n) => S1[Z[n].sid].snooze && S1[Z[n].sid].snooze.at === S0[Z[n].sid].resultAt && F1[Z[n].sid] && F1[Z[n].sid].ask === '回 A 或 B') && Object.keys(F1).length === 6 && zlog().filter((l) => / set /.test(l)).length === 6,
+        '推迟 6 个：/api/state 里各带 snooze（until、推迟的是哪一次交付 at），snooze.json 里 6 条、各记着那件事（ask），日志 6 行 set', JSON.stringify({ P: Object.values(P).map((x) => x.code), file: Object.keys(F1).length }));
+      // 不该醒：推迟中别的窗口开的轮交付了【进展】，又交付了【待审阅】
+      zadd(Z.reply, [R.peer('win-zz', '先别管 A，看下 C'), R.tool(), R.result(), R.final('C 看过了，和 A 差不多。\n\n【进展】C 看完了')]);
+      const n1 = await until(async () => { const x = (await zs())[Z.reply.sid]; return x.done && x.digest && x.digest.need === 'fyi' && x.resultAt !== S1[Z.reply.sid].resultAt ? x : null; }, 8000) || {};
+      await sleep(1500);
+      const n1b = (await zs())[Z.reply.sid];
+      zadd(Z.reply, [R.peer('win-zz', '再看下 D'), R.tool(), R.result(), R.final('D 做好了，截图在桌面。\n\n【待审阅】D 的截图')]);
+      const n2 = await until(async () => { const x = (await zs())[Z.reply.sid]; return x.done && x.digest && x.digest.need === 'review' ? x : null; }, 8000) || {};
+      await sleep(1500);
+      const n2b = (await zs())[Z.reply.sid];
+      ok(n1.digest && !!n1b.snooze && n2.digest && !!n2b.snooze && n2b.digest.need === 'review' && !woke(Z.reply, '') && !!(zfile() || {})[Z.reply.sid],
+        '不该醒：推迟中别的窗口开的轮又交付了【进展】、又交付了【待审阅】，都还在推迟（snooze 还在、snooze.json 里还在、没有 wake 日志）', JSON.stringify({ n1: n1b.snooze, need1: n1.digest && n1.digest.need, n2: n2b.snooze, need2: n2b.digest && n2b.digest.need }));
+      // 该醒 1：推迟中又交付了一次【待跟进】
+      zadd(Z.reply, [R.peer('win-zz', '那 D 和 A 选哪个'), R.tool(), R.result(), R.final('两个都能用。\n\n【待跟进】回 A 或 D')]);
+      const w1 = await until(async () => { const x = (await zs())[Z.reply.sid]; return x.done && x.digest && x.digest.need === 'reply' && x.resultAt !== n2b.resultAt && !x.snooze ? x : null; }, 8000) || {};
+      await until(() => woke(Z.reply, 'reply'), 5000);
+      ok(!!w1.sid && !w1.snooze && woke(Z.reply, 'reply') && !(zfile() || {})[Z.reply.sid], '该醒：推迟中又交付了一次【待跟进】→ 醒（snooze 没了、snooze.json 里删了、日志 wake reply）', JSON.stringify({ snooze: w1.snooze, need: w1.digest && w1.digest.need }));
+      // 该醒 2：停下来等你选
+      zreg(Z.ask, 'waiting');
+      const w2 = await until(async () => { const x = (await zs())[Z.ask.sid]; return x.status === 'waiting' && !x.snooze ? x : null; }, 8000) || {};
+      await until(() => woke(Z.ask, 'ask'), 5000);
+      ok(w2.status === 'waiting' && !w2.snooze && woke(Z.ask, 'ask'), '该醒：推迟中停下来等你选（登记里的状态 waiting）→ 醒（日志 wake ask）', JSON.stringify({ status: w2.status, snooze: w2.snooze }));
+      // 该醒 3：他自己回了它（终端里说了一句）→ 醒；之后它交回来的【待审阅】照常是待审阅，不被推迟吞掉
+      zadd(Z.you, [R.human('选 A')]);
+      const w4 = await until(async () => { const x = (await zs())[Z.you.sid]; return x.prompt === '选 A' && !x.snooze ? x : null; }, 8000) || {};
+      await until(() => woke(Z.you, 'you'), 5000);
+      zadd(Z.you, [R.tool(), R.result(), R.final('按 A 做好了。\n\n【待审阅】A 的截图')]);
+      const w4b = await until(async () => { const x = (await zs())[Z.you.sid]; return x.done && x.digest && x.digest.need === 'review' ? x : null; }, 8000) || {};
+      ok(!!w4.sid && woke(Z.you, 'you') && !!w4b.sid && !w4b.snooze, '该醒：推迟中他自己回了话 → 醒（日志 wake you），之后交回来的【待审阅】照常显示、不带 snooze', JSON.stringify({ w4: !!w4.sid, snooze: w4b.snooze, need: w4b.digest && w4b.digest.need }));
+      // 该醒 4：到点。due 推迟后什么都没发生：照旧是待跟进；raise 推迟中被【进展】盖住了：到点后那一次交付改回待跟进、带推迟时那件事
+      const w3 = await until(async () => { const S = await zs(); return !S[Z.due.sid].snooze && !S[Z.raise.sid].snooze ? S : null; }, 15000) || {};
+      await until(() => woke(Z.due, 'due') && woke(Z.raise, 'due'), 5000);
+      await sleep(2500); const S3 = await zs();          // 隔两轮扫描再读：到点那一拍是就地改的，之后每一拍要照样改（不然下一拍又变回【进展】）
+      const d3 = (w3[Z.due.sid] || {}).digest || {}, r3 = (S3[Z.raise.sid] || {}).digest || {};
+      ok(!!w3[Z.due.sid] && woke(Z.due, 'due') && d3.need === 'reply' && !!(await zs())[Z.keep.sid].snooze, '该醒：到点 → 醒（日志 wake due），还是待跟进；没到点、什么都没发生的 keep 照旧推迟着', JSON.stringify({ due: d3.need, keep: !!(await zs())[Z.keep.sid].snooze }));
+      ok(woke(Z.raise, 'due raise') && r3.need === 'reply' && r3.ask === '回 A 或 B' && r3.raised === true && (S3[Z.raise.sid] || {}).resultAt !== S0[Z.raise.sid].resultAt,
+        '到点时那件事已经被后来的【进展】盖住：现在这一次交付改回待跟进，「要你做的事」是推迟时那句（日志 wake due raise）', JSON.stringify({ need: r3.need, ask: r3.ask, raised: r3.raised }));
+      // 服务重启：keep 还在推迟（读 snooze.json）
+      await zStop();
+      if (!(await zStart())) { ok(false, '[3s] 重起的服务没起来', ''); break z3; }
+      const r1 = await until(async () => { try { const x = (await zs())[Z.keep.sid]; return x && x.digest && x.digest.need ? x : null; } catch { return null; } }, 15000) || {};
+      ok(!!r1.snooze && r1.snooze.until === P.keep.body.until, '服务重启后推迟照样记得：keep 的 snooze 还在、到的时间一样', JSON.stringify(r1.snooze || null));
+      // 撤销
+      const c1 = await zpost('/api/snooze', { sid: Z.keep.sid, clear: true });
+      ok(c1.code === 200 && c1.body.ok && !(await zs())[Z.keep.sid].snooze && !(zfile() || {})[Z.keep.sid] && zlog().some((l) => l.includes(' ' + Z.keep.sid.slice(0, 8) + ' clear')),
+        '撤销（clear: true）：snooze 没了、snooze.json 里删了、日志 clear', JSON.stringify(c1));
+    }
+    await zStop();
+  }
   console.log('\n[8] config.json 写坏了：照常起来、记一行日志、用默认值（空项目表；自动点信任和 Codex 都关着）');
   clearArgv(); const n8 = await post('/api/new', { prompt: 'PW-8 服务重启以后还在', cwd: CWD, provider: 'claude' }); await readArgv();
   const nm8 = n8.body.name, s8 = Number(tmw(nm8, 'display', '-p', '#{pid}').stdout.trim()) || 0;

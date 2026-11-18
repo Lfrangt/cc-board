@@ -1098,6 +1098,48 @@ function crashView() {
   return { id: c.id, at: c.at, n: c.sids.length, done: c.done, fail: c.failed.length, state: c.state, why: c.why || null, load: c.load ?? null, waitSince: c.waitSince || null, next: c.next ?? (c.done + c.failed.length + 1), max: LOAD_MAX };
 }
 
+// ───────────── 「先放着」带时间 ─────────────
+// 待跟进的卡点「先放着」，选 1 小时 / 今晚 / 明早 9 点：推迟的是「这一次交付」，记在服务（<数据目录>/snooze.json），服务重启照样记得、到点照样醒。
+// 推迟中只有两种情形提前醒：又交付了一次而且是【待跟进】（要他拍板的新事），或停下来等他选（选择框 / 弹框）。
+// 【进展】【待审阅】、在跑都不叫醒：长任务会自己交付好几次，不能因此把推迟了的卡又翻上来。停住了（alert）不归这里管，卡片照常显示。
+// 刚发了话、这一轮还没交付的不让推迟：要推迟的那次交付还没来。
+const SNOOZE_FILE = path.join(DATA, 'snooze.json');
+const SNOOZE_MAX_MS = 48 * 3600e3;
+let snoozes = {};   // sid → { until（毫秒）, at（推迟的那一次交付的 resultAt）, setAt }
+try {
+  const j = JSON.parse(fs.readFileSync(SNOOZE_FILE, 'utf8'));
+  if (j && typeof j === 'object' && !Array.isArray(j)) for (const [sid, z] of Object.entries(j)) if (/^[\w-]{8,64}$/.test(sid) && z && Number.isFinite(z.until) && typeof z.at === 'string') snoozes[sid] = { until: z.until, at: z.at, setAt: Number(z.setAt) || 0, ask: typeof z.ask === 'string' ? z.ask : '' };
+} catch {}
+function saveSnoozes() { if (READONLY) return; const tmp = SNOOZE_FILE + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(snoozes, null, 1)); fs.renameSync(tmp, SNOOZE_FILE); }
+function snoozeWake(s, z, now = Date.now()) {      // 该醒了回原因（due 到点 / ask 等你选 / reply 新的待跟进），没到回 null
+  if (!(now < z.until)) return 'due';
+  if (s.status === 'waiting' || s.ask) return 'ask';
+  if (s.promptAt && Date.parse(s.promptAt) > Date.parse(z.at) && !isAutoPrompt(s.prompt || '')) return 'you';   // 他自己回了它（终端里或卡片上）：推迟作废，之后它交回来的照常显示
+  if (s.done && s.resultAt && String(s.resultAt) !== z.at && s.digest && s.digest.need === 'reply') return 'reply';
+  return null;
+}
+// 到点醒来时，推迟的那件事已经被后来的交付（【进展】【待审阅】）盖住了：把现在这一次交付改回待跟进、带推迟时那件事（和小模型判 yours 一样的改法）。
+// 它再交付一次就作废（只认 at 这一次）。只在内存：服务在这中间重启，卡片照最新交付算。
+const raised = new Map();   // sid → { at, ask }
+function applyRaised(o) {
+  const r = raised.get(o.sid);
+  if (!r || r.at !== String(o.resultAt) || !o.digest || o.digest.need === 'reply') return;
+  o.digest = { ...o.digest, need: 'reply', ask: r.ask || o.digest.ask || null, raised: true };
+}
+function watchSnooze() {          // 每轮扫描后：该醒的从表里拿掉、记一行日志。不在墙上的会话只等到点（服务刚起、还没扫到它时不能当它没了）
+  const now = Date.now(), by = new Map(allSessions.map((x) => [x.sid, x])); let dirty = false;
+  for (const [sid, z] of Object.entries(snoozes)) {
+    const s = by.get(sid), why = !(now < z.until) ? 'due' : s ? snoozeWake(s, z, now) : null;
+    if (!why) continue;
+    delete snoozes[sid]; dirty = true;
+    if (why === 'due' && s && s.done && s.resultAt && String(s.resultAt) !== z.at && s.digest && s.digest.need !== 'reply') { raised.set(sid, { at: String(s.resultAt), ask: z.ask || '' }); applyRaised(s); }
+    console.log(`snooze ${new Date().toISOString()} ${sid.slice(0, 8)} wake ${why}${raised.has(sid) && why === 'due' ? ' raise' : ''}`);
+  }
+  for (const [sid, r] of raised) { const s = by.get(sid); if (!s || String(s.resultAt) !== r.at) raised.delete(sid); }
+  if (dirty) try { saveSnoozes(); } catch (e) { console.log(`snooze ${new Date().toISOString()} 写不进 snooze.json：${e.message}`); }
+}
+const withSnooze = (o) => { const z = snoozes[o.sid]; return z && !snoozeWake(o, z) ? { ...o, snooze: { until: z.until, at: z.at } } : o; };   // 给界面：推迟中的会话多一个 snooze
+
 // 系统通知：你不在总控台前面时才发；几个窗口一起停（比如额度用完）合成一条；启动后的第一轮只记账不发。
 const WHY = { limit: '额度用完了', auth: '登录过期了', flagged: '被安全检查拦了', error: '报错了', interrupt: '被打断了', unfinished: '没做完就停了', stall: '可能卡住了', gone: '进程退出了', crash: '一起退出了' };
 const alerted = new Map();     // sid → 已经提醒过的 key
@@ -1172,6 +1214,7 @@ function scanSessions() {
   if (readOk) watchGone(out, seen);                        // 要在清掉 tracks 之前：记「它当时的对话记录在哪」。读不到会话登记的那一轮不判（不然所有窗口同一拍「不见」）
   for (const k of [...tracks.keys()]) if (!seen.has(k)) tracks.delete(k);
   for (const o of out) { applyJudged(o); applyAuto(o); }
+  for (const o of out) applyRaised(o);                                       // 先放着到点、那件事被后来的交付盖住了：改回待跟进
   out.sort((a, b) => (a.order - b.order) || (a.startedAt - b.startedAt));
   let dirty = false;
   for (const [sid, it] of Object.entries(archive.items)) {
@@ -1186,6 +1229,7 @@ function scanSessions() {
   allSessions = out; otherCount = others;
   sessions = out.filter((x) => !archive.items[x.sid]);
   try { markWrites(out, sessions); } catch (e) { console.error('writes', e); }   // 这一轮改了哪些文件；墙上的会话两两比撞车（出错不拖垮这一轮扫描）
+  watchSnooze();
   watchAlerts();
   watchTidy();
 }
@@ -1624,6 +1668,7 @@ function archiveSession(sid, force, auto) {      // auto = 自动收工的理由
 // 绝不收：在跑 / 等你选 / 停住了（有 alert）/ 待跟进 / 它说后台还在跑 / 这一轮没收尾 / 还没交付过。
 const tidySpan = (ms) => (ms < 90000 ? '几十秒' : ms < 5400000 ? Math.round(ms / 60000) + ' 分钟' : Math.round(ms / 3600000) + ' 小时');
 function tidyDue(s, now) {
+  if (snoozes[s.sid]) return null;                                                          // 先放着的不收：它推迟中又交付了【进展】，到点要回来
   if (s.status !== 'idle' || s.ask || s.alert || !s.done || !s.result || !s.digest) return null;
   const need = s.digest.need;                                                                // 下面四条线各认自己的 need：reply（待跟进）、bg（后台还在跑）哪条都不沾
   const t0 = Date.parse(s.resultAt || ''); if (!t0) return null;
@@ -2323,6 +2368,49 @@ function readBody(req, max = 400000) {
   });
 }
 
+// ───────────── /api/state?v=：只回变过的 ─────────────
+// 界面每 1.5 秒拉一次，60 个窗口的整份约 300 KB，两次之间多数会话一个字都没变。带版本号来拉，服务只回这之后变过的：
+//   v=<启动号>.<序号>。启动号每次起服务换一个；拿着上一台的、认不出的（v=0）、比忘掉的还早的，回整份（full: true）。
+//   会话：变过的整个给（changed）；不见了的给名单（gone）；先后或成员变了给 ids（墙上的先后）。
+//   quiet（在跑的会话多久没动静）每一拍都在涨，不算「变了」，不是 0 的单独放在 q 里。
+//   全局字段（limits、org、crash、lost…）各自比，变了才给；now、notices 每次都给（notices 照旧只有不带 peek 的取走）。
+// 不带 v 的老读法一个字段都不变：总管、值班、各种脚本都用 ?peek=1 读整份。
+// 记账只在带 v 的请求里做：同一份 out 里每个会话跟上一次比，变了记下这一次的序号。几个页面同时拉也一样（每个页面带自己的 v）。
+const ST_BOOT = crypto.randomBytes(4).toString('hex');
+const ST_KEEP = new Set(['now', 'sessions', 'notices', 'peek']);     // 每次都给，或者另算
+const ST_GONE_MAX = Number(process.env.CCBOARD_STATE_GONE_MAX) || 500;   // 不见了的名单最多记这么多；更早的忘掉，拿着更早版本号来的回整份（测试调小）
+const stSess = new Map(), stGlob = new Map(), stGone = new Map();   // sid → { j, at }；字段名 → { j, at }；sid → 不见了的那一次
+let stSeq = 0, stFloor = 0;
+function stateSince(out, v) {
+  let bumped = false; const at = () => (bumped ? stSeq : (bumped = true, ++stSeq));
+  const seen = new Set();
+  for (const s of out.sessions) {
+    seen.add(s.sid); stGone.delete(s.sid);
+    const j = JSON.stringify({ ...s, quiet: undefined }), c = stSess.get(s.sid);
+    if (!c || c.j !== j) stSess.set(s.sid, { j, at: at() });
+  }
+  for (const sid of [...stSess.keys()]) if (!seen.has(sid)) { stSess.delete(sid); stGone.set(sid, at()); }
+  while (stGone.size > ST_GONE_MAX) { const [sid, a] = stGone.entries().next().value; stGone.delete(sid); stFloor = Math.max(stFloor, a); }
+  const glob = { ids: out.sessions.map((s) => s.sid) };
+  for (const k of Object.keys(out)) if (!ST_KEEP.has(k)) glob[k] = out[k];
+  for (const k of new Set([...Object.keys(glob), ...stGlob.keys()])) {
+    const j = k in glob ? JSON.stringify(glob[k]) : undefined, c = stGlob.get(k);
+    if (!c || c.j !== j) stGlob.set(k, { j, at: at() });
+  }
+  const now = ST_BOOT + '.' + stSeq;
+  const m = /^([0-9a-f]{8})\.(\d{1,15})$/.exec(v || ''), base = m && m[1] === ST_BOOT ? Number(m[2]) : -1;
+  if (base < stFloor || base > stSeq) return { ...out, v: now, full: true };
+  const d = { now: out.now, v: now, base: v, changed: [], gone: [], q: {}, notices: out.notices };
+  for (const s of out.sessions) {
+    if (stSess.get(s.sid).at > base) d.changed.push(s);
+    if (typeof s.quiet === 'number' && s.quiet !== 0) d.q[s.sid] = s.quiet;
+  }
+  for (const [sid, a] of stGone) if (a > base) d.gone.push(sid);
+  for (const [k, c] of stGlob) if (c.at > base) d[k] = glob[k] ?? null;          // 没了的（或值是 undefined、整份里不出现的）给 null：不给的话界面会留着旧值
+  if (out.peek) d.peek = true;
+  return d;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (!/^(127\.0\.0\.1|localhost):\d+$/.test(req.headers.host || '')) return reply(res, 403, { error: 'bad host' });
@@ -2344,8 +2432,10 @@ const server = http.createServer(async (req, res) => {
         .map((x) => ({ sid: x.sid, provider: x.provider, title: x.title, cwd: x.cwd, prompt: x.prompt, lostAt: x.lostAt, crash: x.crash || null, idle: x.idle === true, project: x.project || classify(null, { title: x.title, prompt: x.prompt, cwd: x.cwd, home: HOME }) }));
       const out = { now: Date.now(), sessions: sessions.map((x) => withAuto(withSuggest(x))), others: otherCount, ghostty: ghosttyOk, pending: pending.filter((x) => !live.has(x.name)).map((x) => ({ ...x, project: classify(null, { prompt: x.prompt, cwd: x.cwd, home: HOME, pin: pinOf(x.name) }) })), home: HOME, notices, providers: providers(),
         archived: Object.values(archive.items).filter((x) => x.state !== 'restoring').length, lost, crash: crashView(), stallMs: STALL_MS, sandbox: SANDBOX, limits: LIMITS };
+      out.sessions = out.sessions.map(withSnooze);                                                       // 先放着带时间：推迟中（没到点、没被叫醒）的会话多一个 snooze
       out.org = orgSafe(); noteRoles(out.org);                                                             // 架构视图：谁归谁管（只读，peek 不 peek 一样）
       if (peek) out.peek = true; else notices = [];
+      if (u.searchParams.has('v')) return reply(res, 200, stateSince(out, u.searchParams.get('v')));   // 界面：只回变过的（见 stateSince）
       return reply(res, 200, out);
     }
     if (req.method === 'GET' && u.pathname === '/api/archive') {
@@ -2385,6 +2475,24 @@ const server = http.createServer(async (req, res) => {
         return reply(res, 200, { ok: true });
       }
       return reply(res, 400, { error: 'op 要是 cancel 或 now' });
+    }
+    if (u.pathname === '/api/snooze') {             // 「先放着」带时间：{ sid, until（毫秒）} 推迟它这一次交付；{ sid, clear: true } 撤销
+      const sid = String(body.sid || ''), s = sessions.find((x) => x.sid === sid), now = Date.now();
+      if (!s) return reply(res, 400, { ok: false, error: '墙上没有这个会话' });
+      if (body.clear === true) {
+        if (snoozes[sid]) { delete snoozes[sid]; saveSnoozes(); console.log(`snooze ${new Date().toISOString()} ${sid.slice(0, 8)} clear`); }
+        return reply(res, 200, { ok: true });
+      }
+      const until = Number(body.until);
+      if (typeof body.until !== 'number' || !Number.isFinite(until) || until <= now || until > now + SNOOZE_MAX_MS) return reply(res, 400, { ok: false, error: '时间不对：要在现在之后、48 小时以内' });
+      if (s.status === 'waiting' || s.ask) return reply(res, 200, { ok: false, error: '它在等你选，先放着会马上醒' });
+      // 刚发了话、这一轮还没交付：记录里他的话一进来这一轮就没收尾（done 是 false），在跑的是 busy；他的话比交付新也算（兜底）
+      if (s.status === 'busy' || !(s.done && s.result && s.resultAt) || (s.promptAt && Date.parse(s.promptAt) > Date.parse(s.resultAt))) return reply(res, 200, { ok: false, error: '刚发了话、它还没做完这一轮，不能先放着' });
+      if (body.at !== undefined && String(body.at) !== String(s.resultAt)) return reply(res, 200, { ok: false, error: '它刚又交付了一次，先看一眼新的' });   // 界面看到的那一次和现在的不是同一次
+      const ask = String((s.digest && (s.digest.ask || s.digest.head)) || '').slice(0, 300);
+      snoozes[sid] = { until: Math.round(until), at: String(s.resultAt), setAt: now, ask }; saveSnoozes();
+      console.log(`snooze ${new Date().toISOString()} ${sid.slice(0, 8)} set ${new Date(until).toISOString()}`);
+      return reply(res, 200, { ok: true, until: snoozes[sid].until });
     }
     if (u.pathname === '/api/processed') {          // 界面把「审完了」告诉服务：map 新增 / 更新，clear 撤销。只增不整份替换：几个页面同时开着，后开的空页面不会把别人的清掉
       const okSid = (x) => typeof x === 'string' && /^[\w-]{8,64}$/.test(x);
