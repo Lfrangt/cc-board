@@ -4,7 +4,8 @@
  [OUTPUT]: 提供总控台的全部界面：封面 / 墙 / 架构三个视图、卡片、回话框、新任务、归档、干净的对话；window.ccbNew / ccbBlank 给原生菜单调用
  [POS]: 单文件界面，没有构建步骤。一个会话算什么状态只在 view() 一处判断，排位、左上角的状态标志、顶栏计数、底下的点和 Dock 角标都从它来；
         「为什么停了」由服务端的 alert 给，「交付了什么、要不要你回」由服务端的 digest 给；这里只负责显示，记「先不管」（ccb_ack）和「审完了 / 先放着」（ccb_done）。看一眼、点开都不改状态。
-        ccb_done 经 syncDone() 告诉服务的 /api/processed（点的时候、撤销的时候、页面第一次轮询成功之后全发一遍）：服务端的自动收工只认他明确点过的「审完了」。
+        ccb_done 经 syncDone() 告诉服务的 /api/processed（点的时候、撤销的时候、页面第一次轮询成功之后和服务换了一台之后全发一遍）：服务端的自动收工只认他明确点过的「审完了」。
+        服务把各台设备报上来的再经 /api/state 的 processed 发回来（srvDone）：本机 ccb_done 和 processed 任一对得上这一次交付就算处理过，在 Mac 上点了「审完了」，手机上也跟着消失。
         正文里的本机路径（file://、~/…、/Users/…、反引号里的路径）都变成可点的链接，点了交给服务的 /api/open；
         点了先走 openPreview()：向 /api/preview 要网址和类型，在 #preview 弹层里按类型显示（网页 / PDF 用 iframe，图和音视频用自己的元素，文本和 Markdown 排版显示）；不能预览的、⌘ 点照旧 /api/open。
         文件夹也先问服务：多半是图 / 视频的回 kind: gallery，排成格子墙（renderGallery），点一张放大、← → 翻页、Esc 先回格子墙；其余文件夹服务回 no-preview，照旧交给访达。
@@ -14,14 +15,17 @@
         放大看一张卡：⌘O（zoomTarget() 定哪一张）、双击卡片封面、右上角 ⤢，都走 zoomCard() → openDetail()。大窗口打开时滚到「最新交付」的第一行（标签青色、正文左边一道淡青线），不再落在最底。卡片右上角「归档」由服务定删还是留。
         预览、放大看开着时（两个都是 showModal，卡片被挡住），syncDock() 把来源那张卡自己的回话框（.ap / .sg / .reply，存在 el._ap / _sg / _rp 上）挪进弹层底部 #pDock / #dDock，关掉还回卡片；
         所以取回话框零件一律经 el._rp，不从卡片里查。预览的来源卡由 fromSid() 在点路径时记下（previewSid）。
+        ⌘Z 和提示条共用最近一次 6 秒内的审完了 / 先放着撤销；有字的输入框保留原生撤销。ccb_last 按会话存成功发出的上一句，空回话框按 ↑ 经 fillDraft 取回。
         回话框上的预判只读服务端的 suggest 字段（服务从终端屏幕读来的灰字建议和「下一步 1/2/3」）：灰字 Tab 收下，三条点一下或按数字键，都只是填进输入框当草稿，不自己发。
         新任务有两个入口：右上角（⌘N）和墙上每个列头的「＋ 新任务」；后者把那一列记在 newIn，goNew 带着它交给服务，新卡落进那一列。
         按项目分组只读服务端的 project 字段：setGroups() 定每张卡的组（封面里组太多时小组并进「其他」，墙上不并），byProject() 排先后，placeWall() 把墙排成一个项目一列，layout() 给封面的点加组名。
+        墙上「全部」把不要你管的卡收成 34 px 窄条（stripOf）；workGrace() 只给本页见过在跑的卡从看到停下的那一拍起 2 秒宽限，计数仍用真实状态；opened 记手动展开，新的交付清掉它。ccb_strip='off' 在载入时关闭窄条和宽限。
         墙上每列几格由 allot() 定：拖两列之间的分隔条（.gsplit，pointer 事件 → dragPaint() 跟手、endDrag() 吸附）记下的格数（ccb_span）先拿，其余照 lanes() 分，放不下的列挤成窄条（.squeezed，点一下 peek 先让它一格）。~/Projects/ccboard-launch-film 逐字读取本文件的样式表和 i18n 字典。
         架构视图（body.org）只照服务端的 org 画谁归谁管，不自己推：orgModel() 定画在哪（你 → 总管 → 每个项目一列：负责人的树、总管带、你直接带），paintOrg() 按 sid 复用方块（.onode 用墙上卡片同一套状态 class），
         orgLines() 量几何画 SVG 墨线，悬停 / 聚焦时 orgChain() 那一串加重并在 #otip 写依据（orgWhy）；orgFlights() 比前后两次轮询找刚到的消息，orgFly() 飞一个一次性的小点、收信人亮一下。
         架构图有两种摆法（顶栏「层级 | 放射」，ccb_orgshape）：层级是上面这一张；放射（#org.map）是同一份 org、同一批方块，你和总管在圆心、每个项目一个扇区、窗口按上下级一圈圈往外，
         orgMapLayout()（纯函数）算每个方块在哪，orgMapPaint() / orgMapArrange() 摆上去，orgMapLines() 画线，画布能拖能缩放（orgV、orgMapApply / orgMapFit / orgMapZoom）。
+        文件清单的 ± 用 openDiff 按需读取逐笔补丁；复用 #preview、来源卡片底栏。正文画布与字色均来自主题 token。
  [PROTOCOL]: Update this header on change, then check CLAUDE.md
 -->
 <html lang="zh-CN">
@@ -64,6 +68,8 @@
   --on-accent: light-dark(#fff, #002524);
   --attn: light-dark(#b25000, #ffb340);
   --danger: light-dark(#d70015, #ff6961);
+  --diff-add: color-mix(in srgb, var(--accent) 14%, transparent);
+  --diff-del: color-mix(in srgb, var(--danger) 12%, transparent);
   --hud: #2c2c30; --on-hud: #f2f2f4; --hud-accent: #5bd6d6;
   --bar: var(--surface);
   --scrim: light-dark(rgba(0,0,0,.28), rgba(0,0,0,.6));
@@ -91,7 +97,8 @@ button{background:none;border:0;padding:0;cursor:pointer}
 svg{display:block}
 
 /* 顶栏 */
-.bar{position:fixed;inset:0 0 auto 0;height:var(--bar-h);display:flex;align-items:center;gap:12px;padding:0 14px 0 var(--lead);background:var(--bar);border-bottom:var(--ink-w) solid var(--ink);z-index:200;user-select:none;-webkit-user-select:none}
+.bar{position:fixed;inset:0 0 auto 0;height:var(--bar-h);display:flex;align-items:center;gap:12px;padding:0 14px 0 var(--lead);background:var(--bar);border-bottom:var(--ink-w) solid var(--ink);z-index:200;user-select:none;-webkit-user-select:none;overflow-x:auto;scrollbar-width:none}
+.bar::-webkit-scrollbar{display:none}     /* 筛选变多时允许横向滚入控件，避免「新任务」被挤到窗口外后点不到。 */
 .brand{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
 .brand svg{flex:none;color:var(--text)}
 .seg{display:flex;padding:2px;border-radius:calc(var(--r-ctl) + 2px);background:var(--fill);gap:2px;flex:none;box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
@@ -101,6 +108,9 @@ svg{display:block}
 .seg button[aria-pressed="true"]{background:var(--thumb);color:var(--text);box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
 .seg button.ring b{color:var(--accent);font-weight:600} .seg button.attn b{color:var(--attn);font-weight:600}
 .seg button:disabled{opacity:.42;cursor:default}
+/* 筛选组先收缩并横向滚动，给额度和「新任务」留位置；按钮本身保留完整文字。 */
+#filters{flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
+#filters::-webkit-scrollbar{display:none} #filters button{flex:none}
 .spacer{flex:1;align-self:stretch;min-width:8px}
 .hint{color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .tbtn{height:28px;padding:0 10px;border-radius:8px;color:var(--text-2);white-space:nowrap;transition:background var(--d1) var(--ease)}
@@ -127,10 +137,11 @@ main{position:absolute;inset:var(--bar-h) 0 0 0}
 
 /* 视图一：墙（一屏 8 或 12 格） */
 body.wall main{overflow:auto;padding:var(--gap)}
-body.wall #stage{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--gap);grid-auto-rows:calc((100vh - var(--bar-h) - var(--gap) * 2 - (var(--rows) - 1) * var(--gap)) / var(--rows))}
+body.wall #stage{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--gap);grid-auto-rows:auto;--wall-h:calc((100vh - var(--bar-h) - var(--gap) * 2 - (var(--rows) - 1) * var(--gap)) / var(--rows))}
+body.wall #stage>.card:not(.strip){height:var(--wall-h)}
 @media (max-width:1500px){body.wall #stage{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media (max-width:1080px){body.wall #stage{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:700px){body.wall #stage{grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(340px,auto)}}
+@media (max-width:700px){body.wall #stage{grid-template-columns:minmax(0,1fr);--wall-h:auto} body.wall #stage>.card:not(.strip){min-height:340px}}
 body.wall .card{transition:transform var(--d-move) var(--spring);box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
 /* 看不见的卡（列里滚出去的）不排版、不绘制、不占图层（11/17 性能：WebKit 里 71 张卡的墙图层内存约减半，滚列表不再掉帧）。
    卡片高度由格子定，用不到内容撑；卡片本来就 overflow:hidden，绘制裁剪不改样子；菜单在 body 层，不受影响 */
@@ -192,8 +203,9 @@ body.wall.cols #stage{grid-template-columns:var(--gtpl);grid-template-rows:minma
 .gcol{display:flex;flex-direction:column;min-width:0;min-height:0;animation:gcol-in var(--d3) var(--ease) both}
 .ghead{flex:none;display:flex;align-items:baseline;gap:8px;height:30px;padding:2px 4px 0;font:600 13px var(--mono);letter-spacing:0;color:var(--text);user-select:none;-webkit-user-select:none}
 .ghead b{font:500 12px var(--mono);letter-spacing:0;color:var(--text-3)}
-.gbody{flex:1;min-height:0;display:grid;grid-template-columns:repeat(var(--k,1),minmax(0,1fr));grid-auto-rows:calc((100vh - var(--bar-h) - var(--gap) * 2 - 30px - 28px - var(--rows) * var(--gap)) / var(--rows));align-content:start;gap:var(--gap);overflow-y:auto;overscroll-behavior:contain;scroll-behavior:smooth;border-radius:18px}
+.gbody{flex:1;min-height:0;display:grid;grid-template-columns:repeat(var(--k,1),minmax(0,1fr));grid-auto-rows:auto;--wall-h:calc((100vh - var(--bar-h) - var(--gap) * 2 - 30px - 28px - var(--rows) * var(--gap)) / var(--rows));align-content:start;gap:var(--gap);overflow-y:auto;overscroll-behavior:contain;scroll-behavior:smooth;border-radius:18px}
 .gbody{overflow-anchor:none}            /* 不要滚动锚定：卡片一张张插进列里时，浏览器会为了「保持看到的内容不动」把列滚到中间 */
+.gbody>.card:not(.strip){height:var(--wall-h)}            /* 行高跟着内容走：整卡照旧一格高，窄条只占一行（P1-7） */
 .ghead .gfold{margin-left:auto;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--text-3);opacity:0;transition:opacity var(--d1) var(--ease),background var(--d1) var(--ease),color var(--d1) var(--ease)}
 .gcol:hover .ghead .gfold,.ghead .gfold:focus-visible{opacity:1}
 .ghead .gfold:hover{background:var(--hover);color:var(--text)}
@@ -224,9 +236,32 @@ body.wall.cols.resizing #stage{transition:none}         /* 拖的时候列宽直
 .gsnap{position:absolute;top:30px;bottom:28px;width:2px;margin-left:-1px;border-radius:1px;background:var(--text-3);opacity:.55;pointer-events:none;z-index:6;transition:left var(--d2) var(--ease)}
 .gcol.squeezed .ghead{color:var(--text-3)}
 @keyframes gcol-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-@media (max-width:700px){.gsplit,.gsnap{display:none} body.wall.cols main{overflow:auto} body.wall.cols #stage{grid-template-columns:minmax(0,1fr);grid-template-rows:none;height:auto} .gcol.folded .ghead{writing-mode:horizontal-tb;height:44px;padding:0 14px} .gbody{overflow:visible;grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(340px,auto)}}
+@media (max-width:700px){.gsplit,.gsnap{display:none} body.wall.cols main{overflow:auto} body.wall.cols #stage{grid-template-columns:minmax(0,1fr);grid-template-rows:none;height:auto} .gcol.folded .ghead{writing-mode:horizontal-tb;height:44px;padding:0 14px} .gbody{overflow:visible;grid-template-columns:minmax(0,1fr);--wall-h:auto} .gbody>.card:not(.strip){min-height:340px}}
 .chead .proj{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 body:not(.grouped) .chead .proj,body.wall:not(.bystatus) .chead .proj{display:none}
+/* 墙上的窄条（P1-7，11/16）：不要你管的卡（在跑、后台在跑、启动中、无需处理、处理过、空闲）收成一行：状态点 + 标题 + 状态词和时长，排在要你的卡后面，另起一行。
+   要你的四类（等你选、停住了、待跟进、待审阅）和进程退出的卡样子不变。点一下展开成整卡；有新交付了回到窄条。只在墙上、筛选是「全部」时收；封面、架构不受影响 */
+.sl{display:none}
+body.wall .card.strip{height:34px;cursor:pointer;transition:box-shadow var(--d1) var(--ease)}
+body.wall .card.strip:hover{box-shadow:inset 0 0 0 var(--ink-w) var(--hair-3)}
+body.wall .card.strip>:not(.sl){display:none}
+body.wall .card.strip>.sl{display:flex;align-items:center;gap:8px;height:100%;padding:0 12px;min-width:0;font-size:13px;line-height:1;outline:none}
+body.wall .card.strip:has(.sl:focus-visible){box-shadow:inset 0 0 0 var(--ink-w) var(--text-3)}
+.card.strip.s1{grid-column-start:1}
+.sl i{flex:none;width:7px;height:7px;border-radius:var(--r-pill);box-sizing:border-box;border:var(--ink-w) solid var(--text-3)}
+.s-busy .sl i,.bg .sl i{border:0;background:var(--accent);animation:live 1.6s var(--ease) infinite}
+.s-fyi .sl i{border:0;background:var(--text-3)}
+.sl b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--text-2)}
+.s-busy .sl b,.bg .sl b{color:var(--text)}
+.sl em{display:none;flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal;font-size:12px;color:var(--text-3)}
+body.bystatus .sl em:not(:empty){display:block}
+.sl span{flex:none;font-size:12px;color:var(--text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.sl .sa{color:var(--accent);font-weight:500}
+.sl button{flex:none;height:22px;padding:0 7px;border-radius:var(--r-ctl);font-size:12px;color:var(--text-2);box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
+.sl button:hover{background:var(--hover);color:var(--text)}
+/* 点开的窄条：整卡，卡头多一个「收成一条」。按钮多一个，带预计的牌子给按钮留的宽度（--chead-btns，见下面 .meta:has(.me)）跟着多 24 + 6 = 30 px：
+   11/19 线上：点开的在跑卡照 96 px 留，四个图标排不下，⤢ 被挤到第二行，标题上面空一行（卡头 66 px，正常 36 px） */
+.chead .shrink{display:none} body.wall .card.opened .chead .shrink{display:grid} body.wall .card.opened .chead{--chead-btns:126px}
 .pager #pos button.pg{width:auto;height:22px;padding:0 4px 0 10px;font-size:11px;color:var(--text-3);white-space:nowrap}
 .pager #pos button.pg:first-child{padding-left:0}
 .pager #pos button.pg::before{display:none}
@@ -267,6 +302,15 @@ body.flow .alert .meta::before{width:16px;height:16px;margin:0}
 .title{margin:9px 16px 0;font-size:16px;line-height:1.35;font-weight:600;letter-spacing:-.012em;word-break:break-word;cursor:pointer;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .s-handled .title,.s-fyi .title,.s-idle .title{font-weight:500}
 .s-fyi .meta::before{width:7px;height:7px;margin:0 3px}
+/* 带预计的牌子（11/18 预计交付）：放不下时在牌子里折成两行（「· 预计 …」整段换到第二行），不把卡头的按钮挤到下一行。
+   挤下去的是平时透明的「放大看」，看着像牌子下面空了一行：墙上 356 px 的卡，「后台在跑 · 1 分钟 · 比预计晚 10 分钟」就会。
+   96 px = 卡窄于 540 px 时去终端、归档、放大看三个 24 px 图标 + 四个 6 px 间隔；带预计的只有在跑的卡，没有「审完了」。
+   墙上点开的窄条多一个「收成一条」，是 126 px：写在变量 --chead-btns 里，由显示「收成一条」的那条规则一起改（11/19）。
+   一行放得下时和别的牌子一样高（min-height 22 / 封面 28），只有折行时才变高 */
+.chead{--chead-btns:96px}
+.meta:has(.me){flex:0 1 auto;min-width:0;max-width:calc(100% - var(--chead-btns));flex-wrap:wrap;height:auto;min-height:22px;padding-top:2px;padding-bottom:2px;row-gap:1px}
+body.flow .meta:has(.me){height:auto;min-height:28px;padding-top:2px;padding-bottom:2px}
+.meta .eg{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 /* 停住了的原因已经写在封面那一句里，正文里不再重复一遍 */
 .card:has(.head:not(:empty)) .body>.why{display:none}
 .tag{font:500 10.5px/16px var(--mono);letter-spacing:0;color:var(--text-3);border:1px solid var(--hair-2);border-radius:5px;padding:0 5px;flex:none}
@@ -326,6 +370,8 @@ body.wall .card:hover .body{color:var(--text)}
 .wrote .wb{flex:none;min-width:0;max-width:72%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent);text-decoration:underline dotted;text-underline-offset:3px}
 .wrote .wd{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-3)}
 .wrote .file:hover .wb{text-decoration-style:solid} .wrote .file:hover .wd{color:var(--text-2)}
+.wdf{flex:none;align-self:center;padding:0 6px;height:22px;border:0;border-radius:var(--r-ctl);background:transparent;box-shadow:inset 0 0 0 var(--ink-w) var(--ink);color:var(--text-2);font:13px var(--mono);cursor:pointer}
+.wdf:hover{background:var(--hover);color:var(--text)}
 .wrote .wn{flex:none;margin-left:auto;font-size:11.5px;color:var(--text-3)}
 .wrote:not(.open) ul{display:none}
 .wrote .wl{display:flex;align-items:baseline;gap:6px;max-width:100%;margin-bottom:0;text-align:left} .wrote .wl:hover{color:var(--text-2)} .wrote.open .wl{margin-bottom:6px} .wrote .wc{flex:none;font-size:14px;line-height:1}
@@ -433,13 +479,22 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .pdir{flex:1;min-width:0;color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pbody{position:relative;flex:1;min-height:0;background:#fff}
 #pFrame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
-/* 图、音视频放在总控台自己的页面里（焦点不进 iframe，Esc 照样关）；底色跟总控台走，文本类按卡片正文的样式排 */
-.pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"],.pbody[data-kind="gallery"]{background:var(--bg)}
+/* 图、音视频和逐笔改动留在总控台页面。底色跟主题走，文本按卡片正文排版。 */
+.pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"],.pbody[data-kind="gallery"],.pbody[data-kind="diff"]{background:var(--bg)}
 #pImg,#pVid{position:absolute;inset:0;margin:auto;max-width:calc(100% - 32px);max-height:calc(100% - 32px)}
 #pImg{object-fit:contain} #pVid{width:calc(100% - 32px);height:calc(100% - 32px);background:#000}
 #pAud{position:absolute;inset:0;margin:auto;width:min(560px,calc(100% - 32px))}
 #pText{position:absolute;inset:0;overflow:auto;padding:24px max(24px,calc(50% - 400px));font-size:15px;line-height:1.7}
 #pText pre.raw{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+#pText.diff-view{padding:24px}
+.dfchange{margin:0 0 16px;border-radius:var(--r-ctl);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);overflow:hidden}
+.dfhead{padding:8px 12px;font-size:12px;color:var(--text-2)}
+.dfcode{overflow-x:auto;max-width:100%;font:13px/1.6 var(--mono)}
+.dfline{display:grid;grid-template-columns:28px 1fr;min-width:100%;width:max-content;white-space:pre}
+.dfline>span:first-child{text-align:center;user-select:none;color:var(--text-3)}
+.dfline.add{background:var(--diff-add)} .dfline.del{background:var(--diff-del)}
+.dfline.add>span:first-child{color:var(--accent)} .dfline.del>span:first-child{color:var(--danger)}
+.dfmark{padding:0 12px;color:var(--text-3);white-space:pre;min-width:max-content}
 #pText .cut{color:var(--text-3);font-size:12px;margin-top:16px}
 #pImg[hidden],#pVid[hidden],#pAud[hidden],#pText[hidden],#pFrame[hidden],#pGal[hidden]{display:none}
 /* 图集（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」）：格子墙 + 点一张放大。
@@ -511,7 +566,29 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .cmf[hidden]{display:none}
 @media (prefers-reduced-motion:reduce){.cmf .swt,.cmf .swt::after{transition:none}}
 .field textarea:focus,.field input:focus,.field select:focus{border-color:var(--hair-3)}
+/* ⌘K 跳到窗口（11/17）：一个搜索框 + 一列窗口。选中那行只加底色；状态字只有「要你处理」琥珀、「待审阅」青，和卡片同一套颜色，不加新颜色 */
+#jumpDlg{margin-top:12vh}
+#jumpDlg .jbox{display:flex;flex-direction:column;min-height:0}
+#jQ{font:inherit;font-size:17px;color:var(--text);background:transparent;border:0;border-bottom:1px solid var(--hair);padding:16px 20px;outline:none}
+#jQ::placeholder{color:var(--text-3)}
+#jList{list-style:none;margin:0;padding:6px;overflow:auto;max-height:min(440px,calc(100vh - 260px))}
+#jList li{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:12px;padding:7px 12px;border-radius:var(--r-ctl);cursor:default}
+#jList li[aria-selected="true"]{background:var(--fill)}
+#jList .jm{grid-row:span 2;font-size:11.5px;line-height:19px;color:var(--text-2);white-space:nowrap;min-width:5.5em}
+#jList .jm.act{color:var(--attn)} #jList .jm.review{color:var(--accent)}
+#jList .jt{font-size:14px;line-height:19px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#jList .jt small{font-size:12px;color:var(--text-3);margin-left:8px}
+#jList .jh{font-size:12.5px;line-height:18px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#jList li.jnone{display:block;color:var(--text-3);padding:14px 12px}
+.jfoot{margin:0;padding:8px 20px 10px;border-top:1px solid var(--hair);font-size:11.5px;color:var(--text-3)}
 .arow{display:flex;align-items:center;gap:12px;padding:11px 0}
+#pairBtn[hidden]{display:none}   /* .ib 的 display:grid 会盖过 hidden 属性：没有这一条，remote 关着时按钮照样占位 */
+body.remote-on .brand .bname{display:none}   /* 手机远程开着：左上角的「总控台」字换成手机按钮（顶栏右边已经放满，见 CLAUDE.md「手机远程」） */
+@media (max-width:700px){body.remote-on .brand{display:flex} body.remote-on .brand>svg{display:none}}   /* 窄窗口品牌整块藏起来，手机按钮留着：丢手机时要找得到「撤销」 */
+.rqr{width:220px;height:220px;margin:4px auto 14px;border-radius:var(--r-ctl);overflow:hidden;box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
+.rqr:empty{display:none}.rqr svg{display:block;width:100%;height:100%}
+.rlink{display:flex;gap:8px;align-items:center}.rlink code{flex:1;min-width:0;font:11.5px var(--mono);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rnote{color:var(--text-2);font-size:12.5px;margin-top:8px}
 .arow+.arow{border-top:1px solid var(--hair)}
 .arow .t{flex:1;min-width:0}
 .arow .t b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -611,7 +688,7 @@ body.org main:has(#org.map){overflow:hidden}
 #org.map .oli.ar:is(.r-member,.r-former):not(.hot1) .o1{flex-direction:row-reverse}   /* 左半边没有框的：点靠圆心那一头，字往外伸 */
 #org.map .oli.ar:is(.r-member,.r-former):not(.hot1) .o2{padding-left:0;padding-right:20px;text-align:right}
 /* 要你动手的（琥珀）在图上直接多一行：要你做的事 */
-#org.map .oli.r-member>.onode:is(.s-reply,.s-ask,.alert) .o2{display:block;max-width:206px}
+#org.map .oli.r-member:not(.hot1)>.onode:is(.s-reply,.s-ask,.alert) .o2{display:block;max-width:206px}   /* 只管收起的：悬停 / 聚焦展开的那一个交给下面 .hot1 那条放宽（11/18） */
 #org.map .oli.r-member>.onode:is(.s-reply,.s-ask,.alert) .ot{font-weight:600;color:var(--text)}
 /* 悬停 / 聚焦的那一个：原地展开成完整的方块 */
 #org.map .omnodes>.oli.hot1>.onode.onode{min-width:280px;padding:7px 10px 8px 9px;border-radius:var(--r-card);background:var(--raised);box-shadow:var(--shadow-pop);transform:scale(var(--omi,1));transform-origin:0 0}
@@ -631,7 +708,7 @@ body.org main:has(#org.map){overflow:hidden}
 </head>
 <body class="flow">
 <header class="bar" data-drag>
-  <div class="brand" data-drag><svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true" fill="currentColor"><rect x="1" y="1" width="5.5" height="5.5" rx="1.6"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.6" opacity=".45"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.6" opacity=".45"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1.6" opacity=".45"/></svg>总控台</div>
+  <div class="brand" data-drag><svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true" fill="currentColor"><rect x="1" y="1" width="5.5" height="5.5" rx="1.6"/><rect x="8.5" y="1" width="5.5" height="5.5" rx="1.6" opacity=".45"/><rect x="1" y="8.5" width="5.5" height="5.5" rx="1.6" opacity=".45"/><rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1.6" opacity=".45"/></svg><span class="bname">总控台</span><button class="ib" id="pairBtn" hidden title="用手机经 Tailscale 打开总控台：出配对码、管已配对的设备" aria-label="手机"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="1" width="7" height="12" rx="1.6"/><path d="M6.2 10.6h1.6"/></svg></button></div>
   <div class="seg" id="modes" aria-label="视图"><button data-mode="flow">封面</button><button data-mode="wall">墙</button><button data-mode="org" title="谁归谁管：总管、各项目的负责人和它们带的窗口">架构</button></div>
   <nav class="seg" id="filters" aria-label="筛选"></nav>
   <div class="spacer" data-drag></div>
@@ -641,7 +718,7 @@ body.org main:has(#org.map){overflow:hidden}
   <div class="seg" id="by" aria-label="墙上怎么分列"><button data-by="project">按项目</button><button data-by="status">按状态</button></div>
   <div class="seg" id="oshape" aria-label="架构图怎么排"><button data-oshape="tree">层级</button><button data-oshape="map">放射</button></div>
   <div class="seg" id="rows" aria-label="一屏放多少"><button data-rows="2">8 格</button><button data-rows="3">12 格</button></div>
-  <button class="primary" id="newBtn" title="⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片">新任务</button>
+  <button class="primary" id="newBtn" title="⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片 · ⌘K 跳到窗口">新任务</button>
 </header>
 <div id="crash" role="status" aria-live="polite" hidden></div>
 <main>
@@ -675,16 +752,28 @@ body.org main:has(#org.map){overflow:hidden}
   <div class="dfoot"><span class="grow" id="aNote"></span></div>
 </dialog>
 
+<dialog id="pairDlg" style="--w:460px"><div class="dhead"><h1>手机</h1><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div>
+  <div class="dbody"><div class="rqr" id="rQr"></div><div class="rlink"><code id="rLink"></code><button class="plain" id="rCopy" hidden>复制链接</button></div><div class="rnote" id="rNote"></div>
+    <div class="lbl" style="margin:18px 0 6px">已配对的设备</div><div id="rDevs"></div></div>
+  <div class="dfoot"><span class="grow" id="rFoot">手机要和这台 Mac 登同一个 Tailscale，这台 Mac 上开着 tailscale serve。撤销以后那台手机下一次请求就被拒。</span></div>
+</dialog>
+
+<dialog id="jumpDlg" style="--w:600px" aria-label="跳到窗口"><div class="jbox"><input id="jQ" type="text" autocomplete="off" spellcheck="false" placeholder="跳到哪个窗口：名字、标题、项目、结论都能搜" aria-label="跳到窗口" role="combobox" aria-expanded="true" aria-controls="jList"><ul id="jList" role="listbox" aria-label="跳到窗口"></ul><p class="jfoot">↑↓ 选 · 回车放大看 · Esc 关</p></div></dialog>
 <dialog id="askDlg" style="--w:400px"><div class="dbody" style="padding-bottom:6px"><h1 id="qTitle" style="margin:0 0 8px;font-size:14px;font-weight:600"></h1><div id="qText" style="color:var(--text-2)"></div></div>
   <div class="dfoot" style="border-top:0"><span class="grow"></span><button class="plain" id="qNo">取消</button><button class="bordered" id="qYes"></button></div>
 </dialog>
 
 <script>
 const K = '__TOKEN__';
+// 手机远程（11/17）：经 tailscale serve 打开时服务不往页面里放口令（K 是空的），改带配对时存在这台手机上的设备凭证；凭证被拒（撤销了）就回配对页
+const DEV = K ? null : (() => { try { return JSON.parse(localStorage.getItem('ccb_device') || 'null'); } catch (e) { return null; } })();
+if (!K && !DEV) { location.replace('/pair'); throw new Error('这台手机还没配对'); }      // 后面的脚本不再跑：一个接口都不调
+const HDR = K ? { 'x-ccboard': K } : { 'x-ccboard-device': String(DEV || '') };
+const devGone = (r) => { if (!K && r.status === 401) { try { localStorage.removeItem('ccb_device'); } catch (e) {} location.replace('/pair?gone=1'); } return r; };
 const $ = (s, el = document) => el.querySelector(s);
-const api = (p, body) => fetch(p, body
-  ? { method: 'POST', headers: { 'x-ccboard': K, 'content-type': 'application/json' }, body: JSON.stringify(body) }
-  : { headers: { 'x-ccboard': K } }).then((r) => r.json());
+const api = (p, body, response = false) => fetch(p, body
+  ? { method: 'POST', headers: { ...HDR, 'content-type': 'application/json' }, body: JSON.stringify(body) }
+  : { headers: HDR }).then(devGone).then((r) => response ? r.json().then(body => ({ code: r.status, body })) : r.json());
 const store = (k, v) => { try { if (v === undefined) return JSON.parse(localStorage.getItem(k) || 'null'); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } };
 const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ccb;
 const tell = (m) => { try { if (native) native.postMessage(m); } catch (e) {} };
@@ -694,14 +783,37 @@ const calm = matchMedia('(prefers-reduced-motion: reduce)');
 const LANG = (() => { const q = new URLSearchParams(location.search).get('lang'); if (q === 'en' || q === 'zh') return q; const k = store('ccb_lang'); if (k === 'en' || k === 'zh') return k; return (navigator.language || 'zh').toLowerCase().startsWith('zh') ? 'zh' : 'en'; })();
 /* i18n:start */
 const EN = {
+  '看改动': 'Show changes',
+  '看这一轮的改动': 'Show changes this turn',
+  '这一轮的改动': 'Changes this turn',
+  '新建': 'new file',
+  '没改成': 'failed',
+  '记录里没有改动内容': 'no diff in the transcript',
+  'Bash 里的写这里看不到': 'Writes made from Bash are not shown here',
+  '太长了，只显示了前面一部分': 'Too long, showing the first part only',
+  '这一轮的记录里没找到这个文件的改动': 'No changes for this file in this turn\'s transcript',
+  '这个文件不在这一轮的清单里了（新的一轮已经开始）': 'This file is no longer in this turn\'s list (a new turn has started)',
+  '这台设备上看不了改动': 'Changes can\'t be viewed on this device',
+  '没读到改动': 'Could not load the changes',
   '回给': 'Reply to',
-  '放大看：只看你说的和它交付的（⌘O）': 'Enlarge: only your prompts and its deliveries (⌘O)', '⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片': '⌘N new task · ⌘T blank session · ⌘O enlarge card', '把鼠标移到要放大的卡片上，再按 ⌘O': 'Point at a card, then press ⌘O',
+  '放大看：只看你说的和它交付的（⌘O）': 'Enlarge: only your prompts and its deliveries (⌘O)', '⌘N 新任务 · ⌘T 直接开一个空会话 · ⌘O 放大看卡片 · ⌘K 跳到窗口': '⌘N new task · ⌘T blank session · ⌘O enlarge card · ⌘K jump to a window',
+  '跳到窗口': 'Jump to a window', '跳到哪个窗口：名字、标题、项目、结论都能搜': 'Jump to a window: search name, title, project or latest result', '没有对得上的窗口': 'No window matches', '↑↓ 选 · 回车放大看 · Esc 关': '↑↓ select · Return to enlarge · Esc to close', '把鼠标移到要放大的卡片上，再按 ⌘O': 'Point at a card, then press ⌘O',
   '归档：没留下东西的删掉，其余留着、能接回来': 'Archive: deletes it if it left nothing behind, otherwise keeps it resumable', '放大看（双击封面 / ⌘O）': 'Enlarge (double-click the cover / ⌘O)', '双击放大（⌘O）': 'Double-click to enlarge (⌘O)', '还没有归档的会话。': 'No archived sessions yet.', '点卡片右上角的「归档」。': 'Use “Archive” at the top right of a card.', '它在等你决定': 'it is waiting for your decision', '一句话都没说过': 'nothing was ever said', '只聊了几句，没改过文件': 'only a short chat, no files changed',
   '其他': 'Other', '收起这一列': 'Collapse column', '拖动调宽，松手吸附到整格 · 双击恢复自动': 'Drag to resize; snaps to whole cards on release · double-click to reset',
   '窗口放不下，挤到了旁边 · 点一下先看它': 'No room in this window, moved aside · click to show it', '收起了一列，点那根竖条就能展开': 'Column collapsed. Click its strip to expand it.', '在这一列里新建任务': 'New task in this column', '订阅额度': 'Subscription usage',
   '直接写任务，它就在这个项目里做，做完会站到最前面。留空 = 开一个空会话，等你在卡片里说第一句。': 'Describe the task. It works in this project and comes to the front when done. Leave empty for a blank session.', '展开': 'Expand', '点开': 'Open', '这种文件不直接打开，已在访达里选中': 'Not opened directly — revealed in Finder',
+  '手机': 'Phone', '用手机经 Tailscale 打开总控台：出配对码、管已配对的设备': 'Open cc-board on your phone over Tailscale: pairing code and paired devices', '复制链接': 'Copy link', '已配对的设备': 'Paired devices', '还没有配对的设备。': 'No paired devices yet.', '撤销这台': 'Revoke', '最近一次': 'Last seen',
+  '手机要和这台 Mac 登同一个 Tailscale，这台 Mac 上开着 tailscale serve。撤销以后那台手机下一次请求就被拒。': 'The phone must be on the same Tailscale network, with tailscale serve running on this Mac. A revoked phone is refused from its next request.',
+  '已经不认这台了，但设备表没写进盘，正在重试；写好之前重启，所有手机都要重新配对': 'That device is refused now, but the device list could not be saved. Retrying; if cc-board restarts before it succeeds, every phone has to pair again',
+  '设备表没写进盘，正在重试。写好之前重启，所有手机都要重新配对。': 'The device list is not saved yet; retrying. If cc-board restarts before it succeeds, every phone has to pair again.',
+  '远程端口没听上，手机现在连不上，先不出配对码': 'The remote port is not listening, so phones cannot connect. No pairing code for now',
+  '这个码不能用了（服务重启、在别处作废或已被用掉）。关掉再点「手机」出一个新的。': 'This code no longer works (restart, cancelled elsewhere, or already used). Close this and click “Phone” for a new one.',
+  '正在出配对码…': 'Creating a pairing code…', '没出成配对码': 'Could not create a pairing code', 'config.json 的 remote.hosts 是空的': 'remote.hosts in config.json is empty', '配好了。要再配一台，关掉再点「手机」。': 'Paired. To pair another device, close this and click “Phone” again.',
+  '这个码过期了。关掉再点「手机」出一个新的。': 'This code expired. Close this and click “Phone” for a new one.', '已复制配对链接（10 分钟内有效）': 'Pairing link copied (valid for 10 minutes)', '没复制成，长按链接手动复制': 'Could not copy. Select the link and copy it by hand',
+  '已撤销：那台设备下一次请求就会被拒': 'Revoked: that device is refused from its next request', '没撤销成': 'Could not revoke', '没有这台设备': 'No such device', '只接受总控台自己的页面': 'Only accepted from cc-board itself',
   '总控台': 'cc-board', '封面': 'Covers', '墙': 'Wall', '归档': 'Archive', '8 格': '8 up', '12 格': '12 up', '按项目': 'By project', '按状态': 'By status', '墙上怎么分列': 'Group the wall', '要你处理': 'Needs you', '新任务': 'New task',
-  '全部': 'All', '在做': 'Working', '新交付': 'Delivered', '等你选': 'Needs you', '待跟进': 'Follow up', '空闲': 'Idle', '停住了': 'Stopped', '启动中': 'Starting',
+  '全部': 'All', '要你': 'Your turn', '收成一条': 'Collapse to a row', '点一下展开成整卡': 'Click to expand',
+  '没有要你处理的了。再点一下「要你」回到全部。': 'Nothing needs you right now. Click “Your turn” again to see everything.', '在做': 'Working', '新交付': 'Delivered', '等你选': 'Needs you', '待跟进': 'Follow up', '空闲': 'Idle', '停住了': 'Stopped', '启动中': 'Starting',
   '你': 'You', '现在': 'Now', '交付': 'Delivered', '上一次交付': 'Last delivery', '还没给它派过活': 'No task yet',
   '自动接着做': 'Auto-continue', '排队中': 'Queued', '读不到这个窗口的额度': "Can't read this window's usage", '你取消了这一次的自动续跑': 'You cancelled this one', '建议是一条终端命令': 'The suggestion is a shell command', '建议是 Claude Code 的内置命令': 'The suggestion is a Claude Code command', '建议太长被截断了': 'The suggestion was cut off', '没判断出来，先不自动发': "Couldn't decide, so not sending", '先不接着做': 'Holding off', '现在发': 'Send', '不发了': 'Cancel', '没自动接着做：': 'Not auto-continued: ', '在看要不要自动接着做…': 'Checking whether to auto-continue…', '自动续跑': 'Auto',
   '（不是 Khalil 本人）接着做你上一轮自己提的下一步；要他本人听、看、点头、登录、付款、发布的事不做，停下写状态行': '(Not Khalil) Carry on with the next step you proposed last turn; anything he has to listen to, look at, approve, sign in, pay or publish: don\'t, stop and write the status line',
@@ -768,9 +880,11 @@ const EN = {
   '和别的窗口一起退出了（多半是 tmux 或这台机器出了问题）。对话还在。': 'Exited together with other windows (most likely tmux or this machine had a problem). The conversation is kept.',
 };
 const RULES = [
+  [/^第 (\d+) 笔$/, 'Change $1'],
   [/^(\d+) 秒后发$/, 'in $1s'], [/^已经自动接着做了 (\d+) 轮，等你说一句$/, 'Auto-continued $1 times — waiting for you'], [/^这个号周额度用了 (\d+)%$/, 'This account is at $1% of its weekly limit'], [/^这个号 5 小时额度用了 (\d+)%$/, 'This account is at $1% of its 5-hour limit'],
   [/^图集 · (\d+) 张$/, 'Gallery · $1'], [/^在总控台里一起看这 (\d+) 张图$/, 'View these $1 images together'], [/^共 (\d+) 个$/, '$1 items'], [/^只显示了前 (\d+) 个$/, 'Showing the first $1'],
   [/^运行中 · (\d+) 分钟没动静$/, 'Running · no activity for $1 min'], [/^运行中 · (.+)$/, 'Running · $1'],
+  [/^预计 明天 (\d+:\d+) 交$/, 'ETA tomorrow $1'], [/^预计 (\d+:\d+) 交$/, 'ETA $1'], [/^比预计晚 (.+)$/, '$1 past ETA'], [/^窗口在 (\d+:\d+) 报的：还要 (\d+) 分钟$/, 'The window estimated at $1: $2 more min'],
   [/^停住了 · (.+)$/, (m, a) => 'Stopped · ' + (EN[a] || a)], [/^「(.*)」停住了：(.+)$/, (m, a, b) => '“' + a + '” stopped: ' + (EN[b] || b)], [/^(\d+) 个窗口停住了$/, '$1 windows stopped'],
   [/^在做 (.+)$/, 'Working · $1'],
   [/^(待跟进|待审阅|处理过|无需处理) · (.+)$/, (m, a, b) => EN[a] + ' · ' + b], [/^已处理「(.*)」$/, 'Handled “$1”'],
@@ -799,6 +913,10 @@ const RULES = [
   [/^第 (\d+) 代$/, 'gen $1'], [/^带 (\d+) 个$/, (m, n) => n + (n === '1' ? ' report' : ' reports')], [/^总管带 · (\d+)$/, 'Under the chief · $1'], [/^你直接带 · (\d+)$/, 'Directly under you · $1'],
   [/^上下文 ([\d.]+) 万$/, (m, a) => Math.round(parseFloat(a) * 10) + 'k context'], [/^上下文 (\d+)$/, (m, a) => (+a >= 1000 ? Math.round(+a / 1000) + 'k' : a) + ' context'],
   [/^(\d+) 个子 agent 在跑$/, (m, n) => n + (n === '1' ? ' subagent running' : ' subagents running')], [/^(.+) 派的$/, 'from $1'],
+  [/^用手机相机扫这个码，(\d+) 分钟内有效，用一次就作废$/, (m, n) => 'Scan this with your phone camera. Valid for ' + n + ' min, single use'],
+  [/^配好了：(.+)（(.+)）。要再配一台，关掉再点「手机」。$/, (m, n, l) => 'Paired: ' + n + ' (' + l + '). To pair another device, close this and click “Phone” again.'],
+  [/^手机要和这台 Mac 登同一个 Tailscale，tailscale serve 指向 127\.0\.0\.1:(\d+)。撤销以后那台手机下一次请求就被拒。$/, (m, n) => 'The phone must be on the same Tailscale network, with tailscale serve pointing at 127.0.0.1:' + n + '. A revoked phone is refused from its next request.'],
+  [/^远程端口 (\d+) 没听上（(.+)），手机现在连不上$/, (m, n, e) => 'Remote port ' + n + ' is not listening (' + e + '). Phones cannot connect right now'],
   [/^(\d+) 天前$/, '$1 d ago'], [/^(\d+) 小时前$/, '$1 h ago'], [/^(\d+) 分钟前$/, '$1 min ago'],
   [/^(.+) 开的窗口$/, 'Opened by $1'], [/^最近 (\d+) 条消息来自 (.+)，最近一条(.+)$/, (m, n, a, t) => 'Last ' + n + ' messages came from ' + a + ', the latest ' + T(t.trim())],
   [/^原来听前任的，换代后跟着岗位归 (.+)$/, 'Used to report to the previous holder; moved to $1 with the seat'], [/^已交接给 (.+)$/, 'Handed over to $1'], [/^分支负责人，归 (.+)$/, 'Branch lead, reports to $1'],
@@ -843,6 +961,8 @@ function localizeStatic() {
   for (const el of document.querySelectorAll('[title],[aria-label],[placeholder]')) for (const a of ['title', 'aria-label', 'placeholder']) if (el.hasAttribute(a)) el.setAttribute(a, T(el.getAttribute(a)));
 }
 let done = store('ccb_done') || {};            // 你点过「审完了 / 先放着」、或回过它话的：会话 → 那一次交付的时间。看一眼、点开都不算
+let srvDone = {}, undone = {};                 // srvDone：服务给的 processed（别的设备点的「审完了」也在里面，会话 → 那一次交付的时间）；undone：刚在这台撤销的（会话 → { at, t }），服务清掉之前那几秒不认服务那一笔
+const isDone = (s) => { const u = undone[s.sid]; return !!((done[s.sid] && done[s.sid] >= s.resultAt) || (srvDone[s.sid] === s.resultAt && !(u && u.at === s.resultAt))); };
 let rows = store('ccb_rows') === 3 ? 3 : 2;
 let mode = ['wall', 'org'].includes(store('ccb_mode')) ? store('ccb_mode') : 'flow';
 let filter = 'all';
@@ -854,6 +974,7 @@ const ICON = {
   term: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4 5.5 7l-3 3M7.5 10.5h4"/></svg>',
   archive: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5h10v2.5H2zM3 6v5.5h8V6M5.75 8.25h2.5"/></svg>',
   open: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5H11.5V5.5M11.5 2.5 8 6M5.5 11.5H2.5V8.5M2.5 11.5 6 8"/></svg>',
+  shrink: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5 7 5.5l3-3M4 11.5 7 8.5l3 3"/></svg>',
   more: '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/><circle cx="11" cy="7" r="1.2"/></svg>',
   send: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11.5V2.5M3 6.5l4-4 4 4"/></svg>',
   clip: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.6 6.4 6.9 11.1a2.6 2.6 0 0 1-3.7-3.7l4.9-4.9a1.75 1.75 0 0 1 2.5 2.5L5.8 9.8a.9.9 0 0 1-1.3-1.3l4.3-4.3"/></svg>',
@@ -948,11 +1069,14 @@ function dur(t, now) { if (!t) return ''; const s = Math.max(0, (now - (typeof t
 // 状态徽章：「待审阅 · 8 分钟前」拆成状态词、分隔点、后半句三段；拼回去的 textContent 和原句一字不差（测试、读屏照旧读到同一句）。
 // 后半句是时间、时长（机器写的）用等宽数字 .mt；是停住的原因（额度用完、3 分钟没动静）就是人话，用正文字体 .mr
 const IS_TIME = /^\d[\d./: ]*(秒|分钟|小时|s|min|h)?(前| ago)?$/;
-function setMeta(me, mt) {
-  if (me.textContent === mt) return; const i = mt.indexOf(' · ');
-  if (i < 0) { me.textContent = mt; return; }
-  const r = mt.slice(i + 3);
-  me.innerHTML = '<span class="mw">' + esc(mt.slice(0, i)) + '</span><i class="ms"> · </i><span class="' + (IS_TIME.test(r) ? 'mt' : 'mr') + '">' + esc(r) + '</span>';
+// 预计（eta，11/18）接在最后，单独一段 .me（和时长一样用等宽数字）；拼回去的 textContent 照旧等于整句
+function setMeta(me, mt, eta) {
+  if (me.textContent === mt) return;
+  const base = eta && mt.endsWith(' · ' + eta) ? mt.slice(0, -(eta.length + 3)) : mt, tail = base === mt ? '' : '<span class="eg"><i class="ms"> · </i><span class="mt me">' + esc(eta) + '</span></span>';
+  const i = base.indexOf(' · ');
+  if (i < 0) { if (tail) me.innerHTML = esc(base) + tail; else me.textContent = mt; return; }
+  const r = base.slice(i + 3);
+  me.innerHTML = '<span class="mw">' + esc(base.slice(0, i)) + '</span><i class="ms"> · </i><span class="' + (IS_TIME.test(r) ? 'mt' : 'mr') + '">' + esc(r) + '</span>' + tail;
 }
 // 模型胶囊：模型 id → 「Fable 5.2」，后面接强度。claude-fable-5-2 → Fable 5.2；claude-sonnet-4-5-20250929 → Sonnet 4.5；老写法 claude-3-5-sonnet → Sonnet 3.5；
 // 认不出家族的（Codex 的 gpt-…）原样写。没有模型也没有强度就隐藏；只有强度（Codex 开窗口时只给了强度）就只写强度。
@@ -1033,7 +1157,7 @@ function paintLimits(st) {
 // 只有你回它话、或点「审完了 / 先放着」才算处理过；看一眼、点开都不算。和「停住了」的「先不管」是同一个做法。
 function view(s) {
   const d = s.digest || {};
-  const open = !!(s.result && s.resultAt && !(done[s.sid] && done[s.sid] >= s.resultAt));
+  const open = !!(s.result && s.resultAt && !isDone(s));
   const justSent = sentAt[s.sid] && Date.now() - sentAt[s.sid] < 9000;
   if (sentAt[s.sid] && !justSent) delete sentAt[s.sid];
   let k = 'idle', label = '空闲', need = '', bg = false, quiet = '', snoozed = false;
@@ -1119,6 +1243,7 @@ function wroteHTML(s) {
   const row = (w) => {
     const p = w.path, i = p.replace(/\/+$/, '').lastIndexOf('/'), name = i >= 0 ? p.slice(i + 1) : p, dir = i >= 0 ? p.slice(0, i + 1) : '', n = Math.floor(Number(w.n)) || 0;
     return '<li><a class="file" data-path="' + esc(p) + '" title="' + esc(T('点开') + ' ' + p) + '"><span class="wb">' + esc(name) + '</span> <span class="wd">' + esc(dir) + '</span></a>' +
+      '<button type="button" class="wdf" data-diff="' + esc(p) + '" aria-label="' + esc(T('看改动') + ' ' + name) + '" title="' + esc(T('看这一轮的改动')) + '">±</button>' +
       (n > 1 ? ' <span class="wn num">×' + n + '</span>' : '') + '</li>';   // 空格给读屏和复制用；排版靠 gap（flex 里空白不占位）
   };
   // 默认只露这一行（▸），点它展开 / 收起（▾）；文件少也一样，卡上先看到的是交付那句话
@@ -1189,6 +1314,27 @@ document.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataT
 document.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) e.preventDefault(); });
 
 // ── 卡片 ──
+// ── 草稿不丢（11/17）：卡片里、新任务里打了还没发的字存进本机 ccb_draft ──
+// 起因：每次上线（./build.sh update）外壳都会整页重新载入，打到一半的字以前就没了；他 99% 的时间开着总控台，一天上线好几次。
+// 只存字，不存附件（附件是这一页内存里的文件，发的时候才上传，存不下来）。停手 300 ms 存一次，页面要走时（pagehide）马上存；
+// 发出去那一下就清（没发出去会把字放回框里、再存回来）；7 天没动过的草稿载入时丢掉。键 = 会话号，新任务用 NEW_DRAFT。
+const DRAFT_TTL = 7 * 86400000, NEW_DRAFT = '__new';
+let drafts = (() => { const d = store('ccb_draft'), o = {}; if (!d || typeof d !== 'object') return o;
+  for (const [k, v] of Object.entries(d)) if (v && typeof v.t === 'string' && v.t.trim() && Date.now() - (+v.at || 0) < DRAFT_TTL) o[k] = { t: v.t, at: +v.at };
+  return o; })();
+let draftT = null;
+function flushDrafts() { clearTimeout(draftT); draftT = null; store('ccb_draft', drafts); }
+function saveDraft(key, text) {
+  if (text && text.trim()) drafts[key] = { t: text, at: Date.now() }; else if (drafts[key]) delete drafts[key]; else return;
+  clearTimeout(draftT); draftT = setTimeout(flushDrafts, 300);
+}
+const draftOf = (key) => (drafts[key] ? drafts[key].t : '');
+// 上一句只取总控台成功发出的文字；按会话隔开，不用服务端的 prompt 兜底。
+const lastSent = (() => { const d = store('ccb_last'), o = {}; if (!d || typeof d !== 'object' || Array.isArray(d)) return o;
+  for (const [sid, v] of Object.entries(d)) if (v && typeof v.t === 'string' && v.t.trim() && Number.isFinite(v.at) && Date.now() - v.at < DRAFT_TTL) o[sid] = { t: v.t, at: v.at };
+  return o; })();
+addEventListener('pagehide', () => { if (draftT) flushDrafts(); });
+
 const cards = new Map();
 function makeCard(sid) {
   const el = document.createElement('article'); el.className = 'card'; el.dataset.sid = sid;
@@ -1196,30 +1342,40 @@ function makeCard(sid) {
     '<button class="done" data-act="done" hidden title="只有点这里、或回它一句，才算处理过"></button>' +
     '<button class="go" data-act="focus" aria-label="去终端" title="去终端">' + ICON.term + '<span>去终端</span></button>' +
     '<button class="go" data-act="archive" aria-label="归档" title="归档：没留下东西的删掉，其余留着、能接回来">' + ICON.archive + '<span>归档</span></button>' +
+    '<button class="ib shrink" data-act="shrink" aria-label="收成一条" title="收成一条">' + ICON.shrink + '</button>' +
     '<button class="ib" data-act="detail" aria-label="看对话" title="放大看（双击封面 / ⌘O）">' + ICON.open + '</button></div>' +
     '<h2 class="title" title="双击放大（⌘O）"></h2><p class="head"></p><p class="ask" hidden></p><p class="clash" hidden></p>' +
     '<p class="you"></p><div class="body"></div>' +
     '<div class="ap" hidden></div><div class="sg" hidden></div>' +
     '<div class="reply"><div class="atts"></div><textarea rows="1" aria-label="回它一句"></textarea><span class="ghost" aria-hidden="true" hidden><span class="gt"></span><kbd>Tab</kbd></span>' +
-    '<button class="clip" aria-label="加附件" title="加图片或文件，也可以直接粘贴或拖进来">' + ICON.clip + '</button><button class="send" aria-label="发送">' + ICON.send + '</button></div>');
+    '<button class="clip" aria-label="加附件" title="加图片或文件，也可以直接粘贴或拖进来">' + ICON.clip + '</button><button class="send" aria-label="发送">' + ICON.send + '</button></div>' +
+    '<div class="sl" role="button" tabindex="0" title="点一下展开成整卡"></div>');
+  $('.sl', el).addEventListener('keydown', (e) => { if (!e.target.closest('button') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openStrip(sid); } });
   // 回话框的零件存在卡片上：预览 / 放大看开着时它们挪进弹层（dock()），不在卡片里，所以一律经 el._rp / _sg / _ap 取，不从卡片里查
   const ta = $('textarea', el), rp = el._rp = $('.reply', el); el._sg = $('.sg', el); el._ap = $('.ap', el);
   const big = () => mode === 'flow' || !el.contains(rp);                // 封面里、挪进弹层时用大一号的输入框
   const fit = el._fit = () => { if (!ta.value) { ta.style.height = ''; return; }      // 空着就用样式表的高度（墙上 32、封面和弹层底部 37）；按内容量会矮 2 px
     ta.style.height = (big() ? 37 : 32) + 'px'; ta.style.height = Math.min(big() ? 140 : 108, ta.scrollHeight) + 'px'; };
   const hold = el._att = { atts: [] }; const mark = el._mark = () => { rp.classList.toggle('has', !!ta.value.trim() || hold.atts.length > 0); syncGhost(el); };
-  ta.addEventListener('input', () => { fit(); mark();
+  ta.addEventListener('input', () => { fit(); mark(); saveDraft(sid, ta.value);
     const cs = cards.get(sid), au = cs && cs.s && cs.s.auto;      // 他在这张卡上打字 = 他要自己说，倒数中的自动续跑不发了（每次交付只发一次取消）
     if (ta.value && au && au.state === 'armed' && cs.apStop !== cs.s.resultAt) { cs.apStop = cs.s.resultAt; autoOp(sid, 'cancel'); } });
   wireAtts(hold, el, $('.atts', el), ta, $('.clip', el), mark);
+  const d0 = draftOf(sid); if (d0) { ta.value = d0; mark(); requestAnimationFrame(fit); }     // 上次没发的字（页面重新载入前打的）放回来；不派 input 事件，免得被当成他刚打字去取消自动续跑
   ta.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !ta.value && lastSent[sid]) {
+      e.preventDefault(); fillDraft(sid, lastSent[sid].t); return;
+    }
     const gt = $('.ghost', rp).dataset.t;
     if (e.key === 'Tab' && !e.shiftKey && !e.isComposing && !ta.value && gt) { e.preventDefault(); fillDraft(sid, gt); return; }     // 和终端一样：框是空的、有灰字，Tab 收下；收下以后还是草稿，回车才发
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(sid); }
   });
   $('.send', el).addEventListener('click', () => send(sid));
   el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-diff]')) return;
     if (el.classList.contains('side')) { go(sid, true); return; }
+    if (el.classList.contains('strip')) { const ap = e.target.closest('[data-ap]'); if (ap) autoOp(sid, ap.dataset.ap); else openStrip(sid); return; }
+    if (e.target.closest('[data-act="shrink"]')) { opened.delete(sid); paint(last); return; }
     const s = cards.get(sid).s; const act = e.target.closest('[data-act]'); const ans = e.target.closest('[data-ans]');
     if (e.target.closest('[data-path]')) return;
     const apb = e.target.closest('[data-ap]'); if (apb) { autoOp(sid, apb.dataset.ap); return; }
@@ -1256,12 +1412,13 @@ function goTerminal(s) { api('/api/focus', { sid: s.sid }).then((r) => { if (!r.
 function syncDone(map, clear) { api('/api/processed', { map: map || {}, clear: clear || [] }).catch(() => {}); }
 function markDone(s) {                          // 你点「审完了 / 先放着」才算处理过；可以撤销
   if (!s || !s.resultAt) return; const prev = done[s.sid];
-  done[s.sid] = s.resultAt; store('ccb_done', done); syncDone({ [s.sid]: s.resultAt });
+  done[s.sid] = s.resultAt; delete undone[s.sid]; store('ccb_done', done); syncDone({ [s.sid]: s.resultAt });
   if (mode === 'flow' && cur === s.sid) pickNext = s.sid;   // 顶上下一张要你处理的
   paint(last);
-  toast('已处理「' + cut(s.title, 16) + '」', { action: '撤销', ms: 6000, onAction: () => {
+  undoToast('已处理「' + cut(s.title, 16) + '」', () => {
     if (prev) done[s.sid] = prev; else delete done[s.sid]; store('ccb_done', done); if (prev) syncDone({ [s.sid]: prev }); else syncDone(null, [s.sid]);
-    if (mode === 'flow' && cards.has(s.sid)) { cur = s.sid; curAt = navAt = Date.now(); } paint(last); } });
+    undone[s.sid] = { at: s.resultAt, t: Date.now() };     // 服务那一笔要等 clear 到了、下一拍才没：这几秒不认它，卡片马上回来（提示条按钮和 ⌘Z 都走这里）
+    if (mode === 'flow' && cards.has(s.sid)) { cur = s.sid; curAt = navAt = Date.now(); } paint(last); });
 }
 function flash(sid, kind, text) {
   const c = cards.get(sid); if (!c) return; const host = docked && docked.sid === sid ? docked.host : c.el;     // 回话框挪进弹层时，「已送达」也跟着出在弹层里
@@ -1274,7 +1431,7 @@ async function send(sid) {
   if ((!text && !atts.length) || bt.disabled) return;
   const typed = ta.value;
   // 回车那一下就让它退到后面、下一张上来，不等送达确认；没送出去再把它请回来
-  bt.disabled = true; ta.disabled = true; ta.value = ''; ta.style.height = ''; hold.atts = []; drawAtts(hold, box); rp.classList.remove('has'); ta.blur();
+  bt.disabled = true; ta.disabled = true; ta.value = ''; ta.style.height = ''; hold.atts = []; drawAtts(hold, box); rp.classList.remove('has'); ta.blur(); saveDraft(sid, '');
   if (c.s.resultAt) { done[sid] = c.s.resultAt; store('ccb_done', done); }     // 回了它的话 = 跟进过了
   sentAt[sid] = Date.now(); navAt = 0; if (cur === sid) pickNext = sid;
   paint(last);
@@ -1282,11 +1439,12 @@ async function send(sid) {
   try { const files = await uploadAtts(atts); r = await api('/api/send', { sid, text, files }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   ta.disabled = false;
+  if (r.ok && typed.trim()) { lastSent[sid] = { t: typed, at: Date.now() }; store('ccb_last', lastSent); }
   if (r.ok && r.delivered) { sentAt[sid] = Date.now(); for (const x of atts) if (x.url) URL.revokeObjectURL(x.url); flash(sid, 'ok', '已送达');
     if (detailSid === sid && $('#detail').open) openDetail(sid, '', true); }      // 大窗口开着：重读，刚说的这句出在最下面
   else {
     delete sentAt[sid];
-    if (!r.ok) { ta.value = typed; hold.atts = atts; drawAtts(hold, box); rp.classList.toggle('has', !!typed.trim() || atts.length > 0); }   // 没发出去：字和附件都还给你
+    if (!r.ok) { ta.value = typed; saveDraft(sid, typed); hold.atts = atts; drawAtts(hold, box); rp.classList.toggle('has', !!typed.trim() || atts.length > 0); }   // 没发出去：字和附件都还给你
     if (mode === 'flow' && cards.has(sid)) { cur = sid; curAt = navAt = Date.now(); }
     flash(sid, r.ok ? 'warn' : 'err', r.ok ? '发出去了，但没在它的记录里看到，去终端确认一下' : (r.error || '没发出去'));
     paint(last);
@@ -1575,16 +1733,21 @@ function placeWall(stage, typing) {
   for (const id of order) { const c = cards.get(id); if (!c.el.hidden) vis0.set(c.g.key, (vis0.get(c.g.key) || 0) + 1); }
   const vis = new Map(stickyKeys([...vis0.keys()]).map((k) => [k, vis0.get(k)]));
   const hold = (el) => typing && el.contains(document.activeElement);
+  const markS1 = (ids) => { let seen = false; for (const id of ids) { const el = cards.get(id).el, on = !seen && !el.hidden && el.classList.contains('strip'); if (on) seen = true; if (el.classList.contains('s1') !== on) el.classList.toggle('s1', on); } };   // 第一条窄条另起一行，不和整卡挤在同一行
   if (vis.size < 2) {
     order.forEach((id, i) => { const el = cards.get(id).el; if (!hold(el) && stage.children[i] !== el) stage.insertBefore(el, stage.children[i] || null); });
-    dropCols(stage); return;
+    markS1(order); dropCols(stage); return;
   }
+  // 分横向格子时窄条按「一格卡的高度里放得下几条」折算，不然一列全是窄条的（按状态时的运行中 / 无需处理）会按张数抢走大半屏的格子
+  const per = Math.max(1, Math.floor((innerHeight - 140) / rows / 46)), wt = new Map();
+  for (const id of order) { const c = cards.get(id); if (!c.el.hidden) wt.set(c.g.key, (wt.get(c.g.key) || 0) + (c.el.classList.contains('strip') ? 1 / per : 1)); }
+  const wn = (k) => Math.max(1, Math.ceil(wt.get(k) || 0));
   document.body.classList.add('cols');
   const S = slotsAcross(), keys = [...vis.keys()], open = keys.filter((k) => !foldOn.has(k));
   if (peek && !open.includes(peek)) peek = null;                                    // 点开的那一列不在了（筛选、归档），就不再替它占格子
-  const K = S < 2 ? new Map(open.map((k) => [k, 1])) : allot(open.map((k) => ({ key: k, n: vis.get(k) })), S, rows);   // 手机宽度各列叠着排，不分格子、不挤
+  const K = S < 2 ? new Map(open.map((k) => [k, 1])) : allot(open.map((k) => ({ key: k, n: wn(k) })), S, rows);   // 手机宽度各列叠着排，不分格子、不挤
   const strip = (k) => foldOn.has(k) || !K.get(k);                                  // 收起的、挤到旁边的：都是 44px 的竖条
-  wallS = S; wallOpen = open.map((k) => ({ key: k, n: vis.get(k) })); wallTracks = keys.map((k) => [k, strip(k) ? '44px' : 'minmax(0,' + K.get(k) + 'fr)']);
+  wallS = S; wallOpen = open.map((k) => ({ key: k, n: wn(k) })); wallTracks = keys.map((k) => [k, strip(k) ? '44px' : 'minmax(0,' + K.get(k) + 'fr)']);
   stage.style.setProperty('--gtpl', wallTracks.map((t) => t[1]).join(' '));
   [...vis.keys()].forEach((k, i) => {
     let col = gcols.get(k);
@@ -1601,11 +1764,13 @@ function placeWall(stage, typing) {
     const i = at.get(c.g.key) || 0; at.set(c.g.key, i + 1);
     if (!hold(c.el) && col.body.children[i] !== c.el) col.body.insertBefore(c.el, col.body.children[i] || null);
   }
+  for (const k of vis.keys()) markS1(order.filter((id) => cards.get(id).g.key === k));
   for (const k of vis.keys()) {                 // 列头：项目名 + 张数；展开的带「收起」按钮，收起的带两颗提示点
     const col = gcols.get(k), ids = order.filter((id) => cards.get(id).g.key === k && !cards.get(id).el.hidden), g = cards.get(ids[0]).g, f = strip(k), sq = f && !foldOn.has(k);
     const dots = f ? '<span class="gdots">' + (ids.some((id) => dotOf(cards.get(id).v) === 'act') ? '<i class="act"></i>' : '') + (ids.some((id) => dotOf(cards.get(id).v) === 'review') ? '<i class="review"></i>' : '') + '</span>' : '';
     const t = esc(T(g.name)) + '<b class="num">' + vis.get(k) + '</b>' + dots + (f ? '' : '<button class="gnew" data-newin="' + esc(k) + '" data-newname="' + esc(g.name) + '" title="' + esc(T('在这一列里新建任务')) + '">' + ICON_PLUS + '<span>' + esc(T('新任务')) + '</span></button><button class="gfold" data-fold="' + esc(k) + '" aria-label="' + esc(T('收起这一列')) + '" title="' + esc(T('收起这一列')) + '">' + ICON_FOLD + '</button>');
-    if (col.head.innerHTML !== t) col.head.innerHTML = t;
+    // 浏览器会把 SVG 的自闭合标签展开；比较上次输入，避免同一列头每拍都重建。
+    if (col.headKey !== t) { col.headKey = t; col.head.innerHTML = t; }
     const was = col.el.classList.contains('folded') ? (col.el.classList.contains('squeezed') ? 'sq' : 'fold') : '', now = f ? (sq ? 'sq' : 'fold') : '';
     if (was !== now) {
       col.el.classList.toggle('folded', f); col.el.classList.toggle('squeezed', sq); delete col.el.dataset.fold; delete col.el.dataset.peek; col.el.removeAttribute('title');
@@ -1629,7 +1794,30 @@ function placeWall(stage, typing) {
   if (drag) dragPaint();                         // 正在拖：轮询重画了也保持手上的宽度
 }
 
-function match(v) { return filter === 'all' || (filter === 'busy' && v.live) || (filter === 'reply' && v.need === 'reply') || (filter === 'review' && v.need === 'review') || (filter === 'ask' && v.k === 'ask') || (filter === 'stop' && v.alert); }
+// ── 墙上的窄条（P1-7）：不要你管的卡收成一行 ──
+// 要你的四类（等你选、停住了、待跟进、待审阅，dotOf 的 act / review）和进程退出的卡给整格；在跑（含后台、启动中）和无需处理 / 处理过 / 空闲（busy / calm）收成窄条，排在后面。
+// 点一下展开成整卡，记在 opened（会话 → 点开时那次交付的时间）；有新交付了就作废、回到窄条。只存内存：重开页面全部回到窄条。
+const opened = new Map();
+// 测试和不想要窄条时用；页面载入时只读一次，存储不可用时照常开启。
+const stripsOn = (() => { try { return localStorage.getItem('ccb_strip') !== 'off'; } catch (e) { return true; } })();
+const quietCard = (c) => !c.x && !!c.v && (dotOf(c.v) === 'busy' || dotOf(c.v) === 'calm');
+// 续跑 / 后台任务叫醒时，一轮刚结束马上又开下一轮；从看到停下的那一拍起宽限，避免整格闪一下又缩回窄条。
+const WORK_GRACE_MS = 2000;
+function workGrace(c, wasLive, now) {
+  const eligible = stripsOn && mode === 'wall' && filter === 'all' && !quietCard(c) && c.v.k !== 'ask' && !c.v.alert;
+  if (eligible && wasLive) c.workUntil = now + WORK_GRACE_MS;
+  if (!eligible || !(c.workUntil > now)) {
+    c.workUntil = 0; if (c.workTimer) { clearTimeout(c.workTimer); c.workTimer = null; } return;
+  }
+  if (!c.workTimer) c.workTimer = setTimeout(() => { c.workTimer = null; paint(last); }, c.workUntil - now);
+}
+function stripOf(id, c) {
+  if (!stripsOn) return false;
+  const ae = document.activeElement, typingHere = ae && ae.tagName === 'TEXTAREA' && (c.el.contains(ae) || (c.el._rp && c.el._rp.contains(ae)));     // 回话框挪进弹层后仍算正在这张卡里打字
+  return mode === 'wall' && filter === 'all' && (quietCard(c) || c.workUntil > Date.now()) && !opened.has(id) && !typingHere;               // 筛选了某一类 = 想看那一类：照旧整卡
+}
+function openStrip(id) { const c = cards.get(id); opened.set(id, c && c.s ? c.s.resultAt || '' : ''); paint(last); }
+function match(v) { return filter === 'all' || (filter === 'todo' && (v.alert || v.k === 'ask' || !!v.need)) || (filter === 'busy' && v.live) || (filter === 'reply' && v.need === 'reply') || (filter === 'review' && v.need === 'review') || (filter === 'ask' && v.k === 'ask') || (filter === 'stop' && v.alert); }
 const dotOf = (v) => (!v ? 'calm' : v.k === 'ask' || v.alert || v.need === 'reply' ? 'act' : v.need ? 'review' : v.k === 'busy' ? 'busy' : 'calm');
 const cardTitle = (c) => (c.s ? c.s.title : c.x ? c.x.title : c.p ? T('新任务') : '') || '';
 
@@ -1637,25 +1825,38 @@ const cardTitle = (c) => (c.s ? c.s.title : c.x ? c.x.title : c.p ? T('新任务
 let prevHot = new Set(), badgeN = -1;                   // 上一次画的时候「停住了要你跟进」的那些，用来发现新停住的
 function paint(st) {
   if (!st) return; last = st; HOME = st.home || HOME;
+  srvDone = st.processed && typeof st.processed === 'object' ? st.processed : {};      // 老服务没有这个字段：只看本机的 ccb_done，和以前一样
+  for (const k of Object.keys(undone)) if (Date.now() - undone[k].t > 15000) delete undone[k];   // 15 秒：clear 早该到了；还在说明服务那边没清掉，照服务的算
   paintLimits(st);
   try { paintCrash(st); } catch (e) { console.error('crash', e); }
   // 墙上的旧位置要在这一轮改任何东西（筛选藏卡、换内容）之前量，不然量到的已经是新位置，什么都动不起来
   const pre = mode === 'wall' && !first && !calm.matches ? wallRects() : null;
-  const stage = $('#stage'); const list = []; let nBusy = 0, nReply = 0, nReview = 0, nAsk = 0, nStop = 0, shown = 0; const hot = new Map();
+  const stage = $('#stage'), paintNow = Date.now(); const list = []; let nBusy = 0, nReply = 0, nReview = 0, nAsk = 0, nStop = 0, shown = 0; const hot = new Map();
   const bySid = new Map(st.sessions.map((x) => [x.sid, x]));     // 撞车那一行按 sid 找对方的短名
   for (const s of st.sessions) {
     let c = cards.get(s.sid); if (!c) { c = { el: makeCard(s.sid) }; cards.set(s.sid, c); }
     if (sentAt[s.sid] && (s.status === 'busy' || ms(s.promptAt) >= sentAt[s.sid] - 3000)) { if (s.status !== 'busy' && s.done && ms(s.resultAt) > sentAt[s.sid]) delete sentAt[s.sid]; }
-    c.s = s; const v = view(s); c.v = v; if (v.live) nBusy++; if (v.need === 'reply') nReply++; if (v.need === 'review') nReview++; if (v.k === 'ask') nAsk++;
+    if (opened.has(s.sid) && opened.get(s.sid) !== (s.resultAt || '')) opened.delete(s.sid);
+    c.s = s; const v = view(s), wasLive = !!(c.v && c.v.live); c.v = v; workGrace(c, wasLive, paintNow); if (v.live) nBusy++; if (v.need === 'reply') nReply++; if (v.need === 'review') nReview++; if (v.k === 'ask') nAsk++;
     if (v.alert) { nStop++; hot.set(s.sid + '|' + s.alert.key, { title: s.title, why: v.why }); }
-    const el = c.el; const cls = 'card s-' + v.k + (v.need ? ' s-' + v.need : v.quiet ? ' s-' + v.quiet : '') + (v.alert ? ' alert' : '') + (v.bg ? ' bg' : '') + (el.classList.contains('side') ? ' side' : ''); if (el.className !== cls) el.className = cls;
+    const el = c.el, strip = stripOf(s.sid, c), opn = mode === 'wall' && quietCard(c) && opened.has(s.sid);
+    const cls = 'card s-' + v.k + (v.need ? ' s-' + v.need : v.quiet ? ' s-' + v.quiet : '') + (v.alert ? ' alert' : '') + (v.bg ? ' bg' : '') + (el.classList.contains('side') ? ' side' : '') + (strip ? ' strip' : '') + (opn ? ' opened' : '') + (strip && el.classList.contains('s1') ? ' s1' : ''); if (el.className !== cls) el.className = cls;
     const bk = v.back ? '1' : '0'; if (el.dataset.back !== bk) el.dataset.back = bk;
     const vis = mode === 'flow' || match(v); if (el.hidden === vis) el.hidden = !vis; if (vis) shown++;
     const tt = $('.title', el); if (tt.textContent !== s.title) tt.textContent = s.title;
     const tg = $('.tag', el); const tgv = s.provider === 'codex' ? 'Codex' : ''; if (tg.textContent !== tgv) { tg.textContent = tgv; tg.hidden = !tgv; }
-    const mt = T(v.bg ? '后台在跑 · ' + dur(s.statusAt || s.resultAt, st.now) : v.k === 'busy' ? (v.why === 'stall' ? '运行中 · ' + Math.round((s.quiet || 0) / 60000) + ' 分钟没动静' : '运行中 · ' + dur(s.turnAt || s.promptAt, st.now))
+    const mt0 = T(v.bg ? '后台在跑 · ' + dur(s.statusAt || s.resultAt, st.now) : v.k === 'busy' ? (v.why === 'stall' ? '运行中 · ' + Math.round((s.quiet || 0) / 60000) + ' 分钟没动静' : '运行中 · ' + dur(s.turnAt || s.promptAt, st.now))
       : v.k === 'stopped' ? '停住了 · ' + WHY[v.why] : v.snoozed ? '先放着 · 到 ' + clockOf(s.snooze.until, st.now) : v.k === 'done' ? v.label + ' · ' + when(s.resultAt, st.now, true) : v.label);
-    setMeta($('.meta', el), mt);
+    const eta = v.bg || (v.k === 'busy' && v.why !== 'stall') ? etaText(s.eta, st.now) : '', mt = eta ? mt0 + ' · ' + eta : mt0;   // 它自己报的预计：只在真在跑的时候接上
+    const mel = $('.meta', el), mtip = eta ? etaTip(s.eta) : ''; setMeta(mel, mt, eta); if (mel.title !== mtip) mel.title = mtip;
+    const can = !!s.channel && v.k !== 'ask', au = can && s.auto && (s.status === 'idle' || s.status === 'shell') ? s.auto : null;
+    const sl = $('.sl', el), sau = au && au.state === 'armed' ? au : null, sec = sau ? Math.max(0, Math.ceil(sau.fireIn / 1000)) : 0;   // 窄条和 .ap 共用显示条件、字样与提示，整句只放在提示里
+    const slk = JSON.stringify([s.title, mt, sau ? sec : null]), slLabel = s.title + ' · ' + mt;
+    if (sl.getAttribute('aria-label') !== slLabel) sl.setAttribute('aria-label', slLabel);
+    const slTip = sau ? T('会发：') + T(autoBody(sau.text)) + '\n' + T('依据（它预判你下一句会说的，只用来判断，不会发出去）：') + (sau.basis || '') : T('点一下展开成整卡');
+    if (sl.title !== slTip) sl.title = slTip;
+    if (sl.dataset.k !== slk) { sl.dataset.k = slk;
+      sl.innerHTML = '<i></i><b>' + esc(s.title) + '</b><em></em>' + (sau ? '<span class="sa">' + T('自动接着做') + ' · ' + T(sec > 0 ? sec + ' 秒后发' : '排队中') + '</span><button data-ap="cancel">' + esc(T('不发了')) + '</button>' : '<span>' + esc(mt) + '</span>'); }
     setModel($('.mdl', el), s);
     const you = $('.you', el); const yk = s.prompt || '';
     if (you.dataset.k !== yk) { you.dataset.k = yk; const auto = yk.startsWith(AUTO_MARK), said = auto ? T(autoBody(yk)) || yk : yk;
@@ -1671,7 +1872,7 @@ function paint(st) {
     if (body.dataset.k !== key) { const keep = body.dataset.k && body.dataset.k.split('|')[0] === v.k ? body.scrollTop : 0; body.dataset.k = key; body.innerHTML = L(bodyHTML(s, v)); body.scrollTop = keep; }
     const tick = $('.tick', body);
     if (tick) { const tk = T(s.tool || '思考中') + (LANG === 'en' ? ' · step ' + s.steps : ' · 第 ' + s.steps + ' 步'); if (tick.textContent !== tk) tick.textContent = tk; }
-    const rp = el._rp, ta = $('textarea', rp), bt = $('.send', rp); const can = !!s.channel && v.k !== 'ask';
+    const rp = el._rp, ta = $('textarea', rp), bt = $('.send', rp);
     const ph = T(v.k === 'ask' ? '它在等你选，选完才能回话' : !s.channel ? '没对上它的终端标签，从菜单去终端里回' : v.k === 'busy' ? '它在忙，发了会排队' : '接着说，回车发送');
     if (ta.placeholder !== ph) ta.placeholder = ph;
     // 预判只给空闲、能回话的卡；刚回车发出去的 8 秒内不给（服务端的屏幕读数慢一两拍，别把上一轮的建议又摆出来）
@@ -1681,7 +1882,7 @@ function paint(st) {
       sgEl.dataset.k = sgKey; sgEl.hidden = !sgKey || !sg.options.length;
       sgEl.innerHTML = sg ? sg.options.map((o) => '<button class="chip" data-sg="' + o.n + '" title="' + esc(T('填进输入框，改完再发')) + '"><kbd>' + o.n + '</kbd><span>' + esc(o.label) + '</span></button>').join('') : '';
     }
-    const au = can && s.auto && (s.status === 'idle' || s.status === 'shell') ? s.auto : null, apEl = el._ap;
+    const apEl = el._ap;
     const apSec = au && au.state === 'armed' ? Math.ceil(au.fireIn / 1000) : 0;
     const apKey = au ? au.state + '|' + (au.text || au.why || '') + '|' + (au.basis || '') + '|' + apSec : '';
     if (apEl.dataset.k !== apKey) {
@@ -1698,26 +1899,30 @@ function paint(st) {
     syncGhost(el);
     if (document.activeElement !== ta && ta.disabled === can) ta.disabled = !can;
     if (bt.disabled === can) bt.disabled = !can; const cl = $('.clip', rp); if (cl.disabled === can) cl.disabled = !can;
-    list.push({ id: s.sid, el, rank: v.rank, t: v.t, i: list.length });
+    list.push({ id: s.sid, el, rank: v.rank, t: v.t, i: list.length, strip: strip ? 1 : 0 });
   }
   for (const p of st.pending || []) {
     const id = 'p:' + p.name; let c = cards.get(id);
     if (!c) { const el = document.createElement('article'); el.dataset.sid = id; c = { el }; cards.set(id, c);
-      el.addEventListener('click', (e) => { if (el.classList.contains('side')) { go(id, true); return; } const q = c.p; const a = e.target.closest('[data-ans],[data-p]'); if (!a) return;
+      el.addEventListener('keydown', (e) => { if (e.target.closest('.sl') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openStrip(id); } });
+      el.addEventListener('click', (e) => { if (el.classList.contains('side')) { go(id, true); return; } if (el.classList.contains('strip')) { openStrip(id); return; } if (e.target.closest('[data-act="shrink"]')) { opened.delete(id); paint(last); return; } const q = c.p; const a = e.target.closest('[data-ans],[data-p]'); if (!a) return;
         const call = a.dataset.ans !== undefined ? api('/api/answer', { name: q.name, option: +a.dataset.ans, text: q.dialog.options[+a.dataset.ans] }) : api('/api/' + a.dataset.p, { name: q.name });
         call.then((r) => { if (!r.ok) toast(r.error || '没成功'); refresh(); }); }); }
     c.p = p; const ask = !!p.dialog; if (ask) nAsk++; else nBusy++;
     c.v = { k: ask ? 'ask' : 'busy', label: ask ? '等你选' : '启动中' };
-    const vis = mode === 'flow' || filter === 'all' || (ask ? filter === 'ask' : filter === 'busy'); if (vis) shown++;
+    const vis = mode === 'flow' || filter === 'all' || (ask ? filter === 'ask' || filter === 'todo' : filter === 'busy'); if (vis) shown++;
     const key = (ask ? 'd:' + JSON.stringify(p.dialog.options) + p.dialog.question : 'boot:' + p.screen);
     if (c.el.hidden === vis) c.el.hidden = !vis; const bk = ask ? '0' : '1'; if (c.el.dataset.back !== bk) c.el.dataset.back = bk;
-    if (c.el.dataset.k !== key) { c.el.dataset.k = key; c.el.className = 'card ' + (ask ? 's-ask' : 's-busy') + (c.el.classList.contains('side') ? ' side' : '');
-      c.el.innerHTML = L('<div class="chead"><span class="meta">' + (ask ? '等你选' : '启动中') + '</span>' + (p.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '</div><h2 class="title" style="cursor:default">' + esc(/^恢复/.test(p.prompt) ? cut(p.prompt, 40) : '新任务') + '</h2><p class="head">' + (ask ? '开工前要你先选一下' : '正在后台启动，几秒后出现在这里。') + '</p>' +
+    if (c.el.dataset.k !== key) { c.el.dataset.k = key;
+      c.el.innerHTML = L('<div class="chead"><span class="meta">' + (ask ? '等你选' : '启动中') + '</span>' + (p.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '<button class="ib shrink" data-act="shrink" aria-label="收成一条" title="收成一条">' + ICON.shrink + '</button></div><h2 class="title" style="cursor:default">' + esc(/^恢复/.test(p.prompt) ? cut(p.prompt, 40) : '新任务') + '</h2><p class="head">' + (ask ? '开工前要你先选一下' : '正在后台启动，几秒后出现在这里。') + '</p>' +
         '<p class="you" style="cursor:default"><span class="who">你</span>' + esc(p.prompt || '没写任务，空会话') + '</p><div class="body">' +
         (ask ? '<div class="lbl">开工前要你先选一下 · ' + esc(p.cwd.replace(HOME, '~')) + '</div>' + dialogHTML(p.dialog)
           : '<div class="empty">正在后台启动，几秒后出现在这里。</div>' + (p.screen ? '<div class="lbl" style="margin-top:12px">它现在停在</div><pre class="screen">' + esc(p.screen) + '</pre>' : '')) +
-        '<div class="row"><button class="plain" data-p="attach">去终端看</button><button class="plain" data-p="cancel">取消这个任务</button></div></div>'); }
-    list.push({ id, el: c.el, rank: ask ? 0 : 5, t: p.at, i: list.length });
+        '<div class="row"><button class="plain" data-p="attach">去终端看</button><button class="plain" data-p="cancel">取消这个任务</button></div></div>' +
+        '<div class="sl" role="button" tabindex="0" title="点一下展开成整卡"><i></i><b>' + esc(/^恢复/.test(p.prompt) ? cut(p.prompt, 40) : '新任务') + '</b><em></em><span>启动中</span></div>'); }
+    const pst = stripOf(id, c), opn = mode === 'wall' && quietCard(c) && opened.has(id);
+    const cls = 'card ' + (ask ? 's-ask' : 's-busy') + (c.el.classList.contains('side') ? ' side' : '') + (pst ? ' strip' : '') + (opn ? ' opened' : '') + (pst && c.el.classList.contains('s1') ? ' s1' : ''); if (c.el.className !== cls) c.el.className = cls;
+    list.push({ id, el: c.el, rank: ask ? 0 : 5, t: p.at, i: list.length, strip: pst ? 1 : 0 });
   }
   for (const x of st.lost || []) {                  // 做到一半进程退出的：以前卡片直接消失，现在留一张告诉你
     const id = 'x:' + x.sid; let c = cards.get(id);
@@ -1727,7 +1932,7 @@ function paint(st) {
         api('/api/' + (a.dataset.x === 'revive' ? 'unarchive' : 'ack'), { sid: q.sid }).then((r) => { if (!r.ok) toast(r.error || '没成功'); else if (a.dataset.x === 'revive') toast('正在后台把它接回来，马上出现'); refresh(); }).catch(() => toast('总控台服务没应答')); }); }
     c.x = x; nStop++; hot.set(id, { title: x.title, why: 'gone' });
     c.v = { k: 'stopped', label: '停住了', alert: true, why: 'gone' };
-    const vis = mode === 'flow' || filter === 'all' || filter === 'stop'; if (vis) shown++;
+    const vis = mode === 'flow' || filter === 'all' || filter === 'stop' || filter === 'todo'; if (vis) shown++;
     if (c.el.hidden === vis) c.el.hidden = !vis; if (c.el.dataset.back !== '0') c.el.dataset.back = '0'; const key = 'gone:' + x.lostAt + (x.crash ? ':' + x.crash : ''); const gw = x.crash ? WHY_LONG.crash : WHY_LONG.gone;   // 一起退出的（闲着的也在）不说「做到一半」
     if (c.el.dataset.k !== key) { c.el.dataset.k = key; c.el.className = 'card s-stopped alert' + (c.el.classList.contains('side') ? ' side' : '');
       c.el.innerHTML = L('<div class="chead"><span class="meta">停住了 · 进程退出</span>' + (x.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '</div><h2 class="title" style="cursor:default">' + esc(x.title || '') + '</h2><p class="head">' + gw + '</p>' +
@@ -1736,11 +1941,11 @@ function paint(st) {
     list.push({ id, el: c.el, rank: 1, t: x.lostAt, i: list.length });
   }
   const keep = new Set(list.map((x) => x.id));
-  for (const [id, c] of cards) if (!keep.has(id)) { if (docked && docked.sid === id) undock(); if (c.halo) c.halo.remove(); c.el.remove(); cards.delete(id); }   // 弹层里正借着它的回话框：先收回，弹层底栏跟着收起
+  for (const [id, c] of cards) if (!keep.has(id)) { if (c.workTimer) clearTimeout(c.workTimer); if (docked && docked.sid === id) undock(); if (c.halo) c.halo.remove(); c.el.remove(); cards.delete(id); }   // 弹层里正借着它的回话框：先收回，弹层底栏跟着收起
 
   // 排序：谁完成了谁到前面。正在卡片里打字时先不挪，免得字打一半卡片跑了。
   const typing = document.activeElement && document.activeElement.tagName === 'TEXTAREA' && document.activeElement.closest('.card');
-  const sorted = list.slice().sort((a, b) => a.rank - b.rank || b.t - a.t || a.i - b.i).map((x) => x.id);
+  const sorted = list.slice().sort((a, b) => (a.strip || 0) - (b.strip || 0) || a.rank - b.rank || b.t - a.t || a.i - b.i).map((x) => x.id);   // 窄条排在整卡后面（点开的不要你管的卡排在要你的后面、窄条前面）
   setGroups(sorted);
   if (mode === 'flow') for (const id of sorted) if (foldOn.has(cards.get(id).g.key)) cards.get(id).el.hidden = true;
   const next = typing && mode === 'wall' ? order.filter((id) => keep.has(id)).concat(sorted.filter((id) => !order.includes(id))) : byProject(mode === 'flow' ? sorted.filter((id) => !foldOn.has(cards.get(id).g.key)) : sorted);
@@ -1770,7 +1975,7 @@ function paint(st) {
     if (!cur || !keep.has(cur) || !order.includes(cur)) { cur = order[0] || null; curAt = Date.now(); }
     else if (arrived && !first && !engaged() && arrived !== cur) { cur = arrived; curAt = Date.now(); }
   }
-  for (const id of order) { const c = cards.get(id), pj = c.s && $('.proj', c.el); if (pj) { const pr = c.s.project, t = T(groupBy === 'status' && mode === 'wall' ? (pr && pr.key ? pr.name : OTHER_P.name) : c.g.name); if (pj.textContent !== t) pj.textContent = t; } }   // 按状态分列时列名已经是状态，卡上写它属于哪个项目
+  for (const id of order) { const c = cards.get(id), pj = c.s && $('.proj', c.el); if (pj) { const pr = c.s.project, t = T(groupBy === 'status' && mode === 'wall' ? (pr && pr.key ? pr.name : OTHER_P.name) : c.g.name); if (pj.textContent !== t) pj.textContent = t; const se = $('.sl em', c.el); if (se && se.textContent !== t) se.textContent = t; } }   // 按状态分列时列名已经是状态，卡上写它属于哪个项目
   layout();
   if (wallBefore) { flipFrom(wallBefore); wallBefore = null; }
   if (focusNew && mode === 'wall') { const hit = st.sessions.find((x) => x.tmux === focusNew); if (hit) { wantFocus = hit.sid; focusNew = null; } }
@@ -1778,10 +1983,12 @@ function paint(st) {
   if (wantFocus && cards.has(wantFocus)) { const wf = cards.get(wantFocus).el, ta = wf._rp && $('textarea', wf._rp); if (ta && !ta.disabled) { ta.focus({ preventScroll: mode === 'flow' }); wantFocus = null; } }
   let blank = $('.blank');
   if (!shown) { if (!blank) { blank = document.createElement('div'); blank.className = 'blank'; $('main').appendChild(blank); }
-    blank.textContent = T(list.length ? '这个筛选下现在没有会话。' : '还没有会话。⌘N 开一个新任务，⌘T 直接开一个空会话。'); } else if (blank) blank.remove();
+    const text = T(!list.length ? '还没有会话。⌘N 开一个新任务，⌘T 直接开一个空会话。' : filter === 'todo' ? '没有要你处理的了。再点一下「要你」回到全部。' : '这个筛选下现在没有会话。'); if (blank.textContent !== text) blank.textContent = text; } else if (blank) blank.remove();
 
   if ((filter === 'ask' && !nAsk) || (filter === 'stop' && !nStop)) filter = 'all';
-  const segs = [['all', '全部', list.length, ''], ['reply', '待跟进', nReply, nReply ? 'attn' : ''], ['review', '待审阅', nReview, nReview ? 'ring' : ''], ['busy', '运行中', nBusy, '']];
+  const nTodo = nReply + nReview + nAsk + nStop;                  // 要你处理的：待跟进 + 待审阅 + 等你选 + 停住了
+  // 「要你 N」另列四类之和；点一下墙上只剩这四类，再点一下回到全部；「停住了」仍能单独筛选
+  const segs = [['all', '全部', list.length, ''], ['todo', '要你', nTodo, nTodo ? 'attn' : ''], ['reply', '待跟进', nReply, nReply ? 'attn' : ''], ['review', '待审阅', nReview, nReview ? 'ring' : ''], ['busy', '运行中', nBusy, '']];
   if (nAsk) segs.push(['ask', '等你选', nAsk, 'attn']);
   if (nStop) segs.push(['stop', '停住了', nStop, 'attn']);
   // 刚停住的在界面上说一声（你不在总控台前面时，服务端另发系统通知）
@@ -1791,8 +1998,8 @@ function paint(st) {
   const fk = JSON.stringify([segs, filter, mode]); const fe = $('#filters');
   if (fe.dataset.k !== fk) { fe.dataset.k = fk; fe.innerHTML = segs.map(([k, t, n, c]) => '<button data-f="' + k + '" class="' + c + '" aria-pressed="' + (mode === 'wall' && filter === k) + '"' + (mode === 'flow' && k !== 'all' && !n ? ' disabled' : '') + '>' + T(t) + '<b class="num">' + n + '</b></button>').join(''); }
   const ab = T('归档') + (st.archived ? ' ' + st.archived : ''); if ($('#archBtn').textContent !== ab) $('#archBtn').textContent = ab;
+  remoteInfo = st.remote || null; if ($('#pairBtn').hidden !== !st.remote) { $('#pairBtn').hidden = !st.remote; document.body.classList.toggle('remote-on', !!st.remote); }      // 只有 config.json 的 remote 开着、而且是本机界面时服务才给 remote
   const hint = st.ghostty ? '' : T('Ghostty 没连上，暂时不能回你标签里的会话'); if ($('#hint').textContent !== hint) $('#hint').textContent = hint;
-  const nTodo = nReply + nReview + nAsk + nStop;                  // 要你处理的：待跟进 + 待审阅 + 等你选 + 停住了
   const ttl = (nTodo ? '(' + nTodo + ') ' : '') + T('总控台'); if (document.title !== ttl) document.title = ttl;
   if (badgeN !== nTodo) { badgeN = nTodo; tell({ type: 'badge', n: nTodo }); }        // Dock 角标只在数变了时告诉外壳
   for (const n of st.notices || []) toast(n.text);
@@ -1824,7 +2031,7 @@ $('#crash').addEventListener('click', async (e) => {
   if (!r.ok) { b.disabled = false; toast(r.error || '没成功'); }
   crashK = ''; refresh();
 });
-let pollT, polling = false, synced = false, sv = null, heldNotices = [];   // sv：拼好的上一份状态，带服务给的版本号 v；heldNotices：拼不上那一拍带来的提示（服务已经取走了，整份里不会再有）
+let pollT, polling = false, synced = null, sv = null, heldNotices = [];   // sv：拼好的上一份状态，带服务给的版本号 v；heldNotices：拼不上那一拍带来的提示（服务已经取走了，整份里不会再有）
 // 带版本号拉，服务只回变过的（server.mjs 的 stateSince）：changed 换上、gone 拿掉、ids 定先后、q 是在跑的会话多久没动静，
 // 别的字段有就换。整份（full、或者老服务不认 v）原样用。拼不上（版本号对不上、ids 里有没见过的）回 null，马上要一次整份
 function mergeState(prev, d) {
@@ -1851,7 +2058,8 @@ async function poll() {
     if (!sv) heldNotices = heldNotices.concat(d.notices || []);
     else {
       if (heldNotices.length) { sv.notices = heldNotices.concat(sv.notices || []); heldNotices = []; }
-      paint(sv); if (!synced) { synced = true; syncDone(done); }
+      paint(sv); const boot = String(sv.v || '').split('.')[0];
+      if (boot !== synced) { synced = boot; syncDone(done); }     // 页面第一次轮询成功、服务换了一台（重启后 processed 是空的）都把本机的全发一遍：手机页面不跟着 build.sh update 重载，不重发的话 Mac 上就看不到手机点过的
     }
   } catch (e) { $('#hint').textContent = T('总控台服务没应答'); }
   polling = false; pollT = setTimeout(poll, again ? 60 : document.hidden ? 4000 : 1500);
@@ -1881,6 +2089,15 @@ function snoozeTimes(now) {
   out.push(['明早 9 点', d.getHours() < 5 ? at(0, 9) : at(1, 9), false]);
   return out;
 }
+// 预计交付（11/18 Khalil 要的）：服务给它这一轮最新报的 { at, mins }（窗口回复里单独一行【预计】N 分钟，见 server.mjs 的 etaIn）。
+// 到点前写「预计 HH:MM 交」（明天的带「明天」）；过了 1 分钟以上写「比预计晚 N 分钟」。不是琥珀色：晚了不等于要你处理，卡住另有「N 分钟没动静」
+function etaText(e, now) {
+  const at = e ? Date.parse(e.at) : NaN, mins = e ? Number(e.mins) : NaN;
+  if (!(at > 0) || !(mins > 0)) return '';
+  const due = at + mins * 60000;
+  return now - due >= 60000 ? T('比预计晚 ' + dur(due, now)) : T('预计 ' + clockOf(due, now) + ' 交');
+}
+function etaTip(e) { return T('窗口在 ' + hm(e.at) + ' 报的：还要 ' + Math.round(Number(e.mins)) + ' 分钟'); }
 function clockOf(t, now) {       // 今天写钟点，别的日子前面加「明天」（最多 48 小时，只会是今天或明天）
   const d = new Date(t), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
   return d.toDateString() === new Date(now).toDateString() ? hm : '明天 ' + hm;
@@ -1899,7 +2116,7 @@ async function snoozeTo(s, until) {
   const r = await api('/api/snooze', { sid: s.sid, until, at: s.resultAt }).catch(() => ({ ok: false, error: '总控台服务没应答' }));
   if (!r.ok) { toast(r.error || '没成功'); refresh(); return; }
   if (mode === 'flow' && cur === s.sid) pickNext = s.sid;     // 封面：和「审完了」一样，顶上下一张要你处理的
-  toast('先放着到 ' + clockOf(r.until, Date.now()), { action: '撤销', ms: 6000, onAction: () => api('/api/snooze', { sid: s.sid, clear: true }).then(refresh, refresh) });
+  undoToast('先放着到 ' + clockOf(r.until, Date.now()), () => unsnooze(s));
   refresh();
 }
 function unsnooze(s) {           // 推迟中的卡点「不放了」：服务清掉，回到待跟进
@@ -1907,8 +2124,26 @@ function unsnooze(s) {           // 推迟中的卡点「不放了」：服务�
 }
 
 // ── 提示条 / 确认 ──
-let toastT;
+let toastT, recentUndo = null;
+// 按钮和快捷键调用同一份记录。先消费记录，再执行，异步撤销也不能重复发。
+function undoToast(text, undo) {
+  const item = { until: Date.now() + 6000, run: () => {
+    if (recentUndo !== item || Date.now() >= item.until) return;
+    recentUndo = null; clearTimeout(toastT); $('#toast').classList.remove('on'); undo();
+  } };
+  recentUndo = item; toast(text, { action: '撤销', ms: 6000, onAction: item.run });
+}
+function undoKey(e) {
+  if (!e.metaKey || e.shiftKey || e.altKey || e.ctrlKey || e.isComposing || e.keyCode === 229 || !(e.code === 'KeyZ' || e.key.toLowerCase() === 'z')) return;
+  const a = document.activeElement;
+  const writing = a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /^(text|search|email|url|tel|password|number)$/.test(a.type)));
+  if (writing && a.value) return;
+  if (!recentUndo || Date.now() >= recentUndo.until) return;
+  e.preventDefault(); recentUndo.run();
+}
 function toast(text, opt) {
+  // 提示条被替换后，⌘Z 不能再撤屏幕上看不到的旧动作。
+  if (recentUndo && opt?.onAction !== recentUndo.run) recentUndo = null;
   const t = $('#toast'), b = $('button', t); $('span', t).textContent = T(text); t.classList.add('on'); clearTimeout(toastT);
   if (opt && opt.action) { b.hidden = false; b.textContent = T(opt.action); b.onclick = () => { t.classList.remove('on'); opt.onAction(); }; } else b.hidden = true;
   toastT = setTimeout(() => t.classList.remove('on'), (opt && opt.ms) || 3200);
@@ -1948,6 +2183,46 @@ async function loadArchive() {
   $('#aNote').textContent = T('点「归档」：没留下东西的直接删（对话在暂存处放 ' + (r.keepDays || 30) + ' 天），其余停掉会话、对话留着，能恢复。');
 }
 $('#archBtn').addEventListener('click', () => { loadArchive(); $('#archDlg').showModal(); });
+// ── 手机（11/17）：每次打开出一个新的配对码（旧的作废），二维码 + 链接；关掉弹层就作废；列出已配对的设备、单独撤销 ──
+let pairExp = 0, pairTick = null, pairAt = 0, remoteInfo = null;
+async function loadDevs() {
+  let r; try { r = await api('/api/remote/devices'); } catch (e) { r = { devices: [] }; }
+  const now = Date.now(), ds = r.devices || [];
+  $('#rDevs').innerHTML = L((ds.length ? ds.map((d) => '<div class="arow" data-id="' + esc(d.id) + '"><div class="t"><b>' + esc(d.name) + '</b><span>' + esc(d.login) + '</span></div>' +
+    '<span class="w num" title="' + esc(d.seenAt ? T('最近一次') + ' ' + when(d.seenAt, now) : '') + '">' + when(d.at, now) + '</span><button class="plain" data-r="revoke" style="color:var(--danger)">撤销这台</button></div>').join('')
+    : '<div class="empty" style="padding:10px 0">还没有配对的设备。</div>') + (r.dirty ? '<div class="rnote" id="rDirty" style="color:var(--danger)">设备表没写进盘，正在重试。写好之前重启，所有手机都要重新配对。</div>' : ''));
+  if (pairExp > Date.now() && r.ok && !r.pairing) {           // 码没了：新配上一台（写出是哪台），或者因为别的原因作废了
+    const nd = ds.find((d) => d.at >= pairAt - 1000);
+    pairExp = 0; $('#rQr').innerHTML = ''; $('#rLink').textContent = ''; $('#rCopy').hidden = true;
+    $('#rNote').textContent = nd ? T('配好了：' + nd.name + '（' + nd.login + '）。要再配一台，关掉再点「手机」。') : T('这个码不能用了（服务重启、在别处作废或已被用掉）。关掉再点「手机」出一个新的。');
+  }
+}
+function pairCount() {
+  clearTimeout(pairTick); if (!$('#pairDlg').open || !pairExp) return;
+  const m = Math.ceil((pairExp - Date.now()) / 60000);
+  if (m <= 0) { pairExp = 0; $('#rQr').innerHTML = ''; $('#rLink').textContent = ''; $('#rCopy').hidden = true; $('#rNote').textContent = T('这个码过期了。关掉再点「手机」出一个新的。'); return; }
+  $('#rNote').textContent = T('用手机相机扫这个码，' + m + ' 分钟内有效，用一次就作废');
+  pairTick = setTimeout(() => { pairCount(); loadDevs(); }, 2000);
+}
+$('#pairBtn').addEventListener('click', async () => {
+  pairExp = 0; pairAt = Date.now(); $('#rQr').innerHTML = ''; $('#rLink').textContent = ''; $('#rCopy').hidden = true; $('#rNote').textContent = T('正在出配对码…');
+  const ri = remoteInfo || {};
+  $('#rFoot').textContent = ri.down ? T('远程端口 ' + ri.port + ' 没听上（' + ri.down + '），手机现在连不上')
+    : ri.port ? T('手机要和这台 Mac 登同一个 Tailscale，tailscale serve 指向 127.0.0.1:' + ri.port + '。撤销以后那台手机下一次请求就被拒。') : T('手机要和这台 Mac 登同一个 Tailscale，这台 Mac 上开着 tailscale serve。撤销以后那台手机下一次请求就被拒。');
+  $('#pairDlg').showModal(); loadDevs();
+  let r; try { r = await api('/api/remote/pair', {}); } catch (e) { r = { ok: false }; }
+  if (!$('#pairDlg').open) { if (r.ok) api('/api/remote/pair', { cancel: true }).catch(() => {}); return; }   // 码还没回来弹层就关了：回来的这个码马上作废
+  if (!r.ok) { $('#rNote').textContent = T(r.error || '没出成配对码'); return; }
+  $('#rQr').innerHTML = r.qr; $('#rLink').textContent = r.url; $('#rCopy').hidden = false; pairExp = r.exp; pairCount();
+});
+$('#pairDlg').addEventListener('close', () => { clearTimeout(pairTick); if (pairExp > Date.now()) api('/api/remote/pair', { cancel: true }).catch(() => {}); pairExp = 0; $('#rQr').innerHTML = ''; $('#rLink').textContent = ''; });
+addEventListener('pagehide', () => { if (pairExp > Date.now()) try { fetch('/api/remote/pair', { method: 'POST', keepalive: true, headers: { ...HDR, 'content-type': 'application/json' }, body: '{"cancel":true}' }); } catch (e) {} });   // 弹层开着就刷新 / 退出：码作废
+$('#rCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('#rLink').textContent); toast('已复制配对链接（10 分钟内有效）'); } catch (e) { toast('没复制成，长按链接手动复制'); } });
+$('#rDevs').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-r="revoke"]'); if (!b) return; b.disabled = true;
+  const r = await api('/api/remote/revoke', { id: b.closest('.arow').dataset.id }).catch(() => ({ ok: false }));
+  toast(r.ok ? '已撤销：那台设备下一次请求就会被拒' : (r.error || '没撤销成')); loadDevs();
+});
 $('#aBody').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-a]'); if (!b) return; const row = b.closest('.arow'), sid = row.dataset.sid, title = row.dataset.title;
   if (b.dataset.a === 'detail') { openDetail(sid, title); return; }
@@ -2100,7 +2375,7 @@ async function goNew() {
   try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '', account: pick.provider === 'claude' ? pick.account || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   $('#nGo').disabled = false;
-  if (r.ok) { $('#nPrompt').value = ''; newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }
+  if (r.ok) { $('#nPrompt').value = ''; saveDraft(NEW_DRAFT, ''); newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }
 }
 // ⌘T：不弹窗，直接开一个空会话（相当于「新开一个终端，里面已经是 Claude Code」）
 let focusNew = null, wantFocus = null, pickNext = null;
@@ -2115,16 +2390,74 @@ wireAtts(newHold, $('#newDlg'), $('#nAtts'), $('#nPrompt'), $('#nClip'), null);
 $('#newBtn').addEventListener('click', () => openNew());
 $('#nGo').addEventListener('click', goNew);
 $('#nPrompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); goNew(); } });
+$('#nPrompt').addEventListener('input', () => saveDraft(NEW_DRAFT, $('#nPrompt').value));
+if (!$('#nPrompt').value) $('#nPrompt').value = draftOf(NEW_DRAFT);
+
+// ── ⌘K 跳到窗口（11/17）：墙上几十个窗口时，按名字直接找到一个 ──
+// 搜：短名（khalil-7d）、登记名、卡上的标题、项目名、卡上那句结论；空格隔开的几个词都要对上，不分大小写。
+// 排：先看对上的是哪一样（短名 / 登记名开头 0 > 标题开头 1 > 名字或标题里有 2 > 项目 3 > 结论 4，几个词取最差的那档），
+//     同一档里要你的在前（和墙上「按状态」同一套 dotOf：要你处理 → 待审阅 → 运行中 → 无需处理），再按最近动过。
+// 回车 / 点一行 = 放大看那一张（和 ⌘O 同一个大窗口，在里面也能回话）。「启动中」的卡还没有对话，不列。
+// 只认 ⌘ 不认 Ctrl：输入框里 Ctrl+K 是 macOS 自带的「删到行尾」。别的弹窗开着时不开（v1 不处理叠在大窗口上的情形）。
+const JUMP_RANK = { act: 0, review: 1, busy: 2, calm: 3 };
+let jumpHits = [], jumpSel = 0;
+function jumpItems() {
+  const out = [];
+  for (const [id, c] of cards) {
+    const o = c.s || c.x; if (!o) continue;
+    out.push({ id, k: c.x ? 'act' : dotOf(c.v), short: shortName(o), reg: String(o.regName || ''), title: ($('.title', c.el) || {}).textContent || o.title || '',
+      proj: (o.project && o.project.name) || '', head: ($('.head', c.el) || {}).textContent || '', at: Date.parse(o.lastAt || '') || 0 });
+  }
+  return out;
+}
+function jumpScore(it, words) {                // 越小越靠前；有一个词哪里都对不上 = null（不列）
+  const sh = it.short.toLowerCase(), rg = it.reg.toLowerCase(), ti = it.title.toLowerCase(), pj = it.proj.toLowerCase(), hd = it.head.toLowerCase();
+  let worst = 0;
+  for (const w of words) {
+    const t = sh.startsWith(w) || rg.startsWith(w) ? 0 : ti.startsWith(w) ? 1 : sh.includes(w) || rg.includes(w) || ti.includes(w) ? 2 : pj.includes(w) ? 3 : hd.includes(w) ? 4 : -1;
+    if (t < 0) return null; worst = Math.max(worst, t);
+  }
+  return worst;
+}
+function paintJump() {
+  const words = $('#jQ').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  jumpHits = jumpItems().map((it) => ({ it, t: jumpScore(it, words) })).filter((x) => x.t !== null)
+    .sort((a, b) => a.t - b.t || JUMP_RANK[a.it.k] - JUMP_RANK[b.it.k] || b.it.at - a.it.at).map((x) => x.it);
+  jumpSel = Math.min(jumpSel, Math.max(0, jumpHits.length - 1));
+  const ul = $('#jList');
+  if (!jumpHits.length) { ul.innerHTML = '<li class="jnone">' + esc(T('没有对得上的窗口')) + '</li>'; $('#jQ').removeAttribute('aria-activedescendant'); return; }
+  ul.innerHTML = jumpHits.map((it, i) => '<li role="option" id="j' + i + '" data-j="' + i + '" aria-selected="' + (i === jumpSel) + '"><span class="jm ' + it.k + '">' + esc(T(STATUS_LANES[it.k])) + '</span>' +
+    '<span class="jt">' + esc(it.title || it.short) + (it.short && it.short !== it.title ? '<small>' + esc(it.short) + (it.proj ? ' · ' + esc(T(it.proj)) : '') + '</small>' : '') + '</span>' +
+    '<span class="jh">' + esc(it.head) + '</span></li>').join('');
+  $('#jQ').setAttribute('aria-activedescendant', 'j' + jumpSel);
+  const sel = ul.children[jumpSel]; if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function openJump() {
+  if (document.querySelector('dialog[open]')) return;
+  $('#jQ').value = ''; jumpSel = 0; paintJump(); $('#jumpDlg').showModal(); $('#jQ').focus();
+}
+function goJump(i) { const it = jumpHits[i]; if (!it) return; $('#jumpDlg').close(); zoomCard(it.id); }
+$('#jQ').addEventListener('input', () => { jumpSel = 0; paintJump(); });
+$('#jQ').addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return;                 // 中文输入法还在选字
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!jumpHits.length) return; jumpSel = (jumpSel + (e.key === 'ArrowDown' ? 1 : -1) + jumpHits.length) % jumpHits.length; paintJump(); return; }
+  if (e.key === 'Enter') { e.preventDefault(); goJump(jumpSel); }
+});
+$('#jList').addEventListener('click', (e) => { const li = e.target.closest('[data-j]'); if (li) goJump(+li.dataset.j); });
+$('#jList').addEventListener('mousemove', (e) => { const li = e.target.closest('[data-j]'); if (!li || +li.dataset.j === jumpSel) return;
+  jumpSel = +li.dataset.j; for (const x of $('#jList').children) x.setAttribute('aria-selected', String(x === li)); $('#jQ').setAttribute('aria-activedescendant', li.id); });
+$('#jumpDlg').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });     // 点框外面（背景）关掉
 
 // ── 内置预览（11/15 Khalil：「点 HTML 还要到浏览器里……做一个内置的预览功能」）──
 // 正文里的路径点了：先问服务能不能预览（网页、PDF、图、音视频、文本），能就在总控台里看；网页跑在另一个端口，碰不到总控台。
 // 不能预览的（文件夹、Word、程序）改走 /api/open；以 / 结尾的路径（文件夹）和 ⌘ 点直接交给 /api/open。
-let previewAt = '';
+let previewAt = '', previewReq = 0;
 function openPath(p) {
   api('/api/open', { path: p }).then((r) => { if (!r.ok) toast(r.error || '打不开'); else if (r.action === 'reveal') toast('这种文件不直接打开，已在访达里选中'); }).catch(() => toast('总控台服务没应答'));
 }
 // 卸掉上一次的内容：iframe 换成空白页、音视频停下并清掉源，不在背后接着放
 function clearPreview() {
+  previewReq++; $('#pText').classList.remove('diff-view');
   $('#pFrame').src = 'about:blank';
   for (const m of [$('#pVid'), $('#pAud')]) { m.pause(); m.removeAttribute('src'); m.load(); }
   $('#pImg').removeAttribute('src'); $('#pText').textContent = '';
@@ -2136,9 +2469,42 @@ function setChrome(isGal, folder) {
   const o = $('#pOpen'), rl = $('#pReload'); o.hidden = rl.hidden = isGal && !folder;
   o.textContent = T(isGal ? '在访达中显示' : '在浏览器打开'); o.title = T(isGal ? '在访达里打开这个文件夹' : '在默认浏览器里打开（也可以 ⌘ 点链接）');
 }
+// 逐笔补丁复用预览和来源卡片的回话框；请求序号挡住关掉后和切文件后的旧应答。
+function diffLine(line) {
+  const ch = line[0], kind = ch === '+' ? 'add' : ch === '-' ? 'del' : '', sign = ch === '-' ? '−' : kind ? '+' : ' ';
+  const text = kind || ch === ' ' ? line.slice(1) : line;
+  return '<div class="dfline ' + kind + '"><span>' + sign + '</span><span>' + esc(text) + '</span></div>';
+}
+function diffHTML(r) {
+  const blocks = (r.items || []).map((item, i) => {
+    const date = new Date(item.at), at = Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const state = item.failed ? T('没改成') : item.create ? T('新建') : item.nopatch ? T('记录里没有改动内容') : '';
+    const head = [T('第 ' + (i + 1) + ' 笔'), item.tool, state, at].filter(Boolean).join(' · ');
+    let lines = '';
+    if (typeof item.patch === 'string') lines = item.patch.replace(/\r\n/g, '\n').split('\n').map(line => /^(@@|\*\*\* )/.test(line) ? '<div class="dfmark">' + esc(line) + '</div>' : diffLine(line)).join('');
+    else for (const h of item.hunks || []) lines += '<div class="dfmark">' + esc('@@ −' + h.oldStart + ',' + h.oldLines + ' +' + h.newStart + ',' + h.newLines + ' @@') + '</div>' + (h.lines || []).map(diffLine).join('');
+    return '<section class="dfchange"><div class="dfhead">' + esc(head) + '</div><div class="dfcode">' + lines + '</div></section>';
+  }).join('');
+  return (blocks || '<p>' + esc(T('这一轮的记录里没找到这个文件的改动')) + '</p>') + '<div class="cut">' + esc(T('Bash 里的写这里看不到')) + '</div>' + (r.truncated ? '<div class="cut">' + esc(T('太长了，只显示了前面一部分')) + '</div>' : '');
+}
+async function openDiff(sid, path) {
+  clearPreview(); const req = ++previewReq, d = $('#preview'); previewAt = ''; previewSid = sid;
+  setChrome(true, null);
+  $('#pTitle').textContent = path.split('/').pop(); $('#pDir').textContent = T('这一轮的改动'); $('#pDir').title = T('这一轮的改动'); $('#pBody').dataset.kind = 'diff';
+  for (const id of ['#pFrame', '#pImg', '#pVid', '#pAud', '#pText']) $(id).hidden = id !== '#pText';
+  const text = $('#pText'); text.classList.add('diff-view'); text.scrollTop = 0; $('#pWait').hidden = false;
+  if (!d.open) d.showModal(); syncDock();
+  let r; try { r = await api('/api/diff?sid=' + encodeURIComponent(sid) + '&path=' + encodeURIComponent(path), null, true); } catch {}
+  if (req !== previewReq || !d.open) return;
+  $('#pWait').hidden = true;
+  const error = !r ? '没读到改动' : r.code === 404 ? '这个文件不在这一轮的清单里了（新的一轮已经开始）' : r.code === 403 ? '这台设备上看不了改动' : r.code !== 200 || !r.body.ok ? '没读到改动' : '';
+  text.innerHTML = error ? '<p>' + esc(T(error)) + '</p>' : diffHTML(r.body);
+}
 // 服务说能预览就按类型显示：网页、PDF 用 iframe；图、音视频用自己的元素；文本、Markdown 用服务读来的内容排版。说不能（文件夹、Word 这类）或不在了，就交给 /api/open
 async function openPreview(p) {
-  let r; try { r = await api('/api/preview', { path: p }); } catch { toast('总控台服务没应答'); return; }
+  const req = ++previewReq;
+  let r; try { r = await api('/api/preview', { path: p }); } catch { if (req === previewReq) toast('总控台服务没应答'); return; }
+  if (req !== previewReq) return;
   if (!r.ok) { if (r.reason === 'not-ready') toast(r.error); else openPath(p); return; }
   clearPreview(); previewAt = p;
   if (r.kind === 'gallery') { renderGallery(r, p); return; }       // 文件夹里多半是图 / 视频：排成格子墙，不跳去访达
@@ -2184,7 +2550,9 @@ function galVidTile(it, i) {
 }
 // 正文里的「图集」小按钮：整条交付里提到的图路径一起问服务，服务按文件夹发钥匙，不在了的、不是图的自己跳过
 async function openGallery(paths) {
-  let r; try { r = await api('/api/preview', { paths }); } catch { toast('总控台服务没应答'); return; }
+  const req = ++previewReq;
+  let r; try { r = await api('/api/preview', { paths }); } catch { if (req === previewReq) toast('总控台服务没应答'); return; }
+  if (req !== previewReq) return;
   if (!r.ok) { toast(r.error || '这些图都打不开了'); return; }
   clearPreview(); previewAt = ''; renderGallery(r, '');
 }
@@ -2817,6 +3185,7 @@ document.querySelectorAll('#oshape button').forEach((b) => b.setAttribute('aria-
 // 预览是从哪张卡打开的：点在卡片上就是那张；点在大窗口里是大窗口那张；点在预览自己里面（Markdown 里的路径）沿用原来那张
 const fromSid = (t) => { const c = t.closest('.card'); if (c) return c.dataset.sid; if (t.closest('#preview')) return previewSid; return t.closest('#detail') ? detailSid : null; };
 document.addEventListener('click', (e) => {
+  const df = e.target.closest('[data-diff]'); if (df) { e.preventDefault(); e.stopPropagation(); openDiff(fromSid(df), df.dataset.diff); return; }
   const f = e.target.closest('[data-path]');
   if (f) { e.preventDefault(); const p = f.dataset.path; if (!e.metaKey) { previewSid = fromSid(e.target); openPreview(p); } else openPath(p); return; }     // 文件夹也先问服务：多半是图 / 视频的当图集看，其余服务回 no-preview，照旧交给访达
   const gc = e.target.closest('[data-gallery]'); if (gc) { e.preventDefault(); let ps = []; try { ps = JSON.parse(gc.dataset.gallery); } catch {} if (ps.length) { previewSid = fromSid(e.target); openGallery(ps); } return; }
@@ -2828,8 +3197,8 @@ document.addEventListener('click', (e) => {
   const dg = e.target.closest('[data-go]'); if (dg) { go(dg.dataset.go, true); return; }
   const fb = e.target.closest('[data-f]');
   if (fb && !fb.disabled) {
-    if (mode === 'wall') { filter = fb.dataset.f; paint(last); return; }
-    const want = fb.dataset.f; const hit = order.find((id) => { const c2 = cards.get(id); return want === 'all' || (want === 'busy' && c2.v.live) || (want === 'reply' && c2.v.need === 'reply') || (want === 'review' && c2.v.need === 'review') || (want === 'ask' && c2.v.k === 'ask') || (want === 'stop' && c2.v.alert); });
+    if (mode === 'wall') { filter = fb.dataset.f === filter ? 'all' : fb.dataset.f; paint(last); return; }     // 再点一下按着的那一个：回到全部
+    const want = fb.dataset.f; const hit = order.find((id) => { const c2 = cards.get(id); return want === 'all' || (want === 'busy' && c2.v.live) || (want === 'reply' && c2.v.need === 'reply') || (want === 'review' && c2.v.need === 'review') || (want === 'ask' && c2.v.k === 'ask') || (want === 'stop' && c2.v.alert) || (want === 'todo' && (c2.v.alert || c2.v.k === 'ask' || !!c2.v.need)); });
     if (hit) go(hit, true); return;
   }
   const mb = e.target.closest('[data-mode]'); if (mb) { setMode(mb.dataset.mode); return; }
@@ -2838,9 +3207,11 @@ document.addEventListener('click', (e) => {
 });
 $('#prev').addEventListener('click', () => step(-1)); $('#next').addEventListener('click', () => step(1));
 document.addEventListener('keydown', (e) => {
+  undoKey(e);
   if (e.key === 'Escape') closeMenu();
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !document.querySelector('dialog[open]')) { e.preventDefault(); openNew(); return; }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 't' && !document.querySelector('dialog[open]')) { e.preventDefault(); openBlank(); return; }
+  if (e.metaKey && !e.ctrlKey && !e.altKey && (e.code === 'KeyK' || e.key.toLowerCase() === 'k')) { e.preventDefault(); if ($('#jumpDlg').open) $('#jumpDlg').close(); else openJump(); return; }   // ⌘K 跳到窗口；中文输入法下 e.key 不一定是 k，也认 e.code
   if ((e.metaKey || e.ctrlKey) && (e.code === 'KeyO' || e.key.toLowerCase() === 'o')) {      // ⌘O：放大看 / 收回（中文输入法下 e.key 不一定是 o，所以也认 e.code）
     e.preventDefault(); const d = $('#detail');
     if ($('#preview').open) return;                       // 预览盖在上面时不动底下的大窗口

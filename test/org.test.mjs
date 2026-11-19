@@ -1,14 +1,16 @@
 /**
- * [INPUT]: 依赖 ../org.mjs（或命令行给的另一份，比如改坏版）。不起服务、不碰 tmux、不读文件。
+ * [INPUT]: 依赖 ../org.mjs（或命令行给的另一份，比如改坏版）。不起服务、不碰 tmux；第 16 段 H 只读 server.mjs 的默认字样。
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过。带 --mutants 时改跑反向对照：造若干个改坏的 org.mjs，每个都必须让本测试变红
- * [POS]: test/ 的「架构：谁归谁管」规则测试。测 buildOrg 的四步：总管（点名压过字样、没点名取最晚开的、前任 / 比总管晚开的不是前任）；
+ * [POS]: test/ 的「架构：谁归谁管」规则测试。测 buildOrg 的五步：总管（点名压过字样、没点名取最晚开的、前任 / 比总管晚开的不是前任）；
  *        每个项目的负责人（已经在带人的里最晚开的、早的是前任、负责人挂在总管下面、总管的项目不另立）；其余窗口看证据（开它的窗口、消息条数、
  *        他本人的分量、互相发消息比谁更依赖谁、负责人的消息按 1.5 倍、上级是前任的跟着岗位走、跨项目不算上级但总管例外、向负责人交东西的归负责人、
  *        已经不在的发信人只进分母）；垃圾输入和三个窗口指成一圈不崩不死循环；wordsRe；
  *        已经不在的窗口（gone 项）：名字带岗位字样的是前任、听它的跟着岗位归现任（handed）、普通的当不了上级、都不在了就没有负责人、不出现在 nodes 里。
  *        分支负责人（第 14 段，11/17）：「X负责人」挂在总指挥下面、不是它的前任；同一条分支换代；不同分支各自；照旧是负责人的写法；没有总指挥的项目兜底；branchOf。
  *        按项目挂上（第 15 段，11/17）：没有窗口在管的普通窗口挂到本项目的岗位（标题对得上一条分支 → 分支负责人，否则负责人，没有负责人 → 总管，都没有 → 你直接带）；branchWords。
+ *        第 3 步的 12 小时下限（第 17 段，11/18）：没开过它的窗口最近一条超过 12 小时不当候选上级、「交东西」的兜底也一样，开它的窗口不受限。
  *        服务把对话记录里的证据交给它之后的端到端断言在 state.test.mjs 的 [1c]、[7h]。
+ *        第 18 段：历任无岗位字样、gone、重名守卫和现职保护。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 // 用法：node test/org.test.mjs [org.mjs 的路径]      node test/org.test.mjs --mutants
@@ -84,6 +86,15 @@ if (process.argv.includes('--mutants')) {
     'contact-cross-dept':   [" || byId.get(f.sid).dept !== s.dept || now - f.last", ' || now - f.last'],
     'contact-oldest':       ['if (!ct || f.last > ct.last) ct = f;', 'if (!ct || f.last < ct.last) ct = f;'],
     'contact-no-age':       [' || now - f.last > CONTACT_MS) continue;', ') continue;'],
+    // 历任规则：不读名单、夺现职、不认 gone、要求同项目，各自必须变红。
+    'past-ignored': ["if (opt.past && typeof opt.past === 'object')", 'if (false)'],
+    'past-takes-seats': ["      if (['chief', 'lead', 'head'].includes(nodes[id].role)) continue;", ''],
+    'past-no-gone': ['      formerOf.set(id, cur);', '      if (!byId.get(id).gone) formerOf.set(id, cur);'],
+    'past-same-dept': ['      formerOf.set(id, cur);', '      if (byId.get(id).dept === dept) formerOf.set(id, cur);'],
+    'past-gone-dept-guessed': ['const it = byId.get(id); if (it.gone) it.dept = dept;', ''],
+    // 第 3 步的 12 小时下限（11/18 作者）
+    'msg-no-age':           ['f.n >= MIN_MSGS && now - f.last <= CONTACT_MS)) continue;', 'f.n >= MIN_MSGS)) continue;'],
+    'report-no-age':        ['f.n >= MIN_MSGS && now - f.last <= CONTACT_MS && f.n > tn)', 'f.n >= MIN_MSGS && f.n > tn)'],
   };
   let bad = 0;
   for (const [name, [a, b]] of Object.entries(M)) {
@@ -479,6 +490,60 @@ console.log('\n16. 点名的负责人、「…分支」、负责人 / 分支发�
   const lit = (m) => (m ? Function('return \'' + m[1] + '\'')() : null);
   const sTail = lit(srv.match(/const BRANCH_TAIL = '((?:[^'\\]|\\.)*)';/)), sHead = lit(srv.match(/headWords: '((?:[^'\\]|\\.)*)' \+ BRANCH_TAIL/));
   ok(sTail !== null && sHead !== null && sHead + sTail === W.headWords, 'H server.mjs 的 headWords 默认值（含 BRANCH_TAIL）和本测试的 W 一字不差', JSON.stringify({ server: sHead + sTail, test: W.headWords }));
+}
+
+console.log('\n17. 第 3 步的 12 小时下限（作者反馈：一天前发过几条消息的推广负责人，不该把三个功能窗口挂在自己下面）');
+{
+  // 场景：推广负责人 win-03 21–23 小时前给作者在终端里开的三个功能窗口发过 2 / 4 / 3 条，他本人对它们说的话也是 20 小时前，
+  // 两边都衰减到几乎为零，第 3 步判成「听增长的」（via msg）。ad 另收过一个普通窗口 13.4 小时前 1 条。
+  const L = () => S('L', { name: 'win-16', title: 'FretFlow 第 20 任总指挥上岗', dept: 'ff', ago: 4 });
+  const G = () => S('G', { name: 'win-03', title: 'FretFlow 推广负责人', dept: 'ff', ago: 2 });
+  const w = (agoH) => [S('d0', { name: 'win-d0', title: 'FretFlow 节拍器音色', dept: 'ff', ago: 24, human: hum(1, 20), from: [msg('G', 2, agoH)] }),
+    S('dd', { name: 'win-dd', title: 'FretFlow 调音器界面', dept: 'ff', ago: 24, human: hum(1, 20), from: [msg('G', 4, agoH)] }),
+    S('ad', { name: 'win-ad', title: 'FretFlow 曲库排序', dept: 'ff', ago: 24, human: hum(1, 20), from: [msg('G', 3, agoH), msg('66', 1, 13.4)] }),
+    S('66', { name: 'win-66', dept: 'ff', ago: 15 })];
+  const three = ['d0', 'dd', 'ad'], show = (r) => three.map((x) => x + ':' + [nd(r, x).boss, nd(r, x).via, nd(r, x).n].join('/')).join(' ');
+  const rA = org([L(), G(), ...w(22)]);
+  ok(nd(rA, 'G').role === 'head' && three.every((x) => nd(rA, x).boss === 'L' && nd(rA, x).via === 'dept' && nd(rA, x).n === 0),
+    'A 复现：增长 22 小时前发的 2 / 4 / 3 条不算候选上级，三个窗口按项目挂到总指挥 L（via dept，n 0；改之前是挂在增长 G 下面、via msg）', show(rA));
+  const rA2 = org([L(), G(), ...w(11)]);
+  ok(three.every((x) => nd(rA2, x).boss === 'G' && nd(rA2, x).via === 'msg') && nd(rA2, 'd0').n === 2 && nd(rA2, 'dd').n === 4 && nd(rA2, 'ad').n === 3,
+    'A2 对照：同样的消息改成 11 小时前，照旧挂在增长 G 下面（via msg，n 2 / 4 / 3）', show(rA2));
+  const rB = org([L(), G(), S('k', { title: 'FretFlow 增长：Threads 帖子数据', dept: 'ff', ago: 30, by: 'G', human: hum(1, 20) })]);
+  ok(nd(rB, 'k').boss === 'G' && nd(rB, 'k').via === 'spawn', 'B 开它的窗口 30 小时前开的、之后没发过消息：照旧归开它的那个（via spawn，开它的窗口不受 12 小时限制）', JSON.stringify(nd(rB, 'k')));
+  const rep = (agoH) => org([S('L', { name: '总指挥', from: [msg('s', 3, agoH)] }), S('s')]);
+  const rC = rep(13), rC2 = rep(11);
+  ok(nd(rC, 's').via !== 'report' && nd(rC, 's').boss === 'L' && nd(rC, 's').via === 'dept', 'C 它 13 小时前向负责人交过 3 条：不再走「交东西」（via 不是 report），按项目挂到负责人（via dept）', JSON.stringify(nd(rC, 's')));
+  ok(nd(rC2, 's').boss === 'L' && nd(rC2, 's').via === 'report' && nd(rC2, 's').n === 3 && nd(rC2, 's').last === NOW - 11 * H, 'C2 对照：11 小时前交过 3 条，照旧 via report（n 3、last 是那条的时间）', JSON.stringify(nd(rC2, 's')));
+}
+
+
+console.log('\n18. 点名岗位历任：归档后队伍跟着岗位；同名与现任岗位不混认');
+{
+  const lead = () => S('L2', { name: 'win-x2', dept: 'demo', ago: 2 });
+  const old = (gone = false) => ({ ...S(gone ? 'gone:111' : 'L1', { name: 'win-x1', dept: 'demo', ago: 5 }), gone });
+  const worker = (id) => S('M', { dept: 'demo', from: [msg(id, 3)], human: hum(1) });
+  const opts = (ids) => ({ seats: { demo: 'L2' }, past: { demo: ids } });
+  const a = org([lead(), old(true), worker('gone:111')], opts(['gone:111', 'L2']));
+  ok(nd(a, 'M').boss === 'L2' && nd(a, 'M').via === 'msg' && nd(a, 'M').handed === true && !a.nodes['gone:111'], '18A 已归档的无岗位字样前任：M 跟到 L2，via msg、handed true，gone 不输出', brief(a));
+  const b = org([lead(), old(), worker('L1')], opts(['L1', 'L2']));
+  ok(nd(b, 'L1').role === 'former' && nd(b, 'L1').boss === 'L2' && nd(b, 'M').boss === 'L2' && nd(b, 'M').handed === true, '18B 活着的无岗位字样前任：未开现任也按历任认出，M 跟到 L2', brief(b));
+  const c = org([lead(), old(), S('twin', { name: 'win-x1', dept: 'demo' }), S('T', { dept: 'demo', from: [msg('twin', 3)] }), { ...old(true), sid: 'gone:222' }, S('G', { dept: 'demo', from: [msg('gone:222', 3)] })], opts(['L1']));
+  ok(nd(c, 'twin').role === 'member' && nd(c, 'T').boss === 'twin' && nd(c, 'T').handed === false && nd(c, 'G').handed === false, '18C 同名普通窗口与不同 pid 的 gone 不在历任中：不认前任、不 handed', brief(c));
+  const d = org([lead(), S('later', { title: '总指挥', dept: 'demo', ago: 1 }), S('K', { title: '总管', dept: 'office' }), S('X', { title: '总指挥', dept: 'elsewhere' }), S('H', { title: '示例推广负责人', dept: 'demo' }), worker('H')], { ...opts(['K', 'X', 'H']), chief: 'K' });
+  ok(nd(d, 'K').role === 'chief' && nd(d, 'X').role === 'lead' && nd(d, 'H').role === 'head' && nd(d, 'H').boss === 'L2', '18D 历任现在坐总管、别的项目负责人或分支岗位：保留现职', brief(d));
+  const e = org([old(), worker('L1')], { past: { demo: ['L1'] } });
+  ok(nd(e, 'L1').role === 'member' && nd(e, 'M').boss === 'L1' && !nd(e, 'M').handed, '18E 项目无现任负责人：历任表不立岗位', brief(e));
+  const f = org([lead(), worker('L2')], opts(['L2', 'missing']));
+  ok(nd(f, 'L2').role === 'lead' && nd(f, 'L2').boss === null && nd(f, 'M').boss === 'L2' && !nd(f, 'M').handed, '18F 历任包含现任自己及不存在的 sid：不当前任、不成圈', brief(f));
+  const cross = org([lead(), S('L1', { name: 'win-x1', dept: 'elsewhere' })], opts(['L1']));
+  ok(nd(cross, 'L1').role === 'former' && nd(cross, 'L1').boss === 'L2', '18G 历任名单是岗位证据：前任改了项目仍认出', brief(cross));
+  const invalid = org([lead()], { ...opts([]), past: { demo: null } });
+  ok(!invalid.threw && nd(invalid, 'L2').role === 'lead', '18H 坏的历任项目条目忽略，不影响现任', brief(invalid));
+  // 评审必改 1（11/19）：gone 项的项目是服务按收信条数猜的。前任给别的项目（office）发得更多 → 猜成 office；名单说它坐的是 demo 的岗位。
+  const guess = org([S('K', { title: '总管', dept: 'office' }), lead(), { ...old(true), dept: 'office' }, worker('gone:111'), S('Y', { dept: 'office', from: [msg('gone:111', 3)] })], { ...opts(['gone:111', 'L2']), chief: 'K' });
+  ok(nd(guess, 'M').boss === 'L2' && nd(guess, 'M').via === 'msg' && nd(guess, 'M').handed === true && nd(guess, 'Y').boss === 'K' && !nd(guess, 'Y').handed,
+    '18I gone 前任的项目被猜成别的项目：按名单所在项目算，本项目的 M 跟到 L2（handed），那个项目的 Y 不挂到 L2', brief(guess));
 }
 
 console.log(`\n结果：${pass} 过，${fail} 没过`);

@@ -1,8 +1,13 @@
 /**
  * [INPUT]: 依赖 .tmp/ui-fixture.json（state.test.mjs --ui 写的试验实例地址）；依赖 ./browser.mjs 的静音无头 Chromium；依赖 ./clips.mjs 的三段无声 WebM（图集 · 视频）
  * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过；截图放 .tmp/shots（墙 / 封面、深色 / 浅色、英文）
- * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、列宽（拖分隔条跟手、松手吸附整格并记住、窄窗口里记了格数的列先拿、放不下的挤成窄条、点窄条先让一格、拖到底收起或挤开、双击 / Enter 恢复、方向键挪一格、宽卡大字）、正文里的本机路径能点、图集里的视频（格子里就地播、一次一个、⤢ 才放大、同时播放且只有指着的那格出声、对时间、进度条、全部放完复位）、放大看（⌘O / 双击；打开时从最新交付的第一行看起，不滚到最底）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」、输入框上的预判（灰字 Tab 收下、1/2/3 填进输入框、数字键、封面视图）、点「审完了」/ 撤销 / 页面载入时把记录告诉服务（自动收工靠它）、架构视图（谁归谁管：入口、你 / 总管 / 每个项目一列、负责人的树和前任、你直接带的个数、三行字、悬停加重和依据、点开放大看、消息飞过去、没有数据、英文、窄窗口）、架构 · 放射（顶栏「层级 | 放射」：你和总管在圆心、每个项目一个扇区；放回窗口里、不重叠、先后不跟状态、输入没变不重排、线、悬停原地展开、滚轮挪 / Ctrl 或 ⌘ + 滚轮缩放 / 拖空白处 / 三个按钮 / 双击空白处、纯函数 orgMapLayout 和 orgMapRound）。
- *        只读页面 + 点「先不管」和筛选，不往任何会话里发话。真应用是 Safari 内核，这里测的是 Chrome 内核。
+ * [POS]: test/ 的界面测试：逐张卡片核对右上角的状态标志、顶栏计数、排位、「先不管」、筛选、模糊卡片上那枚不模糊的标志、英文界面、按项目分组（墙一个项目一列、每列都在第一屏、筛选后回到平铺、换位置的动画、收起 / 展开一列、封面的组名、手机宽度）、列宽（拖分隔条跟手、松手吸附整格并记住、窄窗口里记了格数的列先拿、放不下的挤成窄条、点窄条先让一格、拖到底收起或挤开、双击 / Enter 恢复、方向键挪一格、宽卡大字）、正文里的本机路径能点、图集里的视频（格子里就地播、一次一个、⤢ 才放大、同时播放且只有指着的那格出声、对时间、进度条、全部放完复位）、放大看（⌘O / 双击；打开时从最新交付的第一行看起，不滚到最底）、右上角「归档」、列头的「＋ 新任务」、codex 关着时不显示「交给谁」、输入框上的预判（灰字 Tab 收下、1/2/3 填进输入框、数字键、封面视图）、点「审完了」/ 撤销 / 页面载入时把记录告诉服务（自动收工靠它）、架构视图（谁归谁管：入口、你 / 总管 / 每个项目一列、负责人的树和前任、你直接带的个数、三行字、悬停加重和依据、点开放大看、消息飞过去、没有数据、英文、窄窗口）、架构 · 放射（顶栏「层级 | 放射」：你和总管在圆心、每个项目一个扇区；放回窗口里、不重叠、先后不跟状态、输入没变不重排、线、悬停原地展开、滚轮挪 / Ctrl 或 ⌘ + 滚轮缩放 / 拖空白处 / 三个按钮 / 双击空白处、纯函数 orgMapLayout 和 orgMapRound）、审完了 · 跨设备（两个浏览器上下文共用夹具服务：A 点了 B 不刷新也变处理过、计数跟着变、后开的 C 一打开就是、A 撤销马上回来 B 跟着回来、服务换台后重发）。
+ *        diffSeg() 验逐笔补丁、文件入口、画布与加删行主题颜色、来源底栏、转义、错误和应答先后；DF_HTML 换页。
+ *        undoSeg() 验 ⌘Z 单次 / 时限 / 输入焦点 / 提示覆盖、真实推迟清除、ccb_last 的成功发送 / 按卡取回 / 过期；UN_HTML 换完整页面做改坏对照。
+ *        topbarLimitsSeg() 保留原有额度和顶栏尺寸断言，UI_ONLY=limits 可定点复核，LP_HTML 可回放旧顶栏。
+ *        etaSeg() 验卡片牌子上的「预计 HH:MM 交 / 比预计晚 N 分钟」、跨到明天、悬停、不显示的三种、英文、窄条；UI_ONLY=eta / ET_HTML 支持红阶段与改坏对照。
+ *        wallStripSeg() 独立核窄条、要你筛选、展开与回话、自动续跑、2 秒宽限（含两拍相隔 1.3 秒）和重复绘制；UI_ONLY=strip / ST_HTML 支持红阶段与改坏对照。老的段默认 ccb_strip='off'，保留整格断言。
+ *        只读页面 + 点「先不管」和筛选，不往任何会话里发话；新段的发送与自动续跑请求拦在浏览器里。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 // 用法：先 node test/state.test.mjs --ui &（留着别关），再 node test/ui-check.mjs；重活，多个窗口共用一台机器时外面包一把全机的锁
@@ -15,8 +20,19 @@ const OUT = path.resolve(process.argv[2] || path.join(HERE, '.tmp', 'shots')); f
 let pass = 0, fail = 0;
 const ok = (cond, name, extra = '') => { if (cond) { pass++; console.log('  ok   ' + name); } else { fail++; console.log('  FAIL ' + name + (extra ? '  → ' + extra : '')); } };
 const same = (got, want, name, extra = '') => ok(JSON.stringify(got) === JSON.stringify(want), name, extra || JSON.stringify(got));
+// 「审完了」11/18 起跨页面共享（服务的 processed）：一段里点过「审完了」、或回过话又重载（页面载入时把本机 ccb_done 整份重发），后面新开的页面也会看到它处理过。
+// 要从「待审阅」开始的段，开头先清掉服务里那几笔；只清 processed，不碰本机 localStorage（新的浏览器上下文本来就是空的）
+const srvClear = (ids) => { const u = new URL(FX.url); return fetch(u.origin + '/api/processed', { method: 'POST', headers: { 'x-ccboard': u.searchParams.get('k'), 'content-type': 'application/json' }, body: JSON.stringify({ clear: ids }) }).catch(() => {}); };
 
 const browser = await launch();
+// 老断言继续核原来的整格；只有 wallStripSeg 创建 context 时开启窄条。
+let STRIPS_ON = false;
+const newContext = browser.newContext.bind(browser);
+browser.newContext = async (...args) => {
+  const ctx = await newContext(...args);
+  if (!STRIPS_ON) await ctx.addInitScript(() => { try { localStorage.setItem('ccb_strip', 'off'); } catch (e) {} });
+  return ctx;
+};
 // 架构：服务 11/17 起把没有窗口在管的窗口按项目挂到负责人 / 总管下面（org 的 via: 'dept'）。测「你直接带」那套画法的块在浏览器里把它们还原成
 // boss: null（没有负责人、也没有总管时服务就是这样出的，比如刚装的总控台）；按项目挂上的画法另有一块，用服务的真实输出
 const unplace = (j) => { const N = j && j.org && j.org.nodes; if (N) for (const x of Object.values(N)) if (x && (x.via === 'dept' || x.via === 'contact')) Object.assign(x, { boss: null, via: null, n: 0, last: 0, handed: false }); return j; };   // contact（11/17 win-49）也是第 5 步挂上的，一起还原
@@ -25,6 +41,10 @@ async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900, unp
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, deviceScaleFactor: 2 });
   await ctx.addInitScript((m) => { try { localStorage.setItem('ccb_mode', JSON.stringify(m)); } catch (e) {} }, mode);
   const page = await ctx.newPage(); const errs = [];
+  if (process.env.UI_ONLY === 'limits' && process.env.LP_HTML) {
+    const html = fs.readFileSync(process.env.LP_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+    await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+  }
   if (unplaced) await page.route('**/api/state*', unplaceRoute);
   page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
   await page.goto(FX.url + (lang ? '&lang=' + lang : '')); await page.waitForSelector(mode === 'org' ? '#org .onode .ot' : '.card'); await sleep(2600);   // 架构视图里卡片藏着，等方块里的标题
@@ -221,9 +241,158 @@ async function dockCheck() {
   }
 }
 
+// 手机远程（11/17）：UI_ONLY=remote 只跑这一段。--ui 夹具的 config 没有 remote → 按钮藏着；开着的样子在浏览器里改 /api/state 的应答（加 remote）造，
+// /api/remote/* 拦在浏览器里（不真的出码）。远程模式：把页面里的口令换成空串（服务经 ts.net 给的就是这样）、localStorage 放一个假凭证，核 api() 带的头、401 回配对页
+async function remoteCheck() {
+  console.log('\n[手机远程]');
+  const QR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29" shape-rendering="crispEdges"><rect width="29" height="29" fill="#fff"/><path d="M4 4h7v7h-7zM18 4h7v7h-7zM4 18h7v7h-7z" fill="#000"/></svg>';
+  const LINK = 'https://mini.tail1a2b.ts.net/pair#' + 'A'.repeat(43);
+  for (const [lang, scheme] of [['zh', 'dark'], ['en', 'dark'], ['zh', 'light'], ['en', 'light']]) {
+    const { ctx, page, errs } = await open({ mode: 'wall', lang, scheme }); const tag = lang + ' · ' + (scheme === 'dark' ? '深色' : '浅色');
+    if (lang === 'zh' && scheme === 'dark') ok(await page.$eval('#pairBtn', (b) => b.hidden && getComputedStyle(b).display === 'none' && (document.querySelector('.brand .bname') ? getComputedStyle(document.querySelector('.brand .bname')).display !== 'none' : false)), '手机远程：config 里没有 remote（服务不给 st.remote）时，没有手机按钮，左上角照旧是「总控台」');
+    const sent = []; let slow = 0, paired = false;      // slow：出码的应答晚这么多毫秒回；paired：设备表里多一台刚配上的、码没了
+    await page.route('**/api/state**', async (route) => { const r = await fullState(route); const j = await r.json(); j.remote = { hosts: ['mini.tail1a2b.ts.net'], devices: 1, port: 4748 }; await route.fulfill({ response: r, json: j }); });
+    await page.route('**/api/remote/**', async (route) => {
+      const q = route.request(), u = new URL(q.url()); let b = null; try { b = q.postDataJSON(); } catch {} sent.push([q.method(), u.pathname, b, q.headers()['x-ccboard'] ? 'tok' : '']);
+      if (u.pathname === '/api/remote/pair' && slow && !(b && b.cancel)) await sleep(slow);
+      if (u.pathname === '/api/remote/pair') return route.fulfill({ json: b && b.cancel ? { ok: true } : { ok: true, url: LINK, exp: Date.now() + 600000, ttl: 600000, qr: QR } });
+      if (u.pathname === '/api/remote/devices') return route.fulfill({ json: { ok: true, hosts: ['mini.tail1a2b.ts.net'], dirty: scheme === 'dark', pairing: paired ? null : { exp: Date.now() + 600000 }, devices: [...(paired ? [{ id: 'b'.repeat(16), name: 'iPad', login: 'khalil@example.com', at: Date.now() }] : []), { id: 'a'.repeat(16), name: 'iPhone', login: 'khalil@example.com', at: Date.now() - 3600e3, seenAt: Date.now() - 60e3 }] } });
+      if (u.pathname === '/api/remote/revoke') return route.fulfill({ json: { ok: true } });
+      return route.fulfill({ status: 404, json: { error: 'not found' } });
+    });
+    await page.waitForFunction(() => !document.querySelector('#pairBtn').hidden, null, { timeout: 6000 }).catch(() => {});
+    const bt = await page.evaluate(() => { const b = document.querySelector('#pairBtn'), r = b.getBoundingClientRect(), bar = document.querySelector('.bar'), br = bar.getBoundingClientRect(), nb = document.querySelector('#newBtn'), over = () => bar.scrollWidth - bar.clientWidth;
+      const o1 = over(), nIn = nb.getBoundingClientRect().right <= innerWidth && nb.getBoundingClientRect().left >= 0, bn = document.querySelector('.brand .bname'), name = bn ? getComputedStyle(bn).display : 'missing';
+      document.body.classList.remove('remote-on'); b.hidden = true; const o0 = over(); document.body.classList.add('remote-on'); b.hidden = false;   // 对照：remote 关着时同一屏的溢出
+      return { vis: !b.hidden && r.width > 0, aria: b.getAttribute('aria-label'), inBrand: !!b.closest('.brand'), inBar: r.top >= br.top - 1 && r.bottom <= br.bottom + 1, newIn: nIn, o1, o0, name }; });
+    ok(bt.vis && bt.aria === (lang === 'en' ? 'Phone' : '手机') && bt.inBrand && bt.inBar && bt.name === 'none' && bt.o1 <= bt.o0 && (lang === 'en' || (bt.newIn && bt.o1 <= 0)),
+      '手机远程（' + tag + '）：remote 开着时左上角「总控台」字换成手机按钮（' + (lang === 'en' ? 'Phone' : '手机') + '）；顶栏不比关着时更挤' + (lang === 'en' ? '（英文顶栏在 1520 宽原来就溢出，只比不变差）' : '，「新任务」在视口内、顶栏不溢出'), JSON.stringify(bt));
+    await page.click('#pairBtn');
+    await page.waitForFunction(() => document.querySelector('#rQr svg') && document.querySelector('#rDevs .arow'), null, { timeout: 6000 }).catch(() => {}); await sleep(500);
+    const d = await page.evaluate(() => { const dlg = document.querySelector('#pairDlg'), q = document.querySelector('#rQr').getBoundingClientRect(), b = dlg.getBoundingClientRect();
+      return { open: dlg.open, qrW: Math.round(q.width), qrH: Math.round(q.height), inDlg: q.left >= b.left && q.right <= b.right, link: document.querySelector('#rLink').textContent, copy: !document.querySelector('#rCopy').hidden, note: document.querySelector('#rNote').textContent,
+        dev: (document.querySelector('#rDevs .arow b') || {}).textContent, login: (document.querySelector('#rDevs .arow .t span') || {}).textContent, revoke: ((document.querySelector('#rDevs [data-r=revoke]') || {}).textContent || '').trim(), foot: document.querySelector('#rFoot').textContent, text: dlg.innerText, xo: dlg.scrollWidth > dlg.clientWidth + 1,
+        qrBg: getComputedStyle(document.querySelector('#rQr svg rect')).fill || document.querySelector('#rQr svg rect').getAttribute('fill') }; });
+    ok(d.open && d.qrW === 220 && d.qrH === 220 && d.inDlg && d.link === 'https://mini.tail1a2b.ts.net/pair#' + 'A'.repeat(43) && d.copy && d.dev === 'iPhone' && d.login === 'khalil@example.com' && d.revoke === (lang === 'en' ? 'Revoke' : '撤销这台') && !d.xo && d.foot === (lang === 'en' ? 'The phone must be on the same Tailscale network, with tailscale serve pointing at 127.0.0.1:4748. A revoked phone is refused from its next request.' : '手机要和这台 Mac 登同一个 Tailscale，tailscale serve 指向 127.0.0.1:4748。撤销以后那台手机下一次请求就被拒。'),
+      '手机远程（' + tag + '）：弹层里 220 px 二维码、配对链接和「复制链接」、已配对的设备（名字、登录名）和「撤销这台」（英文是 Revoke，不是 Undo）、底下写 serve 要指向的远程端口，不横向溢出', JSON.stringify({ ...d, text: undefined }));
+    if (scheme === 'dark') { const dt = await page.$eval('#rDirty', (n) => n.textContent).catch(() => '');
+      ok(dt === (lang === 'en' ? 'The device list is not saved yet; retrying. If cc-board restarts before it succeeds, every phone has to pair again.' : '设备表没写进盘，正在重试。写好之前重启，所有手机都要重新配对。'), '手机远程（' + tag + '）：设备表没写进盘时（devices 应答 dirty）弹层里常驻一行红字（复审 N2）', dt); }
+    ok(lang === 'en' ? /^Scan this with your phone camera\. Valid for 10 min, single use$/.test(d.note) : /^用手机相机扫这个码，10 分钟内有效，用一次就作废$/.test(d.note), '手机远程（' + tag + '）：倒计时一句', d.note);
+    if (lang === 'en') ok(!/[一-鿿]/.test(d.text) && !/[一-鿿]/.test(await page.$eval('#pairBtn', (b) => b.title)), '手机远程（' + tag + '）：弹层和按钮提示里没有漏翻的中文', d.text.replace(/\s+/g, ' ').slice(0, 200));
+    await page.screenshot({ path: path.join(OUT, 'remote-pair-' + lang + '-' + scheme + '.png') });
+    if (scheme === 'light') {                         // 码被用掉、设备表多一台刚配上的 → 写出是哪台
+      paired = true;
+      await page.waitForFunction(() => /^(配好了|Paired)/.test(document.querySelector('#rNote').textContent), null, { timeout: 6000 }).catch(() => {});
+      const pn = await page.$eval('#rNote', (n) => n.textContent), pq = await page.$eval('#rQr', (n) => n.innerHTML);
+      ok(pq === '' && pn === (lang === 'en' ? 'Paired: iPad (khalil@example.com). To pair another device, close this and click “Phone” again.' : '配好了：iPad（khalil@example.com）。要再配一台，关掉再点「手机」。'), '手机远程（' + tag + '）：码被用掉以后写出新配上的是哪台（名字、登录名），二维码收起', pn);
+      await page.screenshot({ path: path.join(OUT, 'remote-paired-' + lang + '-' + scheme + '.png') });
+    }
+    if (lang === 'zh' && scheme === 'dark') {
+      ok(sent.some(([m, p, b, t]) => m === 'POST' && p === '/api/remote/pair' && b && !b.cancel && t === 'tok') && sent.some(([m, p, , t]) => m === 'GET' && p === '/api/remote/devices' && t === 'tok'), '手机远程：打开弹层 = 带口令出一个码、读设备表', JSON.stringify(sent.map((x) => x.slice(0, 2))));
+      await page.click('#rDevs [data-r=revoke]'); await sleep(600);
+      ok(sent.some(([m, p, b]) => m === 'POST' && p === '/api/remote/revoke' && b && b.id === 'a'.repeat(16)), '手机远程：点「撤销」发 /api/remote/revoke 带那台的设备号', JSON.stringify(sent.filter((x) => x[1] === '/api/remote/revoke')));
+      await page.keyboard.press('Escape'); await sleep(500);
+      const closed = await page.evaluate(() => ({ open: document.querySelector('#pairDlg').open, qr: document.querySelector('#rQr').innerHTML, link: document.querySelector('#rLink').textContent }));
+      ok(!closed.open && closed.qr === '' && closed.link === '' && sent.some(([m, p, b]) => m === 'POST' && p === '/api/remote/pair' && b && b.cancel === true), '手机远程：Esc 关掉弹层 → 发 cancel 让码作废，二维码和链接从页面上清掉', JSON.stringify({ closed, n: sent.filter((x) => x[2] && x[2].cancel).length }));
+      const nc = () => sent.filter((x) => x[1] === '/api/remote/pair' && x[2] && x[2].cancel).length, c0 = nc();
+      slow = 900; await page.click('#pairBtn'); await sleep(150); await page.keyboard.press('Escape'); await sleep(1800); slow = 0;   // 码还没回来就关掉弹层（审查 L3）
+      const c1 = nc(), still = await page.evaluate(() => ({ open: document.querySelector('#pairDlg').open, qr: document.querySelector('#rQr').innerHTML }));
+      ok(c1 === c0 + 1 && !still.open && still.qr === '', '手机远程：出码的应答还没回来就关掉弹层 → 码回来后马上发 cancel 作废，弹层不再填二维码', JSON.stringify({ c0, c1, still }));
+    }
+    ok(errs.length === 0, '手机远程（' + tag + '）：页面没有报错', errs.join(' | ')); await ctx.close();
+  }
+  const TOK = new URL(FX.url).searchParams.get('k');
+  const remotePage = async (cred, after401 = 3) => {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: 'dark', deviceScaleFactor: 2 });
+    if (cred) await ctx.addInitScript((c) => { try { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('ccb_device', JSON.stringify(c)); sessionStorage.setItem('seeded', '1'); } } catch (e) {} }, cred);
+    const page = await ctx.newPage(), hdrs = [], errs = []; page.on('pageerror', (e) => errs.push(String(e)));
+    await page.route((u) => u.pathname === '/', async (route) => { const r = await route.fetch(); await route.fulfill({ response: r, body: (await r.text()).replace(/const K = '[^']*';/, "const K = '';") }); });
+    await page.route('**/api/**', async (route) => { const h = route.request().headers(); hdrs.push([new URL(route.request().url()).pathname, h['x-ccboard'] || '', h['x-ccboard-device'] || '']);
+      if (hdrs.length > after401) return route.fulfill({ status: 401, json: { error: 'device', why: 'unknown device' } });
+      return route.continue({ headers: { ...h, 'x-ccboard': TOK } }); });     // 夹具服务是本机 Host，要口令；页面自己带的是设备凭证（上面记下来核）
+    await page.goto(new URL(FX.url).origin + '/?k=' + TOK).catch(() => {});   // 夹具是本机服务，首页要口令；上面那条 route 把页面里的口令换成空串，页面按远程打开处理
+    return { ctx, page, hdrs, errs };
+  };
+  {
+    const CRED = '0123456789abcdef.' + 'B'.repeat(43);
+    const { ctx, page, hdrs, errs } = await remotePage(CRED, 6);
+    await page.waitForSelector('.card', { timeout: 8000 }).catch(() => {}); await sleep(1500);
+    await page.screenshot({ path: path.join(OUT, 'remote-phone-390-zh-dark-未修宽度.png') });
+    const first = hdrs.slice(0, 3);
+    ok(first.length >= 2 && first.every(([, t, dv]) => t === '' && dv === CRED) && !(await page.evaluate(() => !document.querySelector('#pairBtn').hidden)), '远程打开（页面里口令是空的）：每个接口带 x-ccboard-device = 存在手机上的凭证、不带 x-ccboard；没有「手机」按钮', JSON.stringify(first.map((x) => [x[0], x[1] ? 'tok' : '', x[2] ? x[2].slice(0, 20) : ''])));
+    await page.waitForURL(/\/pair\?gone=1$/, { timeout: 8000 }).catch(() => {});
+    const gone = await page.evaluate(() => { try { return localStorage.getItem('ccb_device'); } catch (e) { return 'err'; } });
+    ok(/\/pair\?gone=1$/.test(page.url()) && gone === null, '服务回 401（凭证被撤销）：删掉手机上存的凭证，回配对页（?gone=1）', page.url() + ' ' + gone);
+    ok(errs.length === 0, '远程打开：页面没有报错', errs.join(' | ')); await ctx.close();
+  }
+  {
+    const { ctx, page, hdrs } = await remotePage(null);
+    await page.waitForURL(/\/pair$/, { timeout: 8000 }).catch(() => {});
+    ok(/\/pair$/.test(page.url()) && hdrs.length === 0, '远程打开但这台手机没存凭证：直接去配对页，一个接口都不调', page.url() + ' ' + hdrs.length); await ctx.close();
+  }
+}
+
 // ── 「先放着」带时间：待跟进的卡点「先放着」出三档（20 点以后没有「今晚」）+ 原来的「等它下次交付」；选 1 小时 → 服务记着（/api/state 里有 snooze），
 //    卡片样子同处理过、药丸写到几点，不再算待跟进；提示条「撤销」→ 服务清掉、回到待跟进。待审阅的「审完了」照旧一点就处理、不出菜单。
 //    中文浅色、英文深色各一遍，截图。服务端的醒 / 不醒在 state.test.mjs 的 [3s]。单独跑：UI_ONLY=snooze
+// ── 「审完了」跨设备（作者反馈：手机和电脑上的待跟进、待审阅个数对不上）。
+// 两个浏览器上下文 = 两台设备（各有各的 localStorage），共用一份夹具服务。A 点「审完了」→ B 不刷新、一两拍内那张卡变「处理过」，
+// 顶栏的「待审阅」、窗口标题、Dock 角标（外壳收到的 badge）都少一个；之后才打开的 C（新配的手机）一打开就是处理过；A 撤销 → A 马上回来、B 和 C 一两拍内回来。
+// 服务换了一台（重启后 processed 是空的）：页面要把本机记的重发一遍。在 A 的应答里把启动号改掉来模拟。UI_ONLY=procsync 只跑这一段
+async function procSyncCheck() {
+  console.log('\n[审完了 · 跨设备]');
+  const X = FX.sids.done, sel = '.card[data-sid="' + X + '"]';
+  const dev = async (settle = 2600) => {
+    const ctx = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: 'dark' });
+    await ctx.addInitScript(() => { try { localStorage.setItem('ccb_mode', '"wall"'); } catch (e) {} window.__tell = []; window.webkit = { messageHandlers: { ccb: { postMessage: (m) => window.__tell.push(m) } } }; });   // 假外壳：记下 Dock 角标
+    const page = await ctx.newPage(), errs = [];
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await page.goto(FX.url + '&lang=zh'); await page.waitForSelector(sel); if (settle) await sleep(settle);
+    return { ctx, page, errs };
+  };
+  const look = (page) => page.evaluate(({ sel, X }) => {
+    const c = document.querySelector(sel), t = (window.__tell || []).filter((m) => m && m.type === 'badge'); let local = null;
+    try { local = JSON.parse(localStorage.getItem('ccb_done') || '{}')[X] || null; } catch (e) {}
+    return { cls: c ? c.className : '', meta: c ? c.querySelector('.meta').textContent : '', review: ([...document.querySelectorAll('#filters button')].find((b) => /^待审阅/.test(b.textContent)) || {}).textContent || '',
+      title: document.title, badge: t.length ? t[t.length - 1].n : null, local };
+  }, { sel, X });
+  const num = (s) => Number((String(s).match(/\d+/) || [NaN])[0]);
+  const waitFor = async (page, fn, ms = 4500) => { const t0 = Date.now(); let v; while (Date.now() - t0 < ms) { v = await look(page); if (fn(v)) return { v, ms: Date.now() - t0 }; await sleep(150); } return { v, ms: -1 }; };
+  const isRev = (v) => /^待审阅 · /.test(v.meta) && /s-review/.test(v.cls), isDone = (v) => /^处理过 · /.test(v.meta) && /s-handled/.test(v.cls);
+  await srvClear([X]);      // 前面的段可能留下了服务里的一笔
+  const A = await dev(), B = await dev();
+  const a0 = await look(A.page), b0 = await look(B.page), nR = num(b0.review), nT = num(b0.title);
+  ok(isRev(a0) && isRev(b0) && nR > 0 && b0.badge === nT, '两台都开着：done 在两边都是「待审阅」；B 的顶栏待审阅 ' + nR + '、标题和 Dock 角标都是 ' + nT, JSON.stringify({ a0, b0 }));
+  await A.page.click(sel + ' [data-act="done"]'); await sleep(300);
+  const a1 = await look(A.page);
+  const b1 = await waitFor(B.page, isDone);
+  ok(isDone(a1) && b1.ms >= 0 && !b1.v.local, 'A 点「审完了」→ B 不刷新、' + (b1.ms >= 0 ? b1.ms + ' ms' : '4.5 秒还没') + ' 内也变「处理过」（B 本机的 ccb_done 里没有它：是服务给的）', JSON.stringify({ a1, b1 }));
+  ok(num(b1.v.review) === nR - 1 && num(b1.v.title) === nT - 1 && b1.v.badge === nT - 1, 'B 的计数跟着少一个：顶栏「待审阅」' + nR + ' → ' + (nR - 1) + '、窗口标题、Dock 角标 ' + nT + ' → ' + (nT - 1), JSON.stringify(b1.v));
+  // 撤销：提示条只给 6 秒，所以先撤销、后开 C。先等 A 自己也拉到了服务那一笔（旧界面没有 srvDone 就不等）：撤销时服务要下一拍才清，这几秒 A 不能再认它（undone）
+  const hasSrv = await A.page.evaluate(() => typeof srvDone === 'object');
+  const aSaw = hasSrv && await A.page.waitForFunction((X) => !!srvDone[X], X, { timeout: 3000 }).then(() => true, () => false);
+  await A.page.click('#toast button', { timeout: 1500 }).catch(() => {}); await sleep(50);
+  const a2 = await look(A.page);
+  ok(isRev(a2) && !a2.local, 'A 在提示条上点「撤销」→ A 马上回到「待审阅」（A 手上服务给的那一份还记着它，' + (aSaw ? '已核' : '没等到') + '；不等服务下一拍）', JSON.stringify(a2));
+  const b2 = await waitFor(B.page, isRev);
+  ok(b2.ms >= 0 && num(b2.v.review) === nR && num(b2.v.title) === nT && b2.v.badge === nT, 'A 撤销 → B 一两拍内回到「待审阅」，B 的顶栏、标题、Dock 角标回到 ' + nT, JSON.stringify(b2));
+  // 新配的手机：A 再点一次，之后才打开的 C 一打开就是处理过
+  await A.page.click(sel + ' [data-act="done"]', { timeout: 1500 }).catch(() => {}); await waitFor(B.page, isDone);
+  const C = await dev(0), c1 = await look(C.page);
+  ok(isDone(c1) && !c1.local, '之后才打开的 C（新配的手机，一次都没点过）：第一次画出来就是「处理过」', JSON.stringify(c1));
+  // 服务重启：processed 读回盘上的；万一丢了（旧服务、写盘失败），页面看到启动号变了要把本机 ccb_done 再发一遍，另一台才又看得到
+  await B.page.evaluate((X) => api('/api/processed', { clear: [X] }), X);       // 当成重启丢了这一笔
+  const b3 = await waitFor(B.page, isRev);
+  const resend = []; A.page.on('request', (r) => { if (r.method() === 'POST' && r.url().includes('/api/processed')) { try { resend.push(JSON.parse(r.postData() || '{}')); } catch (e) {} } });
+  await A.page.route('**/api/state*', async (route) => { const r = await route.fetch(); const j = await r.json(); if (typeof j.v === 'string') j.v = 'deadbeef' + j.v.slice(8); await route.fulfill({ response: r, json: j }); });
+  const b4 = await waitFor(B.page, isDone, 6000);
+  ok(b3.ms >= 0 && resend.length >= 1 && resend[0].map && typeof resend[0].map[X] === 'string' && b4.ms >= 0, '服务换了一台（A 看到的启动号变了）：A 把本机记的「审完了」重发一遍（POST /api/processed 带 done），B 又跟着变「处理过」', JSON.stringify({ lost: b3.ms, resend: resend.slice(0, 2), b4: b4.ms }));
+  const errs = [...A.errs, ...B.errs, ...C.errs];
+  await A.ctx.close(); await C.ctx.close();           // 先关 A：它本机还记着，开着的话下一次「换台」又会把这一笔发回服务
+  await B.page.evaluate((X) => api('/api/processed', { clear: [X] }), X); await sleep(200); await B.ctx.close();
+  ok(errs.length === 0, '审完了 · 跨设备：三个页面都没报错', errs.join(' | '));
+}
+
 async function snoozeCheck() {
   console.log('\n[先放着带时间]');
   const X = FX.sids.askTag, sel = '.card[data-sid="' + X + '"]';
@@ -598,6 +767,24 @@ async function orgMapCheck() {
   ok(tipOk(hR) && hR.gap[0] >= 0 && tipOk(hL), '放射：依据（#otip）贴在展开的方块下面（间隙 0–12 px，下面放不下才贴上面），不盖住它', JSON.stringify({ r: hR && [hR.tip, hR.gap, hR.over], l: hL && [hL.tip, hL.gap, hL.over] }));
   const hI = await hv('intr');
   ok(!!hI && hI.hot1 && (hI.hot.match(/M/g) || []).length === 3 && hI.youHot && hI.chiefHot, '放射：悬停 intr → 它、unfin、负责人 peerDone 三段线另描一条加重，总管和「你」也加重', JSON.stringify(hI && { hot: hI.hot.length, m: (hI.hot.match(/M/g) || []).length, you: hI.youHot, chief: hI.chiefHot }));
+  // 要你动手的（琥珀）普通窗口：平时多一行要你做的事，收在 206 px；悬停原地展开以后这一行要跟着方块放宽（11/18 win-ed 报、win-33 核：
+  // 收起时那条 #org.map .oli.r-member>.onode:is(.s-reply,.s-ask,.alert) .o2 是 1 id + 6 类，压过悬停那条 #org.map .oli.hot1 .o2 的 1 id + 4 类，悬停了还截在 206 px）。
+  // 量的是 offsetWidth（布局宽度，不受画布缩放和 --omi 影响），所以能直接和 206 比
+  const o2Of = (sid) => ev(page, (s) => { const b = document.querySelector('#org .omnodes .onode[data-sid="' + s + '"]'), e = b && b.querySelector('.o2'); if (!e) return null; const cs = getComputedStyle(e);
+    return { hot1: b.closest('.oli').classList.contains('hot1'), shown: cs.display !== 'none' && e.getClientRects().length > 0, w: e.offsetWidth, sw: e.scrollWidth, max: cs.maxWidth, node: b.offsetWidth, text: e.textContent.slice(0, 80) }; }, sid);
+  const ga = await mapOf(page), amb = Object.entries(ga.nodes).filter(([, x]) => /(^| )alert( |$)|s-reply|s-ask/.test(x.box) && (N0[x.sid] || {}).role === 'member' && ga.omv && x.r.t > ga.omv.t + 40 && x.r.b < ga.omv.b - 200 && x.r.l > ga.omv.l + 20 && x.r.r < ga.omv.r - 20).map(([n]) => n);
+  const pickA = amb[0] || null; let a0 = null, a1 = null;
+  if (pickA) {
+    const pe = await emptyAt(page, 0.5, 0.5); if (pe) await page.mouse.move(pe.x, pe.y); await sleep(350);
+    a0 = await o2Of(ga.nodes[pickA].sid);
+    const ar = ga.nodes[pickA].r; await page.mouse.move(ar.l + ar.w / 2, ar.t + ar.h / 2); await sleep(400);
+    a1 = await o2Of(ga.nodes[pickA].sid);
+    const hb = ((await mapOf(page)).nodes[pickA] || {}).r, vp = page.viewportSize();
+    if (hb) { const x = Math.max(0, Math.min(hb.l - 140, vp.width - 640)), y = Math.max(0, Math.min(hb.t - 90, vp.height - 300)); await page.screenshot({ path: path.join(OUT, 'orgmap-hover-amber-zh-dark.png'), clip: { x, y, width: 640, height: 300 } }); }
+    const pz = await emptyAt(page, 0.5, 0.5); if (pz) await page.mouse.move(pz.x, pz.y); await sleep(350);   // 收起再往下：左半边的展开时往左长，留着悬停下一段「别的方块一个都不挪」会量到它
+  }
+  ok(!!a0 && !a0.hot1 && a0.shown && a0.w > 0 && a0.w <= 206, '放射：要你动手的普通窗口（' + pickA + '）平时多出的那一行要你做的事照旧收在 206 px 以内（' + (a0 && a0.w) + ' px）', JSON.stringify({ amb, a0 }));
+  ok(!!a1 && a1.hot1 && a1.shown && a1.w > 206, '放射：悬停要你动手的 ' + pickA + '：原地展开以后要你做的事那一行跟着方块放宽（' + (a1 && a1.w) + ' px，不再截在 206 px）', JSON.stringify({ a1 }));
   // 悬停总管：圆心那一块原地展开，别的方块不能跟着挪（量的是轮询两次以后）
   const gc0 = await mapOf(page), pc0 = await rects(page, Object.keys(g.nodes)), lc0 = await ev(page, () => window.__lay), cr = gc0.chief;
   if (cr) await page.mouse.move(cr.l + cr.w / 2, cr.t + 12); await sleep(3800);
@@ -934,8 +1121,780 @@ async function cmCheck() {
   }
 }
 
+
+// ── 草稿不丢（ccb_draft）、⌘K 跳到窗口（#jumpDlg）（11/17 win-1a）。UI_ONLY=jump 只跑这一段 ──
+// 夹具里 done 卡没有终端通道（输入框是灰的），所以和「弹层里回话」那段一样，在浏览器里拦 /api/state 给它补上 channel；/api/send、/api/new、/api/auto 也拦在浏览器里，不碰夹具服务。
+async function draftJumpSeg() {
+  const D = FX.sids.done, P2 = FX.sids.peerDone, TA = `.card[data-sid="${D}"] textarea`;
+  const openDJ = async ({ lang = 'zh', scheme = 'dark', w = 1520, h = 900, init = null } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await ctx.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('wall')); } catch (e) {} });
+    if (init) await ctx.addInitScript(init);
+    const page = await ctx.newPage(); const errs = [], hit = { send: [], newT: [], auto: 0, sendOk: true };
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await page.route('**/api/state*', async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }   // 要整份（v=0）：只回变过的应答里没有 done 卡，补不上 channel
+      for (const x of j.sessions || []) if (x.sid === D) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; x.auto = { state: 'armed', text: '【总控台自动续跑】（不是 Khalil 本人）接着做你上一轮自己提的下一步', basis: '', fireIn: 60000 }; }   // 倒数中：他在框里打字会发一次取消，放回草稿不该发
+      await route.fulfill({ response: r, json: j }); });
+    await page.route('**/api/send', async (route) => { hit.send.push(JSON.parse(route.request().postData() || '{}'));
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify(hit.sendOk ? { ok: true, delivered: true } : { ok: false, error: '没发出去' }) }); });
+    await page.route('**/api/new', async (route) => { hit.newT.push(JSON.parse(route.request().postData() || '{}')); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, name: 'ccb-jumpfake' }) }); });
+    await page.route('**/api/auto', async (route) => { hit.auto++; await route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }); });
+    if (process.env.DJ_HTML) {     // 红阶段 / 改坏对照：页面换成另一份 ui.html（服务只在发页面时把 __TOKEN__ 换成口令，这里照做），夹具服务只起一份
+      const html = fs.readFileSync(process.env.DJ_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+      await page.route((u) => u.pathname === '/', async (route) => { const r = await route.fetch(); await route.fulfill({ response: r, body: html, contentType: 'text/html; charset=utf-8' }); });
+    }
+    await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector('.card'); await sleep(2600);
+    return { ctx, page, errs, hit };
+  };
+  const draftIn = (page) => page.evaluate(() => { try { return JSON.parse(localStorage.getItem('ccb_draft') || 'null'); } catch (e) { return 'bad'; } });
+  const valOf = (page, sel) => page.evaluate((q) => { const t = document.querySelector(q); return t ? { v: t.value, dis: t.disabled, has: !!(t.closest('.reply') && t.closest('.reply').classList.contains('has')) } : null; }, sel);
+  const reload = async (page) => { await page.reload(); await page.waitForSelector('.card'); await sleep(2600); };
+  const tapT = (page, q) => page.click(q, { timeout: 3000 }).catch(() => {});
+
+  // ① 卡片草稿：打字 → 停手 300 ms 后存进 ccb_draft → 整页重新载入后放回框里
+  let { ctx, page, errs, hit } = await openDJ();
+  const v0 = await valOf(page, TA);
+  ok(v0 && !v0.dis, '草稿：夹具里 done 卡的输入框能打字（拦 /api/state 补了 channel）', JSON.stringify(v0));
+  await tapT(page, TA); await page.keyboard.type('草稿一句 abc'); await sleep(450);
+  let dr = await draftIn(page);
+  ok(hit.auto >= 1, '草稿：（对照）这张卡在倒数自动续跑，他亲手打字会发一次取消', String(hit.auto));
+  const a0 = hit.auto;
+  ok(dr && dr[D] && dr[D].t === '草稿一句 abc' && dr[D].at > Date.now() - 60000, '草稿：停手以后存进 ccb_draft（会话号 → 字和时间）', JSON.stringify(dr));
+  await reload(page); let v1 = await valOf(page, TA);
+  ok(v1 && v1.v === '草稿一句 abc' && v1.has, '草稿：整页重新载入后字回到同一张卡的框里，发送键是亮的', JSON.stringify(v1));
+  ok(hit.auto === a0, '草稿：重新载入后放回草稿不发 /api/auto（不当成他刚打字去取消自动续跑）', a0 + ' → ' + hit.auto);
+  // ② 打完马上重新载入（没等 300 ms）：pagehide 时立刻存
+  await page.fill(TA, ''); await sleep(450); await tapT(page, TA); await page.keyboard.type('马上刷新'); await reload(page); v1 = await valOf(page, TA);
+  ok(v1 && v1.v === '马上刷新', '草稿：打完不等 300 ms 就重新载入，字也在（离开页面时立刻存）', JSON.stringify(v1));
+  // ③ 删光 → 草稿记录也删
+  await page.fill(TA, ''); await sleep(450); dr = await draftIn(page);
+  ok(!dr || !dr[D], '草稿：框删空以后 ccb_draft 里没有这张卡', JSON.stringify(dr));
+  // ④ 发出去 → 清；没发出去 → 字回到框里、草稿也存回来，重新载入还在
+  await tapT(page, TA); await page.keyboard.type('发出去的一句'); await sleep(450); await page.keyboard.press('Enter'); await sleep(900); dr = await draftIn(page);
+  ok(hit.send.length === 1 && hit.send[0].text === '发出去的一句' && (!dr || !dr[D]), '草稿：发出去以后草稿清掉', JSON.stringify({ sent: hit.send, dr }));
+  hit.sendOk = false;
+  await tapT(page, TA); await page.keyboard.type('没发出去的一句'); await sleep(450); await page.keyboard.press('Enter'); await sleep(900);
+  v1 = await valOf(page, TA); dr = await draftIn(page);
+  ok(v1 && v1.v === '没发出去的一句' && dr && dr[D] && dr[D].t === '没发出去的一句', '草稿：没发出去 → 字回到框里，草稿也存回来', JSON.stringify({ v1, dr }));
+  await sleep(400); await reload(page); v1 = await valOf(page, TA);
+  ok(v1 && v1.v === '没发出去的一句', '草稿：没发出去的那句，重新载入后还在', JSON.stringify(v1));
+  await page.fill(TA, ''); await sleep(450);
+  // ⑤ 新任务的草稿：打一半关掉弹窗 → 重新载入 → 再开还在；开工成功后清
+  await page.click('#newBtn'); await sleep(300); await page.fill('#nPrompt', '新任务写了一半'); await sleep(450);
+  await page.keyboard.press('Escape'); await reload(page); await page.click('#newBtn'); await sleep(300);
+  const n1 = await page.evaluate(() => document.querySelector('#nPrompt').value);
+  ok(n1 === '新任务写了一半', '草稿：新任务写了一半，重新载入后再开还在', n1);
+  await page.click('#nGo'); await sleep(900); dr = await draftIn(page);
+  ok(hit.newT.length === 1 && hit.newT[0].prompt === '新任务写了一半' && (!dr || !dr.__new), '草稿：新任务开工以后草稿清掉', JSON.stringify({ newT: hit.newT, dr }));
+  ok(errs.length === 0, '草稿：页面没有报错', errs.join(' | ')); await ctx.close(); await srvClear([D]);     // 上面回过话又重载：本机记的「回过话 = 处理过」随载入发给了服务，别留给后面的段
+  // ⑥ 7 天前的草稿不放回；存坏了的 ccb_draft 不报错
+  ({ ctx, page, errs } = await openDJ({ init: `try { localStorage.setItem('ccb_draft', JSON.stringify({ ${JSON.stringify(D)}: { t: '八天前的', at: Date.now() - 8 * 86400000 }, other: { t: 5 } })) } catch (e) {}` }));
+  v1 = await valOf(page, TA);
+  ok(v1 && v1.v === '', '草稿：8 天前的草稿不放回', JSON.stringify(v1));
+  ok(errs.length === 0, '草稿：ccb_draft 里有坏条目也不报错', errs.join(' | ')); await ctx.close();
+  ({ ctx, page, errs } = await openDJ({ init: `try { localStorage.setItem('ccb_draft', '"garbage"') } catch (e) {}` }));
+  v1 = await valOf(page, TA);
+  ok(v1 && v1.v === '' && errs.length === 0, '草稿：ccb_draft 整个存坏了（不是对象）也照常载入', JSON.stringify(v1) + ' ' + errs.join(' | ')); await ctx.close();
+
+  // ⑦ ⌘K 跳到窗口
+  ({ ctx, page, errs } = await openDJ());
+  const jump = (pg) => pg.evaluate(() => { const d = document.querySelector('#jumpDlg'), q = document.querySelector('#jQ');
+    if (!d || !q) return { missing: true, open: false, rows: [], n: -1 };
+    return { open: d.open, focus: document.activeElement === q, q: q.value, rows: [...document.querySelectorAll('#jList li')].map((li) => ({ k: (li.querySelector('.jm') || {}).className || '', m: ((li.querySelector('.jm') || {}).textContent || ''), t: (() => { const jt = li.querySelector('.jt'); return jt && jt.childNodes[0] ? jt.childNodes[0].textContent : ''; })(), small: ((li.querySelector('.jt small') || {}).textContent || ''), sel: li.getAttribute('aria-selected'), none: li.classList.contains('jnone'), text: li.textContent })),
+      n: [...cards.values()].filter((c) => c.s || c.x).length, detail: document.querySelector('#detail').open, dsid: typeof detailSid === 'undefined' ? null : detailSid }; });
+  const RANK = { act: 0, review: 1, busy: 2, calm: 3 }, rk = (r) => RANK[(r.k.match(/\b(act|review|busy|calm)\b/) || [])[1]];
+  await page.mouse.click(5, 5); await page.keyboard.press('Meta+KeyK'); await sleep(300); let j = await jump(page);
+  ok(j.open && j.focus && j.q === '', '⌘K：打开「跳到窗口」，光标在搜索框里', JSON.stringify({ open: j.open, focus: j.focus, missing: j.missing }));
+  ok(j.rows.length === j.n && j.n >= 20, '⌘K：不打字时列出墙上每个有对话的窗口（' + j.n + ' 个）', j.rows.length + ' / ' + j.n);
+  ok(j.rows.length > 1 && j.rows.every((r, i) => i === 0 || rk(j.rows[i - 1]) <= rk(r)) && rk(j.rows[0]) === 0, '⌘K：不打字时要你处理的排最前，然后待审阅、运行中、无需处理', j.rows.map((r) => rk(r)).join(''));
+  ok(j.rows.length > 1 && j.rows.every((r) => ['要你处理', '待审阅', '运行中', '无需处理'].includes(r.m)), '⌘K：每行左边写状态（和按状态分列同一套词）', [...new Set(j.rows.map((r) => r.m))].join('/'));
+  if (!j.missing) { await page.keyboard.type('win-p2'); await sleep(200); }
+  j = await jump(page);
+  const p2title = await page.evaluate((sid) => document.querySelector('.card[data-sid="' + sid + '"] .title').textContent, P2);
+  ok(j.rows.length >= 1 && j.rows[0].t === p2title && j.rows[0].small.includes('win-p2') && j.rows[0].sel === 'true', '⌘K：打短名 win-p2 → 第一行是那个窗口、已选中、标题后面写着短名', JSON.stringify(j.rows.slice(0, 2)));
+  const fillQ = async (v) => { if (!j.missing) { await page.fill('#jQ', v, { timeout: 3000 }).catch(() => {}); await sleep(200); } return jump(page); };
+  j = await fillQ('P2');
+  ok(j.rows.length >= 1 && j.rows[0].t === p2title, '⌘K：只打短名中间的 P2（大写）也找得到', JSON.stringify(j.rows.slice(0, 2)));
+  j = await fillQ('fretflow 总指挥');
+  ok(j.rows.length >= 1 && j.rows.some((r) => r.t === p2title) && !j.rows.some((r) => r.none), '⌘K：空格隔开的两个词（fretflow 总指挥）都对得上的窗口列出来', JSON.stringify(j.rows.map((r) => r.t)));
+  j = await fillQ('fretflow zzqq');
+  ok(j.rows.length === 1 && j.rows[0].none, '⌘K：两个词里有一个哪里都对不上 → 不列', JSON.stringify(j.rows.map((r) => r.t)));
+  j = await fillQ('总结写好了');
+  const dTitle = await page.evaluate((sid) => document.querySelector('.card[data-sid="' + sid + '"] .title').textContent, D);
+  ok(j.rows.length >= 1 && j.rows.some((r) => r.t === dTitle), '⌘K：卡上那句结论也能搜（总结写好了 → done）', JSON.stringify(j.rows.map((r) => r.t)));
+  j = await fillQ('zzqq不存在的词');
+  ok(j.rows.length === 1 && j.rows[0].none && j.rows[0].text === '没有对得上的窗口', '⌘K：一个都对不上时写「没有对得上的窗口」', JSON.stringify(j.rows));
+  await page.keyboard.press('Enter'); await sleep(300); j = await jump(page);
+  ok(j.open && !j.detail, '⌘K：对不上时按回车什么都不做、框还开着', JSON.stringify({ open: j.open, detail: j.detail }));
+  // 方向键：↓ 选第二行，↑ 从第一行绕到最后一行；回车放大看选中的那一张
+  j = await fillQ(''); await page.keyboard.press('ArrowDown'); await sleep(100); j = await jump(page);
+  ok(j.rows.length > 2 && j.rows[1].sel === 'true' && j.rows[0].sel === 'false', '⌘K：↓ 选中第二行', j.rows.slice(0, 3).map((r) => r.sel).join(','));
+  await page.keyboard.press('ArrowUp'); await page.keyboard.press('ArrowUp'); await sleep(100); j = await jump(page);
+  ok(j.rows.length > 2 && j.rows[j.rows.length - 1].sel === 'true', '⌘K：在第一行按 ↑ 绕到最后一行', j.rows.slice(-2).map((r) => r.sel).join(','));
+  j = await fillQ('win-p2'); await page.keyboard.press('Enter'); await sleep(700); j = await jump(page);
+  ok(!j.open && j.detail && j.dsid === P2, '⌘K：回车 → 框关掉，放大看那个窗口（和 ⌘O 同一个大窗口）', JSON.stringify({ open: j.open, detail: j.detail, dsid: j.dsid, want: P2 }));
+  await page.keyboard.press('Escape'); await sleep(300);
+  // 点一行也一样；开着时再按 ⌘K 关掉；Esc 关掉
+  await page.keyboard.press('Meta+KeyK'); await sleep(300); j = await fillQ('总结写好了');
+  await page.click('#jList li[data-j="0"]', { timeout: 3000 }).catch(() => {}); await sleep(700); j = await jump(page);
+  ok(!j.open && j.detail && j.dsid === D, '⌘K：点一行 → 放大看那一张', JSON.stringify({ open: j.open, dsid: j.dsid, want: D }));
+  await page.keyboard.press('Escape'); await sleep(300);
+  await page.keyboard.press('Meta+KeyK'); await sleep(250); const jOpen = (await jump(page)).open; await page.keyboard.press('Meta+KeyK'); await sleep(250); j = await jump(page);
+  ok(jOpen && !j.open, '⌘K：开着时再按一次 ⌘K 关掉', JSON.stringify({ jOpen, after: j.open }));
+  await page.keyboard.press('Meta+KeyK'); await sleep(250); const jOpen2 = (await jump(page)).open; await page.keyboard.press('Escape'); await sleep(250); j = await jump(page);
+  ok(jOpen2 && !j.open, '⌘K：Esc 关掉', JSON.stringify({ jOpen2, after: j.open }));
+  // 守卫：别的弹窗开着时不开；卡片输入框里按 Ctrl+K（macOS 自带「删到行尾」）不开
+  await page.click('#newBtn'); await sleep(300); await page.keyboard.press('Meta+KeyK'); await sleep(250); j = await jump(page);
+  const newOpen = await page.evaluate(() => document.querySelector('#newDlg').open);
+  ok(newOpen && !j.open, '⌘K：新任务弹窗开着时不开「跳到窗口」', JSON.stringify({ newOpen, jump: j.open })); await page.keyboard.press('Escape'); await sleep(250);
+  await tapT(page, TA); await page.keyboard.type('abcdef'); await page.keyboard.press('Control+KeyK'); await sleep(250); j = await jump(page);
+  const vk = await valOf(page, TA);
+  ok(vk && vk.v.startsWith('abc') && !j.open, '⌘K：输入框里按 Ctrl+K 不开「跳到窗口」', JSON.stringify({ open: j.open, v: vk && vk.v }));
+  await page.fill(TA, ''); await sleep(450);
+  await page.keyboard.press('Meta+KeyK'); await sleep(300); j = await fillQ('');
+  await page.screenshot({ path: path.join(OUT, 'jump-dark.png') });
+  j = await fillQ('khalil'); await page.screenshot({ path: path.join(OUT, 'jump-search.png') });
+  const box = await page.evaluate(() => { const d = document.querySelector('#jumpDlg'); if (!d || !d.open) return { inView: false }; const r = d.getBoundingClientRect(); const rows = [...document.querySelectorAll('#jList li')];
+    return { inView: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight, clip: rows.some((li) => li.scrollWidth > li.clientWidth + 1) }; });
+  ok(box.inView && !box.clip, '⌘K：框整个在窗口里，每行不横向溢出（长标题截省略号）', JSON.stringify(box));
+  ok(errs.length === 0, '⌘K：页面没有报错', errs.join(' | ')); await ctx.close();
+  // 浅色、窄窗口、英文
+  ({ ctx, page, errs } = await openDJ({ scheme: 'light' }));
+  await page.mouse.click(5, 5); await page.keyboard.press('Meta+KeyK'); await sleep(300); await page.screenshot({ path: path.join(OUT, 'jump-light.png') });
+  ok(errs.length === 0, '⌘K 浅色：页面没有报错', errs.join(' | ')); await ctx.close();
+  ({ ctx, page, errs } = await openDJ({ w: 700, h: 700 }));
+  await page.mouse.click(5, 5); await page.keyboard.press('Meta+KeyK'); await sleep(300);
+  const nb = await page.evaluate(() => { const d = document.querySelector('#jumpDlg'); if (!d || !d.open) return false; const r = d.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight && document.documentElement.scrollWidth <= innerWidth; });
+  await page.screenshot({ path: path.join(OUT, 'jump-700.png') });
+  ok(nb, '⌘K 700 px：框在窗口里、页面不横向溢出', String(nb)); ok(errs.length === 0, '⌘K 700 px：页面没有报错', errs.join(' | ')); await ctx.close();
+  ({ ctx, page, errs } = await openDJ({ lang: 'en' }));
+  await page.mouse.click(5, 5); await page.keyboard.press('Meta+KeyK'); await sleep(300); await page.fill('#jQ', 'zzqq', { timeout: 3000 }).catch(() => {}); await sleep(150);
+  const en = await page.evaluate(() => { const q = document.querySelector('#jQ'); if (!q) return {}; return { ph: q.placeholder, foot: document.querySelector('.jfoot').textContent, none: document.querySelector('#jList').textContent, lbl: document.querySelector('#jumpDlg').getAttribute('aria-label'), tip: document.querySelector('#newBtn').title }; });
+  await page.fill('#jQ', '', { timeout: 3000 }).catch(() => {}); await sleep(150);
+  const enRows = await page.evaluate(() => [...new Set([...document.querySelectorAll('#jList .jm')].map((x) => x.textContent))]);
+  await page.screenshot({ path: path.join(OUT, 'jump-en.png') });
+  ok(en.ph === 'Jump to a window: search name, title, project or latest result' && en.foot === '↑↓ select · Return to enlarge · Esc to close' && en.none === 'No window matches' && en.lbl === 'Jump to a window' && String(en.tip).endsWith('⌘K jump to a window'),
+    '⌘K 英文：搜索框提示、底下一行、对不上、读屏标签、新任务按钮的提示都是英文', JSON.stringify(en));
+  ok(enRows.length >= 2 && enRows.every((x) => !/[一-鿿]/.test(x)), '⌘K 英文：每行的状态字是英文', enRows.join('/'));
+  ok(errs.length === 0, '⌘K 英文：页面没有报错', errs.join(' | ')); await ctx.close();
+}
+
+// ── 顶栏额度：原有断言的独立入口，不改断言；UI_ONLY=limits ──
+async function topbarLimitsSeg() {
+  // ── 顶栏右上角的订阅额度（夹具：Claude amy 周 91% / ben 周 1%，Codex 周 34%）──
+  console.log('\n[顶栏 · 订阅额度]');
+  const readLimits = (page) => page.evaluate(() => {
+    const bar = document.querySelector('header.bar'), lim = document.querySelector('#limits'), nb = document.querySelector('#newBtn');
+    const vis = (e) => !!e && e.offsetWidth > 0;
+    const chips = [...lim.querySelectorAll('.lq')].map((c) => { const m = c.querySelector('.mtr'), r = c.getBoundingClientRect(); return { text: c.textContent, warn: c.classList.contains('warn'), tip: c.title, aria: c.getAttribute('aria-label') || '', meter: vis(m), meterPos: m ? getComputedStyle(m).position : '', tag: vis(c.querySelector('.tg')), inBar: r.top >= 0 && r.bottom <= bar.clientHeight, tab: c.tabIndex };
+    });
+    return { shown: vis(lim), chips, over: bar.scrollWidth > bar.clientWidth, newIn: nb.getBoundingClientRect().right <= innerWidth };
+  });
+  for (const [lang, w] of [['zh', 1520], ['en', 1520], ['zh', 1100], ['zh', 960]]) {
+    const { ctx, page, errs } = await open({ mode: 'flow', lang, w }); const r = await readLimits(page); const tag = lang + ' ' + w + ' px';
+    const names = r.chips.map((c) => c.text);
+    if (w >= 1500) {
+      same(names, ['Claude · amy91%', 'Claude · ben1%', 'Codex34%'], tag + '：三条额度，两个 Claude 号带账号、Codex 一条（周额度的百分数）', JSON.stringify(names));
+      ok(r.chips.length === 3 && r.chips[0].warn && !r.chips[1].warn && !r.chips[2].warn, tag + '：只有用到 91% 的那条是琥珀色（≥ 85%），1% 和 34% 是灰的', JSON.stringify(r.chips.map((c) => c.warn)));
+      ok(r.chips.length === 3 && r.chips.every((c) => c.meter && c.tag === (c.text.includes('·')) && c.inBar && c.tab === 0), tag + '：进度条和账号后缀都在、胶囊整个在顶栏里、能用 Tab 聚焦', JSON.stringify(r.chips.map((c) => [c.meter, c.tag, c.inBar, c.tab])));
+      ok(r.chips.length === 3 && r.chips.every((c) => c.meterPos !== 'fixed'), tag + '：进度条不吃顶栏 .bar 的 position:fixed（同名的类曾把它钉到屏幕顶上）', JSON.stringify(r.chips.map((c) => c.meterPos)));
+      const t0 = r.chips[0] ? r.chips[0].tip : '';
+      ok(lang === 'zh' ? /周额度已用 91%.*重置（.*后）/.test(t0) && /5 小时额度已用 100%/.test(t0) && /更新于 /.test(t0) : /Weekly limit used: 91%.*resets .*\(in .*\)/.test(t0) && /5-hour limit used: 100%/.test(t0) && /Updated /.test(t0), tag + '：提示里有每个窗口的已用、重置时间和还剩多久、数据多久前的', JSON.stringify(t0));
+      ok(r.chips[2] && /prolite/.test(r.chips[2].tip), tag + '：Codex 的提示里带套餐名', JSON.stringify(r.chips[2] && r.chips[2].tip));
+      if (lang === 'en') ok(!r.chips.some((c) => /[一-鿿]/.test(c.text + c.tip + c.aria)), 'en 1520 px：额度条的文字、提示、读屏标签里没有漏翻的中文', JSON.stringify(r.chips.map((c) => c.tip)));
+    } else if (w === 1100) {
+      ok(r.shown && r.chips.length === 3 && r.chips.every((c) => !c.meter && !c.tag), tag + '：窗口窄了先去掉进度条和账号后缀，三条还在', JSON.stringify(r.chips.map((c) => [c.text, c.meter, c.tag])));
+    } else {
+      ok(!r.shown, tag + '：再窄（≤ 1000 px）整条让位给按钮', JSON.stringify(r.shown));
+    }
+    ok(!r.over && r.newIn && errs.length === 0, tag + '：顶栏不溢出、「新任务」在视口里、页面没报错', JSON.stringify({ over: r.over, newIn: r.newIn, errs }));
+    if (lang === 'zh' && w === 1520) await page.screenshot({ path: path.join(OUT, 'topbar-limits.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } });
+    await ctx.close();
+  }
+  // ── 过时的额度（11/16 win-ee）：超过 1 小时没更新的那格变灰、写「N 小时前」、不亮琥珀（额度用完以后顶栏还写着前一天的旧数）。
+  //    夹具的取数文件都是刚写的，这里在浏览器里直接喂 paintLimits 一份造的数据，读画出来的 DOM。
+  //    A 是真实会有的组合（两个 Claude 号一旧一新 + 一个几小时没用的 Codex），查顶栏放得下；B 查 3 天前和没有窗口的那格 ──
+  console.log('\n[顶栏 · 过时的额度]');
+  const paintStale = (page, set) => page.evaluate((set) => {
+    const now = Date.now(), H = 3600000, wk = (u) => [{ key: 'week', used: u, resetsAt: now + 86400000 }];
+    const mk = (id, ago, u, ws, provider = 'claude') => ({ id, provider, account: provider === 'claude' ? id : undefined, name: provider === 'claude' ? id : undefined, at: now - ago, windows: ws || wk(u) });
+    const sets = { A: { claude: [mk('old', 3 * H + 60000, 91), mk('new', 59 * 60000, 91)], codex: mk('codex', 5 * H + 60000, 34, null, 'codex') }, B: { claude: [mk('days', 3 * 86400000, 40), mk('empty', 5 * H, 0, [])], codex: null } };
+    window.__staleSt = { now, limits: sets[set] }; paintLimits(window.__staleSt);
+    const bar = document.querySelector('header.bar'), nb = document.querySelector('#newBtn');
+    return { over: bar.scrollWidth > bar.clientWidth, newIn: nb.getBoundingClientRect().right <= innerWidth, chips: Object.fromEntries([...document.querySelectorAll('#limits .lq')].map((c) => { const a = c.querySelector('.ago'), r = c.getBoundingClientRect(); return [c.dataset.lq, { stale: c.classList.contains('stale'), warn: c.classList.contains('warn'), ago: a && a.offsetWidth > 0 ? a.textContent : null, op: +getComputedStyle(c).opacity, tip: c.title, inBar: r.bottom <= bar.clientHeight }]; })) };
+  }, set);
+  for (const lang of ['zh', 'en']) {
+    const { ctx, page, errs } = await open({ mode: 'flow', lang, w: 1520 }); const tag = lang + ' 1520 px', en = lang === 'en';
+    const a = await paintStale(page, 'A'), c = a.chips;
+    ok(c.old && c.old.stale && !c.old.warn && c.old.ago === (en ? '3h ago' : '3 小时前') && c.old.op > 0.5 && c.old.op < 0.9, tag + '：3 小时没更新的那格变灰（不透明度 0.5–0.9，还读得清）、写着「3 小时前」、91% 也不亮琥珀', JSON.stringify(c.old));
+    ok(c.old && (en ? /over an hour/.test(c.old.tip) : /超过 1 小时/.test(c.old.tip)), tag + '：过时那格的提示里说明数字可能已经变了', JSON.stringify(c.old && c.old.tip));
+    ok(c.new && !c.new.stale && c.new.warn && c.new.ago === null && c.new.op === 1, tag + '：59 分钟前更新的照旧（不灰、91% 亮琥珀、不写多久前）', JSON.stringify(c.new));
+    ok(c.codex && c.codex.stale && c.codex.ago === (en ? '5h ago' : '5 小时前'), tag + '：5 小时没用的 Codex 同样变灰写「5 小时前」', JSON.stringify(c.codex));
+    ok(!a.over && a.newIn && Object.values(c).every((x) => x.inBar), tag + '：两个 Claude 号 + Codex、两格带「N 小时前」时顶栏放得下，「新任务」在视口里', JSON.stringify({ over: a.over, newIn: a.newIn }));
+    if (lang === 'zh') { await page.evaluate(() => paintLimits(window.__staleSt)); await page.screenshot({ path: path.join(OUT, 'topbar-limits-stale.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } }); }
+    const b = (await paintStale(page, 'B')).chips;
+    ok(b.days && b.days.stale && b.days.ago === (en ? '3d ago' : '3 天前'), tag + '：3 天没更新写「3 天前」', JSON.stringify(b.days));
+    ok(b.empty && !b.empty.stale && b.empty.ago === null, tag + '：没有额度窗口的那格不算过时（本来就写「—」）', JSON.stringify(b.empty));
+    ok(errs.length === 0, tag + '（过时的额度）：页面没报错', JSON.stringify(errs));
+    await ctx.close();
+  }
+  {
+    const { ctx, page, errs } = await open({ mode: 'flow', lang: 'zh', w: 1100 }); const a = await paintStale(page, 'A'), c = a.chips;
+    ok(c.old && c.old.stale && c.old.ago === null && c.codex && c.codex.ago === null && !a.over && a.newIn && errs.length === 0, 'zh 1100 px：窄了「N 小时前」跟账号后缀一起藏起来，过时的照样是灰的，顶栏不溢出', JSON.stringify({ old: c.old, over: a.over, newIn: a.newIn, errs }));
+    await ctx.close();
+  }
+}
+
+// ── 墙上降噪（11/18 窗口 A）：UI_ONLY=strip；ST_HTML 换整页做红阶段 / 改坏对照 ──
+// 期望由原始状态与状态 class 另算，不调用 stripOf / quietCard / workGrace。每个 context 固定同一份夹具；状态变化仍经过 fullState 路由。
+async function wallStripSeg() {
+  console.log('\n[墙上降噪 · 窄条]');
+  const shots = path.join(OUT, 'strip'); fs.mkdirSync(shots, { recursive: true });
+  const K = FX.sids.links, D = FX.sids.done, sel = (id) => `.card[data-sid="${id}"]`;
+  const openST = async ({ lang = 'zh', scheme = 'dark', w = 1520, off = false, storageFail = false } = {}) => {
+    STRIPS_ON = true;
+    let ctx; try { ctx = await browser.newContext({ viewport: { width: w, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 }); } finally { STRIPS_ON = false; }
+    await ctx.addInitScript(({ off, storageFail }) => {
+      localStorage.setItem('ccb_mode', JSON.stringify('wall')); localStorage.setItem('ccb_done', JSON.stringify({ 'st-handled': '1970-01-01T00:33:20.000Z' }));
+      if (!sessionStorage.getItem('st-init')) { if (off) localStorage.setItem('ccb_strip', 'off'); else localStorage.removeItem('ccb_strip'); sessionStorage.setItem('st-init', '1'); }
+      if (storageFail) { const get = Storage.prototype.getItem; Storage.prototype.getItem = function (k) { if (k === 'ccb_strip') throw new Error('storage unavailable'); return get.call(this, k); }; }
+    }, { off, storageFail });
+    const page = await ctx.newPage(), errs = [], ctl = { state: 'fyi', revision: 0, armed: false, allHandled: false, sent: [], auto: [], seq: 1, frozen: null };
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await page.route('**/api/state*', async (route) => {
+      let r; try { r = await fullState(route); if (!ctl.frozen) ctl.frozen = await r.json(); } catch { return route.abort().catch(() => {}); }
+      const j = structuredClone(ctl.frozen), seed = j.sessions.find((s) => s.sid === D);
+      j.sessions.push({ ...seed, sid: 'st-handled', title: 'strip-handled', resultAt: '1970-01-01T00:16:40.000Z', digest: { need: 'review' }, alert: null, ask: null },
+        { ...seed, sid: 'st-idle', title: 'strip-idle', status: 'idle', done: false, result: '', resultAt: null, note: '', steps: 0, digest: {}, alert: null, ask: null });
+      const s = j.sessions.find((x) => x.sid === K);
+      Object.assign(s, { channel: 'tmux', tmux: 'ccb-fake', status: 'idle', done: true, digest: { ...s.digest, need: ctl.state === 'review' ? 'review' : 'fyi' }, alert: null, ask: null, resultAt: new Date(new Date(s.resultAt).getTime() + ctl.revision).toISOString() });
+      if (ctl.state === 'busy') s.status = 'busy';
+      if (ctl.state === 'ask') s.status = 'waiting';
+      if (ctl.state === 'stop') s.alert = { kind: 'error', key: 'st-error', at: j.now };
+      if (ctl.armed) s.auto = { state: 'armed', text: '【总控台自动续跑】（不是 Khalil 本人）接着做你上一轮自己提的下一步', basis: '先跑验证', fireIn: 25000 }; else s.auto = null;
+      j.pending = [{ name: 'st-boot', prompt: '', screen: '', at: j.now, cwd: j.home, provider: 'claude' },
+        { name: 'st-choice', prompt: '', screen: '', at: j.now, cwd: j.home, dialog: { question: 'Choose a mode', options: ['Allow', 'Deny'] } }];
+      if (ctl.allHandled) { for (const x of j.sessions) Object.assign(x, { status: 'idle', ask: null, alert: null, done: true, result: 'Done.', digest: { need: 'review' } }); j.pending = []; j.lost = []; }
+      j.notices = []; j.v = ctl.seq++;
+      await route.fulfill({ response: r, json: j });
+    });
+    for (const [url, key] of [['send', 'sent'], ['auto', 'auto']]) await page.route('**/api/' + url, async (r) => { ctl[key].push(JSON.parse(r.request().postData() || '{}')); await r.fulfill({ json: { ok: true, delivered: true } }); });
+    await page.route('**/api/processed', (r) => r.fulfill({ json: { ok: true } }));
+    if (process.env.ST_HTML) {
+      const html = fs.readFileSync(process.env.ST_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+      await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+    }
+    await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector('.card');
+    ctl.firstReviewFull = await page.evaluate((id) => !document.querySelector('.card[data-sid="' + id + '"]').classList.contains('strip'), D);
+    await page.evaluate(async () => { clearTimeout(pollT); while (polling) await new Promise((r) => setTimeout(r, 10)); clearTimeout(pollT); });
+    await sleep(800);       // 等列的淡入结束，再量尺寸、点击和截图；第一拍的交付样子已单独记下。
+    return { ctx, page, errs, ctl };
+  };
+  const tick = (page) => page.evaluate(async () => { clearTimeout(pollT); while (polling) await new Promise((r) => setTimeout(r, 10)); await poll(); clearTimeout(pollT); });
+  const tap = async (page, q) => { const el = page.locator(q); if (!await el.count()) return;
+    await el.evaluate((e) => e.closest('.card')?.scrollIntoView({ block: 'center' }));
+    await el.click({ timeout: 3000 }).catch((e) => console.log('  点击未完成：' + q + ' · ' + e.message.split('\n')[0])); };
+  const card = (page, id = K) => page.evaluate((id) => {
+    const e = document.querySelector('.card[data-sid="' + id + '"]'); if (!e) return {};
+    const sl = e.querySelector('.sl'); return { strip: e.classList.contains('strip'), h: e.getBoundingClientRect().height, opened: e.classList.contains('opened'), cls: e.className,
+      text: sl ? sl.textContent : '', tip: sl ? sl.title : '', shrink: !!e.querySelector('.shrink') && getComputedStyle(e.querySelector('.shrink')).display !== 'none' };
+  }, id);
+  const layoutST = (page) => page.evaluate(() => {
+    const cs = [...document.querySelectorAll('#stage .card:not([hidden])')];
+    const rows = cs.map((e) => { const sl = e.querySelector('.sl'); return { id: e.dataset.sid, hot: e.matches('.s-ask,.alert,.s-reply,.s-review') || e.dataset.sid.startsWith('x:'), strip: e.classList.contains('strip'), h: e.getBoundingClientRect().height,
+      onlySl: [...e.children].filter((x) => getComputedStyle(x).display !== 'none').every((x) => x === sl), text: sl ? sl.textContent : '', meta: (e.querySelector('.meta') || {}).textContent, title: (e.querySelector('.title') || {}).textContent,
+      dot: !!sl && !!sl.querySelector('i') && getComputedStyle(sl.querySelector('i')).width === '7px' }; });
+    const cols = [...document.querySelectorAll('.gbody')]; if (!cols.length) cols.push(document.querySelector('#stage'));
+    const lanes = cols.map((g) => { const a = [...g.children].filter((e) => e.matches('.card:not([hidden])')), i = a.findIndex((e) => e.classList.contains('strip'));
+      return { ordered: i < 0 || a.slice(i).every((e) => e.classList.contains('strip')), s1: i < 0 || a[i].classList.contains('s1') && getComputedStyle(a[i]).gridColumnStart === '1' && a.filter((e) => e.classList.contains('s1')).length === 1 }; });
+    return { rows, lanes, overflow: document.documentElement.scrollWidth > innerWidth };
+  });
+  const checkLayout = async (page, tag, en = false) => {
+    const l = await layoutST(page), full = l.rows.filter((x) => x.hot), strips = l.rows.filter((x) => !x.hot);
+    ok(full.length > 4 && full.every((x) => !x.strip && x.h > 200), tag + '：要你的四类、进程退出是整格', JSON.stringify(full.filter((x) => x.strip || x.h <= 200)));
+    ok(strips.length > 5 && strips.every((x) => x.strip && Math.abs(x.h - 34) < 2 && x.onlySl), tag + '：在跑、后台、启动、无需处理、处理过、空闲只有 34 px 窄条', JSON.stringify(strips.filter((x) => !x.strip || Math.abs(x.h - 34) >= 2 || !x.onlySl)));
+    // 夹具确有静默状态；先确认窄条存在，旧页面不能因「根本没有窄条」而空过排序和 s1。
+    ok(l.rows.some((x) => x.strip) && l.lanes.every((x) => x.ordered), tag + '：每列整卡在前、窄条在后', JSON.stringify(l.lanes));
+    ok(l.rows.some((x) => x.strip) && l.lanes.every((x) => x.s1), tag + '：每列第一条窄条 s1 另起一行', JSON.stringify(l.lanes));
+    ok(strips.every((x) => x.dot && x.title && x.text.includes(x.title) && (x.id.startsWith('p:') || x.text.includes(x.meta))), tag + '：状态点、标题、状态词与时长同整卡药丸', JSON.stringify(strips));
+    if (en) ok(strips.every((x) => !/[一-鿿]/.test(x.text)), tag + '：窄条全是英文', JSON.stringify(strips.map((x) => x.text)));
+    ok(!l.overflow, tag + '：页面没有横向溢出');
+  };
+  let { ctx, page, errs, ctl } = await openST();
+  const raw = await page.evaluate(() => api('/api/state?peek=1'));
+  ok(raw.sessions.some((x) => x.status === 'busy') && raw.sessions.some((x) => x.status === 'shell') && raw.sessions.some((x) => x.digest?.need === 'reply') && raw.sessions.some((x) => x.digest?.need === 'review') && raw.pending.some((x) => x.dialog) && raw.lost.length > 0,
+    '窄条：原始夹具覆盖运行、后台、待跟进、待审阅、等你选、进程退出');
+  await checkLayout(page, '窄条 · 中文深色 1520 按项目');
+  await page.screenshot({ path: path.join(shots, '01-中文-深色-1520-墙.png') });
+  await page.click('#by [data-by="status"]'); await checkLayout(page, '窄条 · 按状态'); await page.click('#by [data-by="project"]');
+  const count = async (f) => { const q = page.locator(`#filters [data-f="${f}"] .num`); return await q.count() ? Number(await q.textContent()) : 0; };
+  const n = await count('todo'), nr = await count('reply'), nv = await count('review'), na = await count('ask'), ns = await count('stop');
+  const independent = await page.evaluate(() => [...document.querySelectorAll('.card')].filter((e) => e.matches('.s-ask,.alert,.s-reply,.s-review') || e.dataset.sid.startsWith('x:')).length);
+  ok(n > 0 && ns > 0 && n === nr + nv + na + ns && n === independent, '要你：N 等于四类之和，含停住了，与状态 class 独立计数相同', JSON.stringify({ n, nr, nv, na, ns, independent }));
+  await tap(page, '#filters [data-f="todo"]'); let l = await layoutST(page);
+  ok(l.rows.length === n && l.rows.every((x) => x.hot && !x.strip), '要你：点后只剩四类整卡，没有窄条', JSON.stringify(l));
+  await sleep(800); await page.screenshot({ path: path.join(shots, '02-中文-深色-1520-要你.png') });
+  await tap(page, '#filters [data-f="todo"]'); l = await layoutST(page);
+  ok(l.rows.length > n && l.rows.some((x) => x.strip), '要你：再点一次回到全部');
+  await tap(page, '#filters [data-f="stop"]'); l = await layoutST(page);
+  ok(l.rows.length === ns && l.rows.every((x) => x.hot && !x.strip), '停住了：原筛选保留、只显示停住的整卡');
+  await tap(page, '#filters [data-f="all"]');
+  await tap(page, sel(K) + ' .sl'); let c = await card(page);
+  ok(!c.strip && c.opened && c.h > 200 && c.shrink, '窄条：点击展开整卡，卡头有「收成一条」', JSON.stringify(c));
+  l = await layoutST(page); ok(l.lanes.every((x) => x.ordered), '窄条：展开的无需处理整卡也排在运行窄条前面', JSON.stringify(l.lanes));
+  await sleep(800); await page.locator(sel(K)).scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(shots, '03-中文-深色-1520-展开.png') });
+  const ta = sel(K) + ' textarea'; await tap(page, ta); await page.keyboard.type('窄条回话测试'); await page.keyboard.press('Enter'); await sleep(150);
+  ok(ctl.sent.length === 1 && ctl.sent[0].sid === K && ctl.sent[0].text === '窄条回话测试', '窄条展开：输入框打字、回车发送给来源会话（浏览器拦下）', JSON.stringify(ctl.sent));
+  await page.evaluate(() => { for (const k of Object.keys(sentAt)) delete sentAt[k]; }); await tick(page);
+  const pathLink = sel(K) + ' .body [data-path$=".html"]';
+  const previews = []; await page.route('**/api/preview', async (r) => { previews.push(JSON.parse(r.request().postData() || '{}')); await r.fulfill({ json: { ok: true, kind: 'text', name: 'fixture.txt', dir: FX.home, text: 'Preview fixture.' } }); });
+  await page.evaluate((q) => document.querySelector(q)?.click(), pathLink); await sleep(200);
+  const dock = await page.evaluate(() => { const p = document.querySelector('#preview'), d = document.querySelector('#pDock'); return { open: p.open, sid: d.dataset.sid, hidden: d.hidden, input: !!d.querySelector('textarea') }; });
+  ok(previews.length === 1 && dock.open && dock.sid === K && !dock.hidden && dock.input, '窄条展开：正文路径打开预览，底部借来这张卡的回话框', JSON.stringify({ previews, dock }));
+  if (dock.open) { await tap(page, '#pDock textarea'); await page.keyboard.type('预览草稿'); ctl.revision++; await tick(page); c = await card(page); ok(!c.strip, '窄条：回话框借到预览里打字时保持整卡'); await page.keyboard.press('Escape'); }
+  else ok(false, '窄条：回话框借到预览里打字时保持整卡');
+  const gallery = await page.locator(sel(K) + ' [data-gallery]').count();
+  console.log('  图集夹具：links 正文没有图像 / 视频路径，本段不验证图集按钮；当前按钮数=' + gallery);
+  await page.evaluate(() => { document.activeElement?.blur(); }); await tick(page); await tap(page, sel(K) + ' .sl'); await tap(page, sel(K) + ' .shrink');
+  ok((await card(page)).strip, '窄条：点「收成一条」回到窄条');
+  await page.locator(sel(K) + ' .sl').focus({ timeout: 600 }).catch(() => {}); await page.keyboard.press('Enter');
+  ok(!(await card(page)).strip && (await card(page)).opened, '窄条：键盘 Enter 展开');
+  ctl.revision++; await tick(page); ok((await card(page)).strip, '窄条：展开后有新一次交付，回到窄条');
+  // 打字守卫要排除 opened 的保护：新交付会使展开记录作废，焦点仍应单独保住输入框。
+  await tap(page, sel(K) + ' .sl'); await tap(page, ta); await page.keyboard.type('保持输入框'); ctl.revision++; ctl.state = 'busy'; await tick(page);
+  const typed = await page.evaluate((q) => { const t = document.querySelector(q); return { value: t?.value, focus: document.activeElement === t }; }, ta);
+  ok(!(await card(page)).strip && typed.focus && typed.value.endsWith('保持输入框'), '窄条：状态变成在跑且展开作废，打字期间仍不收、焦点和字不丢', JSON.stringify(typed));
+  await ctx.close(); ok(errs.length === 0, '窄条 · 主流程：页面没有报错', errs.join(' | '));
+
+  ({ ctx, page, errs, ctl } = await openST()); ctl.armed = true; await tick(page); c = await card(page);
+  ok(c.strip && c.text.includes('自动接着做 · 25 秒后发') && c.text.includes('不发了') && !c.text.includes('接着做你上一轮自己提的下一步'), '窄条：自动续跑只显示倒数和取消，不塞整句', JSON.stringify(c));
+  ok(c.tip.includes('会发：') && c.tip.includes('\n依据') && c.tip.includes('先跑验证'), '窄条：提示里有「会发」「依据」两段', c.tip);
+  await tap(page, sel(K) + ' .sl [data-ap="cancel"]');
+  ok(ctl.auto.some((x) => x.sid === K && x.op === 'cancel'), '窄条：「不发了」发 /api/auto cancel', JSON.stringify(ctl.auto));
+  // 「处理过」由客户端的处理记录决定；完成应答继续经 fullState 路由，不改任何真实会话。
+  await page.evaluate(() => { for (const s of last.sessions) if (s.resultAt) done[s.sid] = s.resultAt; });
+  ctl.armed = false; ctl.allHandled = true; await tick(page);
+  const allHandled = await page.evaluate(() => { const a = [...document.querySelectorAll('.card:not([hidden])')]; return a.length > 0 && a.every((e) => e.classList.contains('s-handled')); });
+  await tap(page, '#filters [data-f="todo"]');
+  const blank = await page.locator('.blank').textContent().catch(() => '');
+  ok(allHandled && blank === '没有要你处理的了。再点一下「要你」回到全部。' && (await layoutST(page)).rows.length === 0, '要你：全是处理过时显示专用空态', blank);
+  ok(errs.length === 0, '窄条 · 倒数和空态：页面没有报错', errs.join(' | ')); await ctx.close();
+
+  // MutationObserver 保存每一次 class 的新值与时刻；快切回在跑时，不能漏掉一闪而过的整卡。
+  ({ ctx, page, errs, ctl } = await openST());
+  ok(ctl.firstReviewFull, '宽限：首次载入就是待审阅，第一拍整卡');
+  const watch = async () => page.evaluate((sid) => { window.stObs?.disconnect(); const e = document.querySelector('.card[data-sid="' + sid + '"]'); window.stTrace = [{ at: performance.now(), cls: e.className }];
+    window.stObs = new MutationObserver((ms) => { ms.forEach((m, i) => window.stTrace.push({ at: performance.now(), cls: ms.slice(i + 1).find((n) => n.target === m.target)?.oldValue ?? e.className })); });
+    window.stObs.observe(e, { attributes: true, attributeFilter: ['class'], attributeOldValue: true }); window.stStart = performance.now(); }, K);
+  const trace = () => page.evaluate(() => window.stTrace.map((x) => ({ ms: Math.round(x.at - window.stStart), cls: x.cls })));
+  ctl.state = 'busy'; await tick(page); await watch(); ctl.state = 'review'; await tick(page); await sleep(1450);
+  let tr = await trace(); ok((await card(page)).strip && tr.every((x) => /\bstrip\b/.test(x.cls)), '宽限：在跑变待审阅，前 1.5 秒一直是窄条', JSON.stringify(tr));
+  await sleep(850); tr = await trace(); ok(!(await card(page)).strip && tr.some((x) => !/\bstrip\b/.test(x.cls) && x.ms <= 2500), '宽限：停掉轮询，2.5 秒内自动升为整卡', JSON.stringify(tr));
+  ctl.state = 'busy'; await tick(page); await watch(); ctl.state = 'review'; await tick(page); await sleep(1000); ctl.state = 'busy'; await tick(page); await sleep(1250); tr = await trace();
+  ok((await card(page)).strip && tr.every((x) => /\bstrip\b/.test(x.cls)), '宽限：一秒后又在跑，全程没有一次整格', JSON.stringify(tr));
+  // openST() 和 tick() 都等在途 poll 结束并清掉 pollT；两拍间不会有自然轮询刷新在跑时刻。
+  ctl.state = 'busy'; await tick(page); await watch(); await sleep(1300);
+  ctl.state = 'review'; await tick(page); await sleep(900); ctl.state = 'busy'; await tick(page); await sleep(300); tr = await trace();
+  ok((await card(page)).strip && tr.every((x) => /\bstrip\b/.test(x.cls)), '宽限：停下那一拍离上一次在跑隔了 1.3 秒，再接上也不闪整格', JSON.stringify(tr));
+  for (const state of ['ask', 'stop']) { ctl.state = 'busy'; await tick(page); ctl.state = state; await tick(page); c = await card(page);
+    ok(!c.strip && c.h > 200, '宽限：在跑变' + (state === 'ask' ? '等你选' : '停住了') + '，下一拍立即整格', JSON.stringify(c)); }
+  ctl.state = 'busy'; await tick(page); await tap(page, '#filters [data-f="busy"]');
+  ok((await layoutST(page)).rows.every((x) => !x.strip), '窄条：筛选不是全部时不收窄条'); await tap(page, '#filters [data-f="all"]'); await sleep(900);
+  // 第二次 paint 的属性写 API 和 MutationObserver 双计数，包含 .sl 的 dataset / 文本 / class / aria / title。
+  const churn = await page.evaluate(() => {
+    clearTimeout(pollT); const st = structuredClone(last); paint(st); const hits = [], undo = [], root = document.querySelector('#stage');
+    const inside = (e) => e instanceof Element && root.contains(e), patch = (p, k, wrap) => { const o = Object.getOwnPropertyDescriptor(p, k); Object.defineProperty(p, k, wrap(o)); undo.push(() => Object.defineProperty(p, k, o)); };
+    for (const [p, key] of [[Element.prototype, 'className'], [Element.prototype, 'innerHTML'], [Node.prototype, 'textContent'], [HTMLElement.prototype, 'hidden'], [HTMLElement.prototype, 'title']])
+      patch(p, key, (o) => ({ ...o, set(v) { if (inside(this)) hits.push(key + ':' + this.nodeName + '.' + this.className); return o.set.call(this, v); } }));
+    patch(Element.prototype, 'setAttribute', (o) => ({ ...o, value: function (k, v) { if (inside(this)) hits.push('attr:' + k); return o.value.call(this, k, v); } }));
+    patch(HTMLElement.prototype, 'dataset', (o) => ({ ...o, get() { const e = this; return new Proxy(o.get.call(this), { get: (t, k) => t[k], set(t, k, v) { if (inside(e)) hits.push('dataset:' + String(k)); t[k] = v; return true; } }); } }));
+    const ob = new MutationObserver(() => {}); ob.observe(root, { subtree: true, attributes: true, childList: true, characterData: true });
+    let mutations; try { paint(structuredClone(st)); mutations = ob.takeRecords().map((x) => x.type + ':' + x.attributeName); } finally { ob.disconnect(); undo.reverse().forEach((f) => f()); }
+    return { hits, mutations };
+  });
+  ok(churn.hits.length === 0 && churn.mutations.length === 0, '窄条性能：同一份状态第二次绘制 0 次 DOM 写入', JSON.stringify(churn));
+  ok(errs.length === 0, '窄条 · 宽限和性能：页面没有报错', errs.join(' | ')); await ctx.close();
+
+  ({ ctx, page, errs } = await openST({ off: true }));
+  ok((await layoutST(page)).rows.every((x) => !x.strip && x.h > 200), '窄条开关：ccb_strip=off 时没有窄条');
+  await page.evaluate(() => localStorage.removeItem('ccb_strip'));
+  await page.evaluate(() => paint(last)); ok((await layoutST(page)).rows.every((x) => !x.strip), '窄条开关：载入后删键不会当场改变开关');
+  await page.reload(); await page.waitForSelector('.card');
+  ok((await layoutST(page)).rows.some((x) => x.strip), '窄条开关：删键再载入后恢复窄条');
+  ok(errs.length === 0, '窄条 · 关闭开关：页面没有报错', errs.join(' | ')); await ctx.close();
+  ({ ctx, page, errs } = await openST({ storageFail: true }));
+  ok((await layoutST(page)).rows.some((x) => x.strip), '窄条开关：存储读取失败时默认开启');
+  ok(errs.length === 0, '窄条 · 存储失败：页面没有报错', errs.join(' | ')); await ctx.close();
+  for (const [lang, scheme, w, file] of [['zh', 'light', 1728, '04-中文-浅色-1728.png'], ['en', 'dark', 1520, '05-英文-深色-1520.png'], ['zh', 'dark', 700, '06-中文-深色-700.png'], ['en', 'light', 1520, '07-英文-浅色-1520.png']]) {
+    ({ ctx, page, errs } = await openST({ lang, scheme, w })); await checkLayout(page, `窄条 · ${lang} ${scheme} ${w}`, lang === 'en');
+    await page.screenshot({ path: path.join(shots, file) }); ok(errs.length === 0, `窄条 · ${lang} ${scheme} ${w}：页面没有报错`, errs.join(' | ')); await ctx.close();
+  }
+}
+
+// ── 预计交付（11/18）：卡片右上角「运行中 · 12 分钟 · 预计 23:50 交」「后台在跑 · 1 小时 · 比预计晚 10 分钟」。UI_ONLY=eta；ET_HTML 换整页做红阶段 / 改坏对照 ──
+// 在浏览器里改 /api/state 的应答，给 run（在跑）、bg（后台在跑）、stall（没动静）、done（已交付）挂上 eta；bgOpen（后台在跑）不给。
+// eta 的 at 第一次应答时按服务的 now 定死，之后每拍原样给。期望的钟点在页面里用 Date 另算（今天写钟点、别的日子加「明天」），不调界面的函数。
+async function etaSeg() {
+  console.log('\n[预计交付]');
+  const ids = { run: FX.sids.run, bg: FX.sids.bg, stall: FX.sids.stall, done: FX.sids.done, bgOpen: FX.sids.bgOpen };
+  const card = (n) => `.card[data-sid="${ids[n]}"]`;
+  const open = async ({ lang = 'zh', scheme = 'light', strips = false, plan = { run: [-2, 20], bg: [-40, 30], stall: [-5, 30], done: [-5, 30] } } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await ctx.addInitScript((off) => { localStorage.setItem('ccb_mode', JSON.stringify('wall')); if (off) localStorage.setItem('ccb_strip', 'off'); else localStorage.removeItem('ccb_strip'); }, !strips);
+    const page = await ctx.newPage(), errs = [], fixed = {};
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await page.route('**/api/state*', async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }
+      for (const x of j.sessions || []) for (const [n, sid] of Object.entries(ids)) if (x.sid === sid && plan[n]) {
+        if (!fixed[n]) fixed[n] = { at: new Date(j.now + plan[n][0] * 60000).toISOString(), mins: plan[n][1] };
+        x.eta = fixed[n];
+      }
+      await route.fulfill({ response: r, json: j }); });
+    if (process.env.ET_HTML) {
+      const html = fs.readFileSync(process.env.ET_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+      await page.route((u) => u.pathname === '/', async (route) => { const r = await route.fetch(); await route.fulfill({ response: r, body: html, contentType: 'text/html; charset=utf-8' }); });
+    }
+    await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector('.card'); await sleep(1800);   // 至少一拍带上 eta 的应答画完
+    return { ctx, page, errs, fixed };
+  };
+  // 一张卡的读数：牌子整句、预计那一段、悬停、窄条里的那句；期望值：按 eta 另算的钟点（due）和报的时刻（at）
+  const read = (page, n, fx) => page.evaluate(({ sel, e }) => {
+    const c = document.querySelector(sel), m = c && c.querySelector('.meta'), me = m && m.querySelector('.me'), sl = c && c.querySelector('.sl span');
+    const p2 = (v) => String(v).padStart(2, '0'), hm = (t) => { const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()); };
+    const due = e ? Date.parse(e.at) + e.mins * 60000 : 0, day = e && new Date(due).toDateString() !== new Date().toDateString();
+    // 卡头排版：显示着的按钮（含平时透明的「放大看」）都和牌子在同一行（顶边高于牌子底边），牌子不截字、不出卡头
+    const hd = c && c.querySelector('.chead'), mr = m && m.getBoundingClientRect(), hr = hd && hd.getBoundingClientRect();
+    const btns = hd ? [...hd.children].filter((b) => b.tagName === 'BUTTON' && getComputedStyle(b).display !== 'none') : [];
+    const row = !!mr && btns.length > 0 && btns.every((b) => b.getBoundingClientRect().top < mr.bottom - 1);
+    const fit = !!mr && m.scrollWidth <= m.clientWidth + 1 && mr.right <= hr.right + 0.5;
+    return { meta: m ? m.textContent : null, me: me ? me.textContent : null, tip: m ? m.title : null, strip: sl ? sl.textContent : null, cls: c ? c.className : '',
+      row, fit, cw: c ? Math.round(c.getBoundingClientRect().width) : 0, mh: mr ? Math.round(mr.height) : 0, nb: btns.length,
+      dueHm: e ? (day ? '明天 ' : '') + hm(due) : '', dueHmEn: e ? (day ? 'tomorrow ' : '') + hm(due) : '', atHm: e ? hm(e.at) : '' };
+  }, { sel: card(n), e: fx[n] || null });
+  // 把几张收成窄条的卡点开（点条上那一句，和手点一样），等画完
+  const openStrips = async (page, ns) => { for (const n of ns) { const q = page.locator(card(n) + '.strip .sl'); if (!await q.count()) continue;
+    await q.evaluate((e) => e.closest('.card').scrollIntoView({ block: 'center' })); await q.click({ timeout: 3000 }).catch(() => {}); await sleep(500); } await sleep(400); };
+
+  { // 中文浅色、整格
+    const { ctx, page, errs, fixed } = await open();
+    const run = await read(page, 'run', fixed), bg = await read(page, 'bg', fixed);
+    ok(new RegExp('^运行中 · .+ · 预计 ' + run.dueHm + ' 交$').test(run.meta || ''), '在跑：牌子是「运行中 · 时长 · 预计 HH:MM 交」，钟点 = 报的时刻 + N 分钟（期望 ' + run.dueHm + '）', JSON.stringify(run));
+    ok(run.me === '预计 ' + run.dueHm + ' 交', '在跑：预计那一段单独一个 .me（和前面的时长分开，样式等宽数字）', JSON.stringify(run.me));
+    ok(run.tip === '窗口在 ' + run.atHm + ' 报的：还要 20 分钟', '在跑：悬停写明这是窗口自己报的、几点报的、报了多少', JSON.stringify(run.tip));
+    ok(/^后台在跑 · .+ · 比预计晚 10 分钟$/.test(bg.meta || ''), '后台在跑、过了预计 10 分钟：「后台在跑 · 时长 · 比预计晚 10 分钟」', JSON.stringify(bg.meta));
+    ok(!/s-reply|s-ask|alert/.test(bg.cls), '晚了不变成要你处理（不加琥珀色的 s-reply / s-ask / alert）', bg.cls);
+    ok([run, bg].every((x) => x.row && x.fit), '带上预计也不把卡头的按钮挤到下一行（墙上的窄卡放不下就在牌子里折行），牌子不截字', JSON.stringify([run, bg].map((x) => ({ cw: x.cw, mh: x.mh, nb: x.nb, row: x.row, fit: x.fit, meta: x.meta }))));
+    const rest = await Promise.all(['stall', 'done', 'bgOpen'].map(async (n) => [n, await read(page, n, fixed)]));
+    ok(rest.every(([, x]) => x.meta && !/预计/.test(x.meta) && !x.me && !x.tip), '没动静的（stall）、已交付的（done）带着 eta 也不显示；没报的（bgOpen）照旧', JSON.stringify(rest.map(([n, x]) => [n, x.meta, x.tip])));
+    await shotOf(page, 'run', 'eta-run-zh-light.png'); await shotOf(page, 'bg', 'eta-late-zh-light.png');
+    ok(errs.length === 0, '预计（中文）：没有控制台错误或页面异常', errs.join('|'));
+    await ctx.close();
+  }
+  { // 报的是 24 小时（跨到明天）
+    const { ctx, page, errs, fixed } = await open({ plan: { run: [0, 1440] } });
+    const run = await read(page, 'run', fixed);
+    ok(/^明天 /.test(run.dueHm) && run.me === '预计 ' + run.dueHm + ' 交', '跨到明天的写「预计 明天 HH:MM 交」', JSON.stringify(run));
+    ok(run.row && run.fit, '「预计 明天 HH:MM 交」更长，按钮照样和牌子在一行、不截字', JSON.stringify({ cw: run.cw, mh: run.mh, nb: run.nb, row: run.row, fit: run.fit }));
+    ok(errs.length === 0, '预计（明天）：没有控制台错误或页面异常', errs.join('|'));
+    await ctx.close();
+  }
+  { // 英文深色
+    const { ctx, page, errs, fixed } = await open({ lang: 'en', scheme: 'dark' });
+    const run = await read(page, 'run', fixed), bg = await read(page, 'bg', fixed);
+    ok(run.me === 'ETA ' + run.dueHmEn && /^Running · .+ · ETA /.test(run.meta || ''), '英文：在跑的是「Running · … · ETA HH:MM」', JSON.stringify(run));
+    ok(/^Background task · .+ · 10 min past ETA$/.test(bg.meta || ''), '英文：过了时间的是「… · 10 min past ETA」', JSON.stringify(bg.meta));
+    ok(run.tip === 'The window estimated at ' + run.atHm + ': 20 more min', '英文：悬停也翻了', JSON.stringify(run.tip));
+    ok(![run, bg].some((x) => /[一-鿿]/.test((x.meta || '') + (x.tip || ''))), '英文：牌子和悬停里没有漏翻的中文', JSON.stringify([run.meta, bg.meta, run.tip]));
+    ok([run, bg].every((x) => x.row && x.fit), '英文：按钮照样和牌子在一行、不截字', JSON.stringify([run, bg].map((x) => ({ cw: x.cw, mh: x.mh, row: x.row, fit: x.fit }))));
+    await shotOf(page, 'run', 'eta-run-en-dark.png');
+    ok(errs.length === 0, '预计（英文）：没有控制台错误或页面异常', errs.join('|'));
+    await ctx.close();
+  }
+  { // 窄条：不要你管的卡收成一条，那一条里同样带预计
+    const { ctx, page, errs, fixed } = await open({ strips: true });
+    const run = await read(page, 'run', fixed);
+    ok(/\bstrip\b/.test(run.cls) && run.strip === run.meta && / · 预计 /.test(run.strip || ''), '窄条：在跑的卡收成一条时，条上那句和牌子一样带「预计 HH:MM 交」', JSON.stringify(run));
+    await page.screenshot({ path: path.join(OUT, 'eta-wall-strips-zh-light.png') });
+    // 点开的窄条（.card.opened）卡头多一个「收成一条」，四个图标：带预计的牌子要多让 30 px，不然 ⤢ 掉到第二行（11/19 线上真卡片：卡头 66 px，正常 36 px）
+    await openStrips(page, ['run', 'bg']);
+    const oRun = await read(page, 'run', fixed), oBg = await read(page, 'bg', fixed);
+    ok([oRun, oBg].every((x) => /\bopened\b/.test(x.cls) && x.nb === 4 && x.row && x.fit && x.me),
+      '窄条点开（opened，卡头四个图标）：带预计的牌子和 ⤢「放大看」在同一行，牌子不截字', JSON.stringify([oRun, oBg].map((x) => ({ cls: x.cls, cw: x.cw, mh: x.mh, nb: x.nb, row: x.row, fit: x.fit, meta: x.meta }))));
+    await shotOf(page, 'run', 'eta-opened-run-zh-light.png');
+    ok(errs.length === 0, '预计（窄条）：没有控制台错误或页面异常', errs.join('|'));
+    await ctx.close();
+  }
+  { // 点开的窄条，英文浅色（照线上英文浅色卡的样子）
+    const { ctx, page, errs, fixed } = await open({ strips: true, lang: 'en' });
+    await openStrips(page, ['run', 'bg']);
+    const oRun = await read(page, 'run', fixed), oBg = await read(page, 'bg', fixed);
+    ok([oRun, oBg].every((x) => /\bopened\b/.test(x.cls) && x.nb === 4 && x.row && x.fit && x.me),
+      '英文：窄条点开（四个图标）也和 ⤢ 在同一行、不截字', JSON.stringify([oRun, oBg].map((x) => ({ cls: x.cls, cw: x.cw, mh: x.mh, nb: x.nb, row: x.row, fit: x.fit, meta: x.meta }))));
+    await shotOf(page, 'run', 'eta-opened-run-en-light.png'); await shotOf(page, 'bg', 'eta-opened-late-en-light.png');
+    ok(errs.length === 0, '预计（英文、点开的窄条）：没有控制台错误或页面异常', errs.join('|'));
+    await ctx.close();
+  }
+}
+
+// ── 撤销、↑ 取回上一句。UI_ONLY=undo；UN_HTML 换页面做红阶段和改坏对照 ──
+// 状态一律取整份；发送只在浏览器回假应答；推迟与清除走夹具服务。
+async function undoSeg() {
+  console.log('\n[撤销、↑ 取回上一句]');
+  const D = FX.sids.done, K = FX.sids.links, X = FX.sids.askTag;
+  const card = (sid) => `.card[data-sid="${sid}"]`, ta = (sid) => card(sid) + ' textarea';
+  const openUN = async ({ lang = 'zh', scheme = 'dark', init = null } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await ctx.addInitScript(() => localStorage.setItem('ccb_mode', JSON.stringify('wall')));
+    if (init) await ctx.addInitScript(init);
+    const page = await ctx.newPage(), errs = [], hit = { sends: [], processed: [], sendOk: true, delivered: true };
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await page.route('**/api/state*', async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }
+      for (const x of j.sessions || []) if (x.sid === D || x.sid === K) { x.channel = 'tmux'; x.tmux = 'ccb-fake'; }
+      await route.fulfill({ response: r, json: j }); });
+    await page.route('**/api/send', async (route) => { hit.sends.push(JSON.parse(route.request().postData() || '{}'));
+      await route.fulfill({ json: hit.sendOk ? { ok: true, delivered: hit.delivered } : { ok: false, error: '没发出去' } }); });
+    await page.route('**/api/processed', async (route) => { hit.processed.push(JSON.parse(route.request().postData() || '{}')); await route.continue(); });
+    if (process.env.UN_HTML) {
+      const html = fs.readFileSync(process.env.UN_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+      await page.route((u) => u.pathname === '/', async (route) => { const r = await route.fetch(); await route.fulfill({ response: r, body: html, contentType: 'text/html; charset=utf-8' }); });
+    }
+    await srvClear([D, K]);      // 前面的段可能把 done 记成了处理过（「审完了」跨页面共享）：从待审阅开始
+    await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector('.card'); await sleep(500);
+    return { ctx, page, errs, hit };
+  };
+  // 派发会冒泡、可取消的按键，直接读 defaultPrevented，不依赖无头浏览器的原生文字撤销。
+  const key = (page, sel = 'body', opt = {}) => page.evaluate(({ sel, opt }) => {
+    if (sel === 'body') document.activeElement.blur(); else document.querySelector(sel).focus();
+    const e = new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', metaKey: true, bubbles: true, cancelable: true, ...opt });
+    (sel === 'body' ? document.body : document.querySelector(sel)).dispatchEvent(e); return e.defaultPrevented;
+  }, { sel, opt });
+  const up = (page, sid = D, opt = {}) => key(page, ta(sid), { key: 'ArrowUp', code: 'ArrowUp', metaKey: false, ...opt });
+  const info = (page, sid = D) => page.evaluate((sid) => {
+    const c = cards.get(sid), t = c && c.el._rp.querySelector('textarea');
+    return { cls: c.el.className, text: t.value, end: t.selectionStart === t.value.length && t.selectionEnd === t.value.length,
+      has: c.el._rp.classList.contains('has'), done: JSON.parse(localStorage.getItem('ccb_done') || '{}')[sid],
+      count: document.querySelector('[data-f="review"] b')?.textContent,
+      toast: document.querySelector('#toast').classList.contains('on'), msg: document.querySelector('#toast span').textContent,
+      draft: JSON.parse(localStorage.getItem('ccb_draft') || '{}')[sid]?.t, last: JSON.parse(localStorage.getItem('ccb_last') || '{}')[sid]?.t };
+  }, sid);
+  const handled = (x) => /s-handled/.test(x.cls), review = (x) => /s-review/.test(x.cls);
+  const mark = async (page) => {
+    // 每次先还原待审阅，前一条在旧版上失败也不能让隐藏按钮卡住后面的独立断言。
+    await page.evaluate(async (sid) => { delete done[sid]; store('ccb_done', done); await api('/api/processed', { clear: [sid] }); refresh(); }, D);
+    await page.waitForFunction((sid) => !(typeof srvDone === 'object' && srvDone[sid]), D, { timeout: 4000 }).catch(() => {});     // 服务给的那一份也要清掉才回到待审阅（旧界面没有 srvDone，直接过）
+    await page.evaluate(() => paint(last));
+    await page.click(card(D) + ' .done'); await sleep(180);
+  };
+  const clean = async ({ page, ctx, errs }, label) => {
+    await page.evaluate(async ({ X, D }) => { await api('/api/snooze', { sid: X, clear: true }); await api('/api/processed', { clear: [D, ...Object.keys(JSON.parse(localStorage.getItem('ccb_done') || '{}'))] }); }, { X, D });
+    ok(errs.length === 0, `撤销 ${label}：页面没有报错`, errs.join(' | ')); await ctx.close();
+  };
+  for (const [lang, scheme] of [['zh', 'dark'], ['en', 'light']]) {
+    const o = await openUN({ lang, scheme }), { page, hit } = o, zh = lang === 'zh';
+    const pre = await info(page); await mark(page); const marked = await info(page);
+    ok(review(pre) && handled(marked) && +marked.count === +pre.count - 1, `撤销 ${lang}：审完了变处理过，待审阅少一个`, JSON.stringify({ pre, marked }));
+    ok(marked.toast && (zh ? /^已处理「/.test(marked.msg) : /^Handled /.test(marked.msg)), `撤销 ${lang}：提示条文字`, marked.msg);
+    if (zh) await page.screenshot({ path: path.join(OUT, 'undo-zh-dark-toast.png') });
+    await page.evaluate(() => document.activeElement.blur()); await page.keyboard.press('Meta+KeyZ'); await sleep(240); let v = await info(page);
+    ok(review(v) && v.count === pre.count && !v.done && !v.toast, `撤销 ${lang}：⌘Z 恢复待审阅、计数和本机记录，收起提示条`, JSON.stringify(v));
+    const n = hit.processed.length; const twice = await key(page); await sleep(180); v = await info(page);
+    ok(!twice && hit.processed.length === n && review(v), `撤销 ${lang}：第二次不拦也不执行`, JSON.stringify({ twice, n, now: hit.processed.length }));
+    await page.fill(ta(D), '上一句测试'); await page.press(ta(D), 'Enter'); await sleep(450);
+    v = await info(page); ok(hit.sends.at(-1)?.text === '上一句测试' && v.text === '' && v.last === '上一句测试', `上一句 ${lang}：成功发出才存 ccb_last`, JSON.stringify(v));
+    const got = await up(page); await sleep(380); v = await info(page);
+    ok(got && v.text === '上一句测试' && v.end && v.has && v.draft === '上一句测试', `上一句 ${lang}：空框 ↑ 取回，光标在末尾、发送键亮、草稿存住`, JSON.stringify(v));
+    if (!zh) await page.locator(card(D)).screenshot({ path: path.join(OUT, 'undo-en-light-recall.png') });
+    if (zh) {
+      await page.fill(ta(D), ''); await sleep(380); await page.reload(); await page.waitForSelector(ta(D)); await sleep(400);
+      await page.press(ta(D), 'ArrowUp'); v = await info(page); ok(v.text === '上一句测试', '上一句：整页重新载入后仍可取回', JSON.stringify(v));
+      await page.fill(ta(D), 'abc'); const nonempty = await up(page); v = await info(page);
+      ok(!nonempty && v.text === 'abc', '上一句：框有字时 ↑ 不拦、不替换', JSON.stringify(v));
+      for (const opt of [{ shiftKey: true }, { ctrlKey: true }, { altKey: true }, { metaKey: true }, { isComposing: true }, { keyCode: 229 }]) {
+        await page.fill(ta(D), ''); const prevented = await up(page, D, opt); v = await info(page);
+        ok(!prevented && v.text === '', '上一句：修饰键或选字不取回 ' + JSON.stringify(opt), JSON.stringify(v));
+      }
+      hit.sendOk = false; await page.fill(ta(D), '失败这句'); await page.press(ta(D), 'Enter'); await sleep(450);
+      v = await info(page); ok(v.text === '失败这句' && v.last === '上一句测试', '上一句：发送失败保留原来的成功记录', JSON.stringify(v));
+      await page.fill(ta(D), ''); await up(page); v = await info(page); ok(v.text === '上一句测试', '上一句：失败后 ↑ 仍取成功的那句', JSON.stringify(v));
+      const other = await up(page, K); const kv = await info(page, K); ok(!other && kv.text === '', '上一句：另一张卡不取别人的话，也不用服务 prompt', JSON.stringify(kv));
+      await page.fill(ta(D), ''); await page.keyboard.press('Meta+KeyK'); await sleep(150);
+      const before = await page.locator('#jQ').getAttribute('aria-activedescendant'); await key(page, '#jQ', { key: 'ArrowUp', code: 'ArrowUp', metaKey: false });
+      const jq = await page.locator('#jQ').inputValue(), after = await page.locator('#jQ').getAttribute('aria-activedescendant');
+      ok(jq === '' && before !== after, '上一句：⌘K 搜索框 ↑ 仍选列表、不取回', JSON.stringify({ jq, before, after })); await page.keyboard.press('Escape');
+      await mark(page); await page.evaluate(() => { toast('别的提示'); document.activeElement.blur(); });
+      await page.keyboard.press('Meta+KeyZ'); await sleep(240); v = await info(page);
+      ok(handled(v) && !!v.done && v.msg === '别的提示', '撤销：别的提示盖掉撤销提示后 ⌘Z 不撤，处理记录保留', JSON.stringify(v));
+    }
+    await clean(o, lang);
+  }
+  // 每条撤销守卫都先创建一个新动作，避免上一条失败造成后续假绿。
+  for (const [label, sel, text, opt] of [
+    ['卡片有字', ta(D), 'abc', {}], ['搜索框有字', '#jQ', 'abc', {}], ['新任务有字', '#nPrompt', 'abc', {}],
+    ['Shift', 'body', '', { shiftKey: true }], ['Ctrl+Z', 'body', '', { metaKey: false, ctrlKey: true }],
+    ['Alt', 'body', '', { altKey: true }], ['选字', 'body', '', { isComposing: true }], ['229', 'body', '', { keyCode: 229 }]
+  ]) {
+    const o = await openUN(), { page } = o; await mark(page);
+    if (sel === '#jQ') await page.keyboard.press('Meta+KeyK'); if (sel === '#nPrompt') await page.click('#newBtn');
+    if (text) await page.fill(sel, text);
+    const p = await key(page, sel, opt), v = await info(page);
+    ok(!p && handled(v) && v.toast, `撤销守卫：${label}不抢按键，动作仍待撤销`, JSON.stringify({ p, v }));
+    if (text) await page.fill(sel, '');
+    const retry = await key(page, sel, {}); await sleep(160); const v2 = await info(page);
+    ok(retry && review(v2), `撤销守卫：${label}之后空框或普通 ⌘Z 仍能撤`, JSON.stringify(v2));
+    await clean(o, label);
+  }
+  {
+    const o = await openUN(), { page } = o; await mark(page);
+    const p = await key(page, 'body', { key: 'Ω', code: 'KeyZ' }); const v = await info(page);
+    ok(p && review(v), '撤销：中文输入法 key 不是 z 时认 code KeyZ', JSON.stringify(v));
+    await mark(page); await page.click('#toast button'); await sleep(180); const n = o.hit.processed.length, again = await key(page); await sleep(100);
+    ok(review(await info(page)) && !again && o.hit.processed.length === n, '撤销：提示条按钮和 ⌘Z 消费同一动作');
+    await mark(page); await sleep(6500); const expired = await key(page), ex = await info(page);
+    ok(!expired && handled(ex), '撤销：6.5 秒后不拦也不撤', JSON.stringify(ex));
+    await clean(o, '时限与按钮');
+  }
+  {
+    const o = await openUN(), { page } = o;
+    await page.evaluate((sid) => api('/api/snooze', { sid, clear: true }).then(refresh), X); await sleep(300);
+    await page.click(card(X) + ' .done'); await page.click('#menu [data-z]:first-child'); await sleep(600);
+    const srv = () => page.evaluate((sid) => api('/api/state?peek=1').then((j) => j.sessions.find((x) => x.sid === sid)?.snooze || null), X);
+    const z1 = await srv(); ok(!!z1 && handled(await info(page, X)), '撤销：先放着一小时确实写进服务', JSON.stringify(z1));
+    await key(page); await sleep(600); const z2 = await srv(), v = await info(page, X);
+    ok(!z2 && /s-reply/.test(v.cls), '撤销：⌘Z 清掉服务的推迟并恢复待跟进', JSON.stringify({ z2, v }));
+    await mark(page); await page.click(card(FX.sids.tidyWork) + ' .done'); await key(page); await sleep(180);
+    ok(handled(await info(page)) && review(await info(page, FX.sids.tidyWork)), '撤销：新的动作盖掉旧的，只撤最近一次');
+    await clean(o, '推迟与覆盖');
+  }
+  {
+    const o = await openUN({ init: `localStorage.setItem('ccb_last', JSON.stringify({ ${JSON.stringify(D)}: { t: '弹层上一句', at: Date.now() } }))` }), { page } = o;
+    await mark(page); await page.click(card(D) + ' [data-act="detail"]'); await page.waitForSelector('#dDock textarea');
+    const recalled = await key(page, '#dDock textarea', { key: 'ArrowUp', code: 'ArrowUp', metaKey: false });
+    const v = await info(page); ok(recalled && v.text === '弹层上一句' && v.end && v.has, '上一句：挪进弹层的同一个回话框照样取回', JSON.stringify(v));
+    const typing = await key(page, '#dDock textarea'); ok(!typing && handled(await info(page)), '撤销：弹层回话框有字时不抢打字撤销');
+    await page.fill('#dDock textarea', ''); const empty = await key(page, '#dDock textarea');
+    ok(empty && review(await info(page)), '撤销：弹层回话框空着时撤最近动作');
+    await clean(o, '弹层');
+  }
+  {
+    const o = await openUN(), { page, hit } = o;
+    await page.fill(ta(D), '  原样上一句  '); await page.press(ta(D), 'Enter'); await sleep(350); await up(page);
+    const v = await info(page); ok(hit.sends.at(-1)?.text === '原样上一句' && v.text === '  原样上一句  ', '上一句：取回原样 typed，保留首尾空格', JSON.stringify(v));
+    await page.fill(ta(D), '');
+    await page.evaluate((sid) => { const c = cards.get(sid); c.el._att.atts = [{ path: '/tmp/attachment-only.txt', name: 'attachment-only.txt' }]; c.el._mark(); }, D);
+    await page.click(card(D) + ' .send'); await sleep(350); await up(page);
+    const a = await info(page); ok(hit.sends.at(-1)?.files?.[0] === '/tmp/attachment-only.txt' && a.text === '  原样上一句  ', '上一句：仅发附件不覆盖文字记录', JSON.stringify(a));
+    hit.delivered = false; await page.fill(ta(D), '未确认上一句'); await page.press(ta(D), 'Enter'); await sleep(350); await up(page);
+    const u = await info(page); ok(u.text === '未确认上一句' && u.last === '未确认上一句', '上一句：r.ok 成功但未确认送达仍记下', JSON.stringify(u));
+    await clean(o, '原样文字与附件');
+  }
+  for (const [label, value] of [
+    ['八天前', JSON.stringify({ [D]: { t: '八天前的', at: Date.now() - 8 * 86400000 }, bad: { t: 5 } })],
+    ['坏 JSON', '{broken'], ['非对象', '"garbage"']
+  ]) {
+    const o = await openUN({ init: `localStorage.setItem('ccb_last', ${JSON.stringify(value)})` });
+    const p = await up(o.page), v = await info(o.page).catch(() => null);
+    ok(!p && (await o.page.locator(ta(D)).inputValue()) === '', `上一句：${label}不放回`, JSON.stringify(v));
+    await clean(o, label);
+  }
+}
+
+// 逐笔补丁：真实夹具读内容；浏览器只替换错误、截断和应答顺序。
+async function diffSeg() {
+  console.log('\n[看这一轮的改动]');
+  const sid = FX.sids.askCond, card = '.card[data-sid="' + sid + '"]';
+  const app = '~/code/site/app.js', fresh = '~/code/site/pages/p22.html';
+  const shotDir = path.resolve(HERE, '../../t3-item6-shots');
+  const shots = async (page, file) => { if (process.env.DF_CAPTURE) { fs.mkdirSync(shotDir, { recursive: true }); await page.screenshot({ path: path.join(shotDir, file) }); } };
+  for (const [lang, scheme, listNo, viewNo] of [['zh', 'dark', '02', '03'], ['en', 'light', '05', '06'], ['zh', 'light', null, '07'], ['en', 'dark', null, '08']]) {
+    const ctx = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await ctx.addInitScript(() => localStorage.setItem('ccb_mode', JSON.stringify('wall')));
+    const page = await ctx.newPage(), errs = [], dialogs = [];
+    page.on('pageerror', e => errs.push(String(e))); page.on('console', m => { if (m.type() === 'error' && !/^Failed to load resource: the server responded with a status of (403|404|500)/.test(m.text())) errs.push(m.text()); });
+    page.on('dialog', d => { dialogs.push(d.message()); d.dismiss(); });
+    if (process.env.DF_HTML) { const html = fs.readFileSync(process.env.DF_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+      await page.route(u => u.pathname === '/', async route => route.fulfill({ response: await route.fetch(), body: html, contentType: 'text/html; charset=utf-8' })); }
+    await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector(card); await sleep(600);
+    await page.locator(card + ' .wl').click();
+    const tag = '改动 · ' + lang + ' · ' + scheme + '：';
+    const exists = await page.locator(card + ' [data-diff]').count();
+    const list = await page.locator(card + ' .wrote li').count();
+    ok(exists === list && list === 20, tag + '二十行各有一个改动按钮');
+    const label = await page.locator(card + ' [data-diff]').evaluateAll(xs => xs.find(x => x.dataset.diff.endsWith('/app.js'))?.getAttribute('aria-label') || '');
+    ok(label === (lang === 'en' ? 'Show changes' : '看改动') + ' app.js', tag + '按钮读屏名字带文件名', label);
+    ok(await page.locator(card + ' a [data-diff]').count() === 0 && exists > 0, tag + '按钮是文件链接的兄弟，不嵌在链接里');
+    if (listNo) { const base = process.env.DF_BASE === '1', no = base ? (lang === 'zh' ? '01' : '04') : listNo;
+      await shots(page, no + '-' + (base ? '改前' : '改后') + '-' + (lang === 'zh' ? '中文' : '英文') + '-' + (scheme === 'dark' ? '深色' : '浅色') + '-清单展开.png'); }
+    const click = async path => { const btn = page.locator(card + ' [data-diff]').filter({ hasText: '±' });
+      await btn.evaluateAll((xs, p) => xs.find(x => x.dataset.diff === p)?.click(), path); await sleep(400); };
+    const close = async () => { if (await page.locator('#preview').evaluate(x => x.open)) { await page.keyboard.press('Escape'); await sleep(120); } };
+    if (lang === 'zh' && scheme === 'dark') {
+      await page.locator(card + ' .file').filter({ hasText: 'app.js' }).click(); await sleep(400);
+      ok(await page.locator('#preview').evaluate(x => x.open) && await page.locator('#pBody').getAttribute('data-kind') === 'text' && (await page.locator('#pText').textContent()).includes('// file preview'), tag + '点文件名照旧打开文件预览'); await close();
+    }
+    await click(app);
+    const opened = await page.locator('#preview').evaluate(x => x.open);
+    ok(opened && await page.locator('#pTitle').textContent() === 'app.js' && await page.locator('#pDir').textContent() === (lang === 'en' ? 'Changes this turn' : '这一轮的改动'), tag + '弹层标题写文件和这一轮');
+    ok(await page.locator('#pText .dfchange').count() === 3, tag + '同一文件三笔各一块');
+    const heads = await page.locator('#pText .dfhead').allTextContents();
+    ok(heads.length === 3 && heads.every((h, i) => new RegExp('^' + (lang === 'en' ? 'Change ' + (i + 1) : '第 ' + (i + 1) + ' 笔') + ' · Edit · \\d{2}:\\d{2}$').test(h)), tag + '块头的笔数、工具和本地时间正确', heads.join('|'));
+    ok(await page.locator('#pText .add').count() === 3 && await page.locator('#pText .del').count() === 3, tag + '三条加行和三条删行');
+    const color = await page.evaluate(() => {
+      const out = {}, palette = document.createElement('div'); palette.style.background = 'var(--bg)'; palette.style.color = 'var(--text)'; document.body.append(palette);
+      const surface = document.querySelector('#pBody'), ink = document.querySelector('#pText .dfline>span:last-child');
+      out.surface = surface?.dataset.kind === 'diff' && getComputedStyle(surface).backgroundColor === getComputedStyle(palette).backgroundColor;
+      out.ink = !!ink && getComputedStyle(ink).color === getComputedStyle(palette).color; palette.remove();
+      for (const k of ['add', 'del']) { const e = document.querySelector('#pText .' + k), probe = document.createElement('div'); probe.style.background = 'var(--diff-' + k + ')'; document.body.append(probe);
+        out[k] = !!e && getComputedStyle(e).backgroundColor === getComputedStyle(probe).backgroundColor && getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'; probe.remove(); } return out;
+    });
+    ok(color.add && color.del, tag + '加删行的底色来自主题 token', JSON.stringify(color));
+    ok(color.surface && color.ink, tag + '正文画布和字色都来自主题，深色不落入网页白底', JSON.stringify(color));
+    const body = await page.locator('#pText').textContent();
+    ok(body.includes('<img src=x onerror=alert(1)>') && await page.locator('#preview img:not(#pImg)').count() === 0 && dialogs.length === 0, tag + '记录中的标签只显示成字，不生成图片或执行');
+    ok(body.includes(lang === 'en' ? 'Writes made from Bash are not shown here' : 'Bash 里的写这里看不到'), tag + '说明命令写入的缺口');
+    ok(await page.locator('#pDock').evaluate(x => !x.hidden) && await page.locator('#pDock textarea').count() === 1 && (await page.locator('#pDock .dto').textContent()).includes('w-askCond') && await page.locator('#pDock').getAttribute('data-sid') === sid, tag + '回话框属于来源卡片并进入底栏');
+    ok(await page.locator('#pOpen').evaluate(x => x.hidden) && await page.locator('#pReload').evaluate(x => x.hidden), tag + '收起文件专用的顶栏动作');
+    if (viewNo && process.env.DF_BASE !== '1') await shots(page, viewNo + '-改后-' + (lang === 'zh' ? '中文' : '英文') + '-' + (scheme === 'dark' ? '深色' : '浅色') + '-看改动.png');
+    if (lang === 'zh' && scheme === 'dark') {
+      await close();
+      ok((await page.locator('#pText').textContent()) === '' && await page.locator('#pText .dfchange').count() === 0, tag + '关闭以后清空改动内容');
+      await click(fresh);
+      ok(await page.locator('#pText .dfchange').count() === 1 && (await page.locator('#pText .dfhead').textContent() || '').includes('新建') && await page.locator('#pText .add').count() === 2 && await page.locator('#pText .del').count() === 0, tag + '新建文件一块、两条加行并写明新建');
+      await close();
+      await page.locator(card + ' .file').filter({ hasText: 'app.js' }).click(); await sleep(300);
+      ok(await page.locator('#pOpen').evaluate(x => !x.hidden) && await page.locator('#pReload').evaluate(x => !x.hidden) && await page.locator('#pBody').getAttribute('data-kind') === 'text', tag + '再开普通预览时顶栏动作恢复'); await close();
+      const routePattern = '**/api/diff**';
+      for (const [code, text] of [[404, '这个文件不在这一轮的清单里了（新的一轮已经开始）'], [403, '这台设备上看不了改动'], [500, '没读到改动']]) {
+        await page.route(routePattern, route => route.fulfill({ status: code, json: { ok: false } })); await click(app);
+        ok((await page.locator('#pText').textContent()).includes(text), tag + '接住状态码 ' + code); await close(); await page.unroute(routePattern);
+      }
+      await page.route(routePattern, route => route.fulfill({ json: { ok: true, items: [], truncated: true } })); await click(app);
+      const empty = await page.locator('#pText').textContent();
+      ok(empty.includes('这一轮的记录里没找到这个文件的改动') && empty.includes('太长了，只显示了前面一部分'), tag + '空记录和截断均说明原因'); await close(); await page.unroute(routePattern);
+      await page.route(routePattern, async route => { const p = new URL(route.request().url()).searchParams.get('path'); await sleep(p === app ? 1000 : 20);
+        await route.fulfill({ json: { ok: true, items: [{ at: new Date().toISOString(), tool: 'Write', create: true, hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: ['+' + (p === app ? 'late-old' : 'fresh-new')] }] }], truncated: false } }).catch(() => {}); });
+      await click(app); await close(); await click(fresh); await sleep(1200);
+      const late = await page.locator('#pText').textContent();
+      ok(late.includes('fresh-new') && !late.includes('late-old'), tag + '晚到的旧应答不覆盖新开的文件'); await close(); await page.unroute(routePattern);
+      await page.route('**/api/preview', async route => { await sleep(1000); await route.fulfill({ json: { ok: true, kind: 'text', name: 'old-file.txt', dir: '~/', text: 'old-file-response' } }).catch(() => {}); });
+      await page.locator(card + ' .file').filter({ hasText: 'app.js' }).click(); await sleep(50); await click(fresh); await sleep(1200);
+      ok(await page.locator('#pBody').getAttribute('data-kind') === 'diff' && await page.locator('#pTitle').textContent() === 'p22.html' && await page.locator('#pText .dfchange').count() === 1, tag + '晚到的普通文件预览也不能盖住新改动');
+      await close(); await page.unroute('**/api/preview');
+    }
+    if (lang === 'en') ok(!/[\u3400-\u9fff]/.test(await page.locator('#pDir').textContent()) && !/[\u3400-\u9fff]/.test(body) && body.includes('Change 1'), tag + '新增文案没有漏翻');
+    ok(errs.length === 0, tag + '没有控制台错误或页面异常', errs.join('|'));
+    await ctx.close();
+  }
+}
+
 try {
+  if (process.env.UI_ONLY === 'diff') { await diffSeg(); console.log('\n（UI_ONLY=diff：只跑逐笔改动，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'eta') { await etaSeg(); console.log('\n（UI_ONLY=eta：只跑了「预计交付」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'undo') { await undoSeg(); console.log('\n（UI_ONLY=undo：只跑了「撤销、↑ 取回上一句」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'limits') { await topbarLimitsSeg(); console.log('\n（UI_ONLY=limits：只跑了原有顶栏额度断言，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'strip') { await wallStripSeg(); console.log('\n（UI_ONLY=strip：只跑了「墙上降噪」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'jump') { await draftJumpSeg(); console.log('\n（UI_ONLY=jump：只跑了「草稿不丢 · ⌘K 跳到窗口」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'codemode') { await cmCheck(); console.log('\n（UI_ONLY=codemode：只跑了「Code Mode」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'remote') { await remoteCheck(); console.log('\n（UI_ONLY=remote：只跑了「手机远程」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'procsync') { await procSyncCheck(); console.log('\n（UI_ONLY=procsync：只跑了「审完了 · 跨设备」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'snooze') { await snoozeCheck(); console.log('\n（UI_ONLY=snooze：只跑了「先放着带时间」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'delta') { await deltaCheck(); console.log('\n（UI_ONLY=delta：只跑了「只回变过的」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'orgmap') { await orgMapCheck(); console.log('\n（UI_ONLY=orgmap：只跑了「架构 · 放射」这一段，不是整套）'); throw ONLY_DONE; }
@@ -1741,6 +2700,10 @@ try {
     ok(lab.some((x) => /^Latest delivery · .+ · 223 steps hidden$/.test(x)) && lab.some((x) => /^Delivered · /.test(x)) && !/[一-鿿]/.test(lab.join('|')), '放大看（英文）：「Latest delivery」「Delivered」标签，没有漏翻的中文', JSON.stringify(lab));
     ok(en.errs.length === 0, '放大看（英文）：页面没有报错', en.errs.join(' | ')); await en.ctx.close();
   }
+  await draftJumpSeg();          // 草稿不丢、⌘K 跳到窗口
+  await undoSeg();               // 撤销、↑ 取回上一句
+  await wallStripSeg();          // 新段单独开窄条；老的段继续沿用 ccb_strip='off'
+  await etaSeg();                // 预计交付（11/18）
   await dockCheck();      // 弹层里回话（预览、放大看时也能回话）：见上面 dockCheck()
   // ── 新任务：模型是下拉菜单，已经记着 fable 时也能换成别的（11/12 作者：「怎么只有 Fable？我要 Opus」）──
   for (const saved of ['fable', 'claude-opus-5-5']) {
@@ -1990,68 +2953,7 @@ try {
     ok(f.n > 0 && f.over === 0 && f.narrow === 0, lang + ' 封面：' + f.n + ' 张带「去终端」的卡都照旧带字，卡头放得下', JSON.stringify(f));
     await c5.close();
   }
-  // ── 顶栏右上角的订阅额度（夹具：Claude amy 周 91% / ben 周 1%，Codex 周 34%）──
-  console.log('\n[顶栏 · 订阅额度]');
-  const readLimits = (page) => page.evaluate(() => {
-    const bar = document.querySelector('header.bar'), lim = document.querySelector('#limits'), nb = document.querySelector('#newBtn');
-    const vis = (e) => !!e && e.offsetWidth > 0;
-    const chips = [...lim.querySelectorAll('.lq')].map((c) => { const m = c.querySelector('.mtr'), r = c.getBoundingClientRect(); return { text: c.textContent, warn: c.classList.contains('warn'), tip: c.title, aria: c.getAttribute('aria-label') || '', meter: vis(m), meterPos: m ? getComputedStyle(m).position : '', tag: vis(c.querySelector('.tg')), inBar: r.top >= 0 && r.bottom <= bar.clientHeight, tab: c.tabIndex };
-    });
-    return { shown: vis(lim), chips, over: bar.scrollWidth > bar.clientWidth, newIn: nb.getBoundingClientRect().right <= innerWidth };
-  });
-  for (const [lang, w] of [['zh', 1520], ['en', 1520], ['zh', 1100], ['zh', 960]]) {
-    const { ctx, page, errs } = await open({ mode: 'flow', lang, w }); const r = await readLimits(page); const tag = lang + ' ' + w + ' px';
-    const names = r.chips.map((c) => c.text);
-    if (w >= 1500) {
-      same(names, ['Claude · amy91%', 'Claude · ben1%', 'Codex34%'], tag + '：三条额度，两个 Claude 号带账号、Codex 一条（周额度的百分数）', JSON.stringify(names));
-      ok(r.chips.length === 3 && r.chips[0].warn && !r.chips[1].warn && !r.chips[2].warn, tag + '：只有用到 91% 的那条是琥珀色（≥ 85%），1% 和 34% 是灰的', JSON.stringify(r.chips.map((c) => c.warn)));
-      ok(r.chips.length === 3 && r.chips.every((c) => c.meter && c.tag === (c.text.includes('·')) && c.inBar && c.tab === 0), tag + '：进度条和账号后缀都在、胶囊整个在顶栏里、能用 Tab 聚焦', JSON.stringify(r.chips.map((c) => [c.meter, c.tag, c.inBar, c.tab])));
-      ok(r.chips.length === 3 && r.chips.every((c) => c.meterPos !== 'fixed'), tag + '：进度条不吃顶栏 .bar 的 position:fixed（同名的类曾把它钉到屏幕顶上）', JSON.stringify(r.chips.map((c) => c.meterPos)));
-      const t0 = r.chips[0] ? r.chips[0].tip : '';
-      ok(lang === 'zh' ? /周额度已用 91%.*重置（.*后）/.test(t0) && /5 小时额度已用 100%/.test(t0) && /更新于 /.test(t0) : /Weekly limit used: 91%.*resets .*\(in .*\)/.test(t0) && /5-hour limit used: 100%/.test(t0) && /Updated /.test(t0), tag + '：提示里有每个窗口的已用、重置时间和还剩多久、数据多久前的', JSON.stringify(t0));
-      ok(r.chips[2] && /prolite/.test(r.chips[2].tip), tag + '：Codex 的提示里带套餐名', JSON.stringify(r.chips[2] && r.chips[2].tip));
-      if (lang === 'en') ok(!r.chips.some((c) => /[一-鿿]/.test(c.text + c.tip + c.aria)), 'en 1520 px：额度条的文字、提示、读屏标签里没有漏翻的中文', JSON.stringify(r.chips.map((c) => c.tip)));
-    } else if (w === 1100) {
-      ok(r.shown && r.chips.length === 3 && r.chips.every((c) => !c.meter && !c.tag), tag + '：窗口窄了先去掉进度条和账号后缀，三条还在', JSON.stringify(r.chips.map((c) => [c.text, c.meter, c.tag])));
-    } else {
-      ok(!r.shown, tag + '：再窄（≤ 1000 px）整条让位给按钮', JSON.stringify(r.shown));
-    }
-    ok(!r.over && r.newIn && errs.length === 0, tag + '：顶栏不溢出、「新任务」在视口里、页面没报错', JSON.stringify({ over: r.over, newIn: r.newIn, errs }));
-    if (lang === 'zh' && w === 1520) await page.screenshot({ path: path.join(OUT, 'topbar-limits.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } });
-    await ctx.close();
-  }
-  // ── 过时的额度（11/16 win-ee）：超过 1 小时没更新的那格变灰、写「N 小时前」、不亮琥珀（额度用完以后顶栏还写着前一天的旧数）。
-  //    夹具的取数文件都是刚写的，这里在浏览器里直接喂 paintLimits 一份造的数据，读画出来的 DOM。
-  //    A 是真实会有的组合（两个 Claude 号一旧一新 + 一个几小时没用的 Codex），查顶栏放得下；B 查 3 天前和没有窗口的那格 ──
-  console.log('\n[顶栏 · 过时的额度]');
-  const paintStale = (page, set) => page.evaluate((set) => {
-    const now = Date.now(), H = 3600000, wk = (u) => [{ key: 'week', used: u, resetsAt: now + 86400000 }];
-    const mk = (id, ago, u, ws, provider = 'claude') => ({ id, provider, account: provider === 'claude' ? id : undefined, name: provider === 'claude' ? id : undefined, at: now - ago, windows: ws || wk(u) });
-    const sets = { A: { claude: [mk('old', 3 * H + 60000, 91), mk('new', 59 * 60000, 91)], codex: mk('codex', 5 * H + 60000, 34, null, 'codex') }, B: { claude: [mk('days', 3 * 86400000, 40), mk('empty', 5 * H, 0, [])], codex: null } };
-    window.__staleSt = { now, limits: sets[set] }; paintLimits(window.__staleSt);
-    const bar = document.querySelector('header.bar'), nb = document.querySelector('#newBtn');
-    return { over: bar.scrollWidth > bar.clientWidth, newIn: nb.getBoundingClientRect().right <= innerWidth, chips: Object.fromEntries([...document.querySelectorAll('#limits .lq')].map((c) => { const a = c.querySelector('.ago'), r = c.getBoundingClientRect(); return [c.dataset.lq, { stale: c.classList.contains('stale'), warn: c.classList.contains('warn'), ago: a && a.offsetWidth > 0 ? a.textContent : null, op: +getComputedStyle(c).opacity, tip: c.title, inBar: r.bottom <= bar.clientHeight }]; })) };
-  }, set);
-  for (const lang of ['zh', 'en']) {
-    const { ctx, page, errs } = await open({ mode: 'flow', lang, w: 1520 }); const tag = lang + ' 1520 px', en = lang === 'en';
-    const a = await paintStale(page, 'A'), c = a.chips;
-    ok(c.old && c.old.stale && !c.old.warn && c.old.ago === (en ? '3h ago' : '3 小时前') && c.old.op > 0.5 && c.old.op < 0.9, tag + '：3 小时没更新的那格变灰（不透明度 0.5–0.9，还读得清）、写着「3 小时前」、91% 也不亮琥珀', JSON.stringify(c.old));
-    ok(c.old && (en ? /over an hour/.test(c.old.tip) : /超过 1 小时/.test(c.old.tip)), tag + '：过时那格的提示里说明数字可能已经变了', JSON.stringify(c.old && c.old.tip));
-    ok(c.new && !c.new.stale && c.new.warn && c.new.ago === null && c.new.op === 1, tag + '：59 分钟前更新的照旧（不灰、91% 亮琥珀、不写多久前）', JSON.stringify(c.new));
-    ok(c.codex && c.codex.stale && c.codex.ago === (en ? '5h ago' : '5 小时前'), tag + '：5 小时没用的 Codex 同样变灰写「5 小时前」', JSON.stringify(c.codex));
-    ok(!a.over && a.newIn && Object.values(c).every((x) => x.inBar), tag + '：两个 Claude 号 + Codex、两格带「N 小时前」时顶栏放得下，「新任务」在视口里', JSON.stringify({ over: a.over, newIn: a.newIn }));
-    if (lang === 'zh') { await page.evaluate(() => paintLimits(window.__staleSt)); await page.screenshot({ path: path.join(OUT, 'topbar-limits-stale.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } }); }
-    const b = (await paintStale(page, 'B')).chips;
-    ok(b.days && b.days.stale && b.days.ago === (en ? '3d ago' : '3 天前'), tag + '：3 天没更新写「3 天前」', JSON.stringify(b.days));
-    ok(b.empty && !b.empty.stale && b.empty.ago === null, tag + '：没有额度窗口的那格不算过时（本来就写「—」）', JSON.stringify(b.empty));
-    ok(errs.length === 0, tag + '（过时的额度）：页面没报错', JSON.stringify(errs));
-    await ctx.close();
-  }
-  {
-    const { ctx, page, errs } = await open({ mode: 'flow', lang: 'zh', w: 1100 }); const a = await paintStale(page, 'A'), c = a.chips;
-    ok(c.old && c.old.stale && c.old.ago === null && c.codex && c.codex.ago === null && !a.over && a.newIn && errs.length === 0, 'zh 1100 px：窄了「N 小时前」跟账号后缀一起藏起来，过时的照样是灰的，顶栏不溢出', JSON.stringify({ old: c.old, over: a.over, newIn: a.newIn, errs }));
-    await ctx.close();
-  }
+  await topbarLimitsSeg();        // 原有额度断言原样保留，另可 UI_ONLY=limits 定点复核
   }   // UI_ONLY=org：到这里为止的整段不跑
   // ── 架构（11/16 win-a0）：窗口之间谁归谁管，画成一张从上往下的架构图。上下级由服务端的 org 定（org.mjs），界面只照着画。
   //    夹具（test/CLAUDE.md「架构场景」）：总管 projC（第 3 代，总控台列，列里没有别人）；其他列：负责人 peerDone，下面 hint（它开的）、unfin（听它的）、
@@ -2485,6 +3387,9 @@ try {
   }
   await cmCheck();         // Code Mode：新任务的开关、卡片上的「Code」（只在浏览器里拦 /api/new，不真开会话）
   await snoozeCheck();     // 先放着带时间（会在服务里记推迟，段末清掉）
+  await procSyncCheck();  // 审完了 · 跨设备（两个浏览器上下文共用夹具服务；段末清掉服务里那一笔）
+  await remoteCheck();
+  await diffSeg();
   await deltaCheck();      // 只回变过的（拉数据瘦身）：会真的归档一个夹具会话，所以放在最后
 } catch (e) { if (e !== ONLY_DONE) throw e; } finally { await browser.close(); }
 console.log(`\n界面结果：${pass} 过，${fail} 没过；截图在 ${OUT}`);

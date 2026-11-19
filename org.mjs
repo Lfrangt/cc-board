@@ -5,8 +5,9 @@
  * [OUTPUT]: 导出 buildOrg()、wordsRe()、branchOf()、branchWords() 和几个常数。buildOrg 返回 { chief, leads, heads, nodes }（heads = { 项目: [分支负责人 sid…] }）：
  *           nodes[sid] = { role: 'chief' | 'lead' | 'head' | 'former' | 'member', boss: sid | null, via: 'seat' | 'spawn' | 'msg' | 'report' | 'contact' | 'dept' | null, n, last, handed }。
  *           opt.seats = { 项目: sid }：点名的负责人（服务从 config 的 org.seats 指的文件里读），和 opt.chief 一样压过字样；点名的不在墙上 / 不在这个项目里就当没点名。
+ *           opt.past = { 项目: [sid…] }：服务按会话号和进程时代提供历任，标题没有岗位字样也能交接。
  *           head = 分支负责人（「增长负责人」这类）：挂在本项目的负责人下面（没有负责人挂总管），不是负责人的前任。
- *           via 是依据：seat 按岗位；spawn 上级开的它；msg 最近主要听上级的（n 条、最近一条 last）；report 它一直在向负责人交东西（n、last 是它发出去的）；
+ *           via 是依据：seat 按岗位；spawn 上级开的它；msg 最近主要听上级的（n 条、最近一条 last，last 在 12 小时以内）；report 它一直在向负责人交东西（n、last 是它发出去的，last 也在 12 小时以内）；
  *           contact 没有哪个窗口在管它，但本项目的负责人 / 分支负责人给它发过消息（哪怕一条），挂到最近发的那个（n、last 是那个岗位发给它的）；
  *           dept 没有哪个窗口在管它（多半是你本人开的），也没有岗位给它发过消息，按项目挂到这个项目的岗位上（分支负责人 / 负责人 / 总管），n、last 是 0。
  *           boss 是 null 的普通窗口 = 它的项目里没有负责人、也没有总管（比如刚装的总控台），只能你自己带。handed: true = 它原来听前任的，换代以后跟着岗位到了现任名下。
@@ -29,6 +30,8 @@ export const MIN_MSGS = 2;
 const CAP = 12;                                  // 一个来源最多按 12 条算，免得一个话痨把别的都淹掉
 // 第 5 步「岗位发过消息」只看这么久以内的（11/17 khalil-49）：不设期限的话，一个分支负责人一天前给几个功能窗口各发过一条消息，
 // 那几个窗口就会一直挂在它下面；该挂上的消息都是几小时之内发的，所以超过半天的一条不再决定它现在归谁。
+// 第 3 步（最近主要听谁的、和它的兜底「一直在向负责人交东西」）用同一条线（11/18 Khalil）：同样那几个窗口收过增长 2–4 条、21–23 小时前，
+// 第 3 步要两条，它们够数，就从第 3 步挂了上去。开它的窗口（spawn）不受这条线限制。
 export const CONTACT_MS = 12 * 3600e3;
 
 // 把 config 里的一段正则原文编成 RegExp；空的、写错的都当成「没有这条规则」，不让一处手误把整个服务带崩。
@@ -72,6 +75,7 @@ const decay = (now, t) => (t > 0 ? Math.pow(0.5, Math.max(0, now - t) / HALF_LIF
 //      分支负责人（带分支字样的，默认「X负责人」）同一个项目里按分支名分开、各自照同样的办法选现任，挂在负责人下面；
 //      项目里没有负责人（也不是总管的项目）时，这个项目的分支负责人照 11/17 之前的规则一起选负责人。
 //   3. 其余的窗口看证据：最近主要听谁的，就归谁管。听你本人的更多，就不归任何窗口管（boss: null）。
+//      没开过它的窗口，最近一条消息超过 12 小时（CONTACT_MS）就不当候选（兜底「向负责人交东西」也一样）；开它的窗口不受限。
 //   4. 上级是前任负责人的，改挂到现任身上：换代以后，原来那一队人跟着岗位走，不跟着人走。
 //   5. 到这里还没有上级的（你本人开的、开它的窗口已经关了、谁也没给它派过活）：本项目的岗位给它发过消息就挂到那个岗位（contact），
 //      否则按项目挂到这个项目的岗位上（dept），不算「你直接带」。
@@ -168,6 +172,17 @@ export function buildOrg(list, opt = {}) {
     if (!p || p.gone || p.dept !== dept || p === chief || formerOf.has(p.sid) || nodes[p.sid].role !== 'member' || p.at > cur.at) continue;
     if ((actedOn.get(p.sid) || new Set()).size >= 2) formerOf.set(p.sid, sid);
   }
+  // 点名岗位的历任按身份交接，活着与 gone 一样认。11/18 17:4x 线上，换班后归档前任，短名不带岗位字样导致队伍掉走。
+  // 名单由服务核过 sid / pid 与启动时间，不靠名字；已经坐别的现职、已有前任归属的，保留原岗位。
+  if (opt.past && typeof opt.past === 'object') for (const [dept, ids] of Object.entries(opt.past)) {
+    const cur = leads[dept]; if (!cur || !Array.isArray(ids)) continue;
+    for (const id of ids) {
+      if (!byId.has(id) || id === cur || formerOf.has(id)) continue;
+      if (['chief', 'lead', 'head'].includes(nodes[id].role)) continue;
+      const it = byId.get(id); if (it.gone) it.dept = dept;   // gone 项的项目是服务按收信条数猜的；名单才知道它坐的是哪个项目的岗位（11/19 评审必改 1：猜错了，本项目的队伍不跟、别的项目的被挂过来）
+      formerOf.set(id, cur);
+    }
+  }
   for (const [old, cur] of formerOf) nodes[old] = { role: 'former', boss: cur, via: 'seat', n: 0, last: 0, handed: false };
   for (const sid of Object.values(leads)) if (chief && sid !== chief.sid) nodes[sid] = { ...nodes[sid], boss: chief.sid, via: 'seat' };
   for (const [dept, hs] of Object.entries(heads)) for (const sid of hs) {   // 分支挂在本项目的负责人下面；没有负责人挂总管；都没有就是你直接带
@@ -199,7 +214,10 @@ export function buildOrg(list, opt = {}) {
       if (p === s || !near(s, p)) continue;
       if (p.gone && !formerOf.has(p.sid)) continue;                       // 不在了、又不是哪个岗位的前任：当不了上级，只算分母
       const f = s.from.find((x) => x.sid === p.sid);
-      if (s.by !== p.sid && !(f && f.n >= MIN_MSGS)) continue;            // 证据不够
+      // 证据不够：没开过它的窗口，不到两条、或最近一条是 12 小时（CONTACT_MS）以前的，都不算。开它的窗口不受这条限制（不随时间变淡）。
+      // 起因：增长负责人将近一天前给作者开的三个功能窗口（分别 2 / 4 / 3 条）
+      // 发过消息，他本人对它们说的话同样淡到几乎为零，这里就判成「听增长的」，三个窗口挂在增长下面。分量照旧进分母（total 不改）。
+      if (s.by !== p.sid && !(f && f.n >= MIN_MSGS && now - f.last <= CONTACT_MS)) continue;
       const w = weight(s, p);
       if (w > bw) { best = p; bw = w; }
     }
@@ -214,7 +232,7 @@ export function buildOrg(list, opt = {}) {
     for (const p of S) {
       if (p === s || p.gone || !seated(p.sid) || !near(s, p)) continue;
       const f = p.from.find((x) => x.sid === s.sid);
-      if (f && f.n >= MIN_MSGS && f.n > tn) { to = p; tn = f.n; tl = f.last; }
+      if (f && f.n >= MIN_MSGS && now - f.last <= CONTACT_MS && f.n > tn) { to = p; tn = f.n; tl = f.last; }   // 最近一条交东西在 12 小时以前的也不算
     }
     if (to) nodes[s.sid] = { role: 'member', boss: to.sid, via: 'report', n: tn, last: tl, handed: false };   // n / last 说的是它发给负责人的，不是负责人发给它的
   }
