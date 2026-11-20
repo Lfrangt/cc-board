@@ -9,7 +9,7 @@
  *        它把每个会话压成四样：你问了什么 / 它在干嘛 / 它交付了什么 / 它为什么停了（alertOf 是「要不要你跟进」的唯一判断处）。
  *        读记录时把每次工具调用交给 noteTool 记证据，每轮用 classify 给会话、启动中、进程退出的卡片都标上 project。
  *        在某一列列头开的新任务，tmux 名 → 那一列记在 pins.json，classify 拿它当提示分；开工前的「信任这个文件夹」由 autoTrust 替他点（config 打开就点，开在哪个文件夹都一样）。
- *        digest() 从每次交付里取一句结论和要你做的事，分「待跟进 / 待审阅」；它自己写了【待跟进】/【待审阅】/【在跑】那一行就以它为准。
+ *        digest() 从每次交付里取一句结论和要你做的事；中英文状态标记（如【待跟进】或 [Needs you]）优先于正文判断。
  *        换了端口、数据目录或主目录就自认是试验场：不碰 Ghostty（「去终端」只记一行 focus … dry）、不发系统通知。
  *        watchGone 判「一起退出」（10 秒内 ≥ 3 个窗口的进程没了、不是总控台自己停的）：连闲着的一起记成 lost（同一个 crash 编号），当场写 <数据目录>/crash/<时间>/ 快照；
  *        归档保存原账号；接回先核账号可用，再包启动命令，Code Mode 位于账号层内。
@@ -1034,14 +1034,15 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { ret
 // 它自己在最后写了一行【待跟进】/【待审阅】/【进展】（旧写法【在跑】）就以它为准（tag = true），那一行从正文里拿掉；没写就按正文猜：
 // 问你、请你定 / 选 / 回一句 → 待跟进；写明「不需要你…」或这一轮是别的窗口开的头（by = 'peer'）→ 无需处理；其余 → 待审阅。
 // skip = 正文开头那一段已经整段当成 head 显示了，界面从这里往后显示，同一句话不出现两遍。
-const DG_TAG = /^\s*(?:\*\*)?【(待跟进|待审阅|在跑|进展)】(?:\*\*)?\s*[:：]?\s*(.+?)\s*$/;
+const DG_TAG = /^\s*(?:\*\*)?(?:【(待跟进|待审阅|在跑|进展)】|\[(needs you|review|fyi)\])(?:\*\*)?\s*[:：]?\s*(.+?)\s*$/i;
+const DG_STATUS = { 待跟进: 'reply', 待审阅: 'review', 在跑: 'bg', 进展: 'fyi', 'needs you': 'reply', review: 'review', fyi: 'fyi' };
 const DG_TRIO = /^\s*(?:[-*]\s*)?(?:\*\*)?(做了什么|怎么做的|一个新词)(?:\*\*)?\s*[:：]/;
 const DG_LEAD = /^(结论|一句话|总结|TL;?DR|简单说|先说结论)\s*[:：]\s*/i;
 const DG_COND = /的话|如果|要是|假如|万一|不满意|有问题|不对劲|随时|想要|想停|想换|不急|有空|\bif\b|(错|不对|不行|不是|没有|没出现|看不到|卡住|失败|打不开)了?[，,]?\s*(就|再)?(告诉我|跟我说|说一声|叫我)/i;
 const DG_LATER = /(出来|跑完|做完|合完|验完|好了|出图)(以?后|之后|，|我)|到时|点头后|点头了再/;
-const DG_NONE = /不用你|不需要你|无需你|你不用|不用管|不需要做什么|不用做什么|不用回|no action needed|nothing for you/i;
-const DG_STRONG = /请你|麻烦你|需要你|要你(定|选|确认|回|做|点|看|拍板|决定|处理)|你(来)?定[。！？，]|你选(?![的了过中])|你决定(?![的了过])|你拍板|你点头|等你(回|定|选|点头|确认|拍板|说|决定|的)|回(我)?一句|回我|你自己来|你自己点|交给你|留给你|\bplease (confirm|choose|pick|decide|reply)|\bwaiting (for|on) you\b|\byour call\b/i;
-const DG_QWORD = /你|要不要|行不行|好不好|可不可以|可以吗|对吗|吗[？?]|呢[？?]|哪个|哪种|哪一|还是|\byou\b|\bshould I\b/i;
+const DG_NONE = /不用你|不需要你|无需你|你不用|不用管|不需要做什么|不用做什么|不用回|\bno (?:further )?(?:action|reply) (?:is )?(?:needed|required)\b|\byou (?:do not|don't) need to reply\b|nothing for you/i;
+const DG_STRONG = /请你|麻烦你|需要你|要你(定|选|确认|回|做|点|看|拍板|决定|处理)|你(来)?定[。！？，]|你选(?![的了过中])|你决定(?![的了过])|你拍板|你点头|等你(回|定|选|点头|确认|拍板|说|决定|的)|回(我)?一句|回我|你自己来|你自己点|交给你|留给你|\bplease (?:confirm|choose|pick|decide|reply|approve)\b|\bi need your (?:approval|decision|input|reply)\b|\bwaiting (for|on) you\b|\byour call\b/i;
+const DG_QWORD = /你|要不要|行不行|好不好|可不可以|可以吗|对吗|吗[？?]|呢[？?]|哪个|哪种|哪一|还是|\byou\b|\bshould I\b|\bwhich (?:option|approach|one)\b/i;
 const dgPlain = (s) => s.replace(/`([^`]*)`/g, '$1').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1$2')
   .replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)/, '').replace(/\s+/g, ' ').trim();
 const dgSentences = (p) => (p.match(/[^。！？!?]+[。！？!?]?/g) || []).map((x) => x.trim()).filter(Boolean);
@@ -1049,7 +1050,10 @@ const dgClip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 function digest(src, by) {
   const all = String(src || '').replace(/\r/g, '').split('\n');
   let tag = null, ti = -1;
-  for (let i = all.length - 1; i >= 0; i--) { const m = all[i].match(DG_TAG); if (m) { tag = { k: m[1], t: dgPlain(m[2]) }; ti = i; break; } }
+  for (let i = all.length - 1; i >= 0; i--) {
+    const m = all[i].match(DG_TAG);
+    if (m) { tag = { need: DG_STATUS[m[1] ?? m[2].toLowerCase()], t: dgPlain(m[3]) }; ti = i; break; }
+  }
   const lines = ti < 0 ? all : all.filter((_, i) => i !== ti); const text = lines.join('\n').trimEnd();
   const blocks = []; let buf = null, fence = false;
   const push = () => { if (buf) { blocks.push(buf); buf = null; } };
@@ -1073,8 +1077,8 @@ function digest(src, by) {
     head = dgClip(head, 90);
   }
   if (tag) {
-    const reply = tag.k === '待跟进';
-    return { text, tag: true, need: reply ? 'reply' : tag.k === '在跑' ? 'bg' : tag.k === '进展' ? 'fyi' : 'review', head: reply ? head : dgClip(tag.t, 90), skip: reply ? skip : 0, ask: reply ? dgClip(tag.t, 90) : null };
+    const reply = tag.need === 'reply';
+    return { text, tag: true, need: tag.need, head: reply ? head : dgClip(tag.t, 90), skip: reply ? skip : 0, ask: reply ? dgClip(tag.t, 90) : null };
   }
   const ss = []; paras.forEach((b, pi) => dgSentences(b.p).forEach((x) => ss.push({ x, pi })));
   const none = ss.some((o) => DG_NONE.test(o.x) && !DG_COND.test(o.x));
