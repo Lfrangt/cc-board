@@ -2,9 +2,9 @@
  * [INPUT]: 依赖 ../remote.mjs（或命令行给的另一份，比如改坏版）。不起服务、不碰 tmux、不联网。
  * [OUTPUT]: 逐项打印 ok / FAIL，最后一行「结果：N 过，M 没过」，退出码 0 = 全过。带 --mutants 时改跑反向对照：造若干个改坏的 remote.mjs，每个都必须让本测试变红
  * [POS]: test/ 的「手机远程」规则测试（remote.mjs 的三道拦）。测：config 的 remote 什么算开、写错一律关且不抛；Host / 登录头 / Origin 怎么认；
- *        远程能碰的接口恰好那 9 个；设备凭证（格式、哈希、定长比较、绑登录名）；配对码（一次、过期、作废）；设备表文件坏了是空表；配对页不含口令、先抹掉 # 再发。
+ *        远程能碰的接口恰好那 10 个；设备凭证、配对码、设备表；APNs 配置、令牌、锁屏类别、ES256 验签、失效判定与空闲放行。
  *        接进 server.mjs 之后的端到端断言在 state.test.mjs 的 [10]，接线的改坏版在 mutants.mjs 的 remote-*。
- * [PROTOCOL]: Update this header on change, then check CLAUDE.md
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 // 用法：node test/remote.test.mjs [remote.mjs 的路径]      node test/remote.test.mjs --mutants
 import path from 'node:path'; import fs from 'node:fs'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
@@ -15,6 +15,9 @@ const SRC = path.resolve(process.argv[2] && !process.argv[2].startsWith('--') ? 
 if (process.argv.includes('--mutants')) {
   const src = fs.readFileSync(SRC, 'utf8'); const dir = path.join(HERE, '.tmp', 'remote-mutants'); fs.mkdirSync(dir, { recursive: true });
   const M = {
+    'idle-threshold-flipped': ["idleMs >= PUSH_AWAY_MS", "idleMs < PUSH_AWAY_MS"],
+    'idle-null-away': ["idleMs != null && idleMs >= PUSH_AWAY_MS", "idleMs == null || idleMs >= PUSH_AWAY_MS"],
+    'idle-takes-last': ["text.match(/\"HIDIdleTime\" = (\\d+)(?=\\s|$)/m)", "[...text.matchAll(/\"HIDIdleTime\" = (\\d+)(?=\\s|$)/gm)].at(-1)"],
     'local-accepts-ts':     ["  if (via === 'local') return LOCAL_HOST.test(host) && !proxied(h) ?", "  if (via === 'local') return (LOCAL_HOST.test(host) || /\\.ts\\.net$/.test(host)) && !proxied(h) ?"],
     'proxied-local-ok':     ["  if (via === 'local') return LOCAL_HOST.test(host) && !proxied(h) ?", "  if (via === 'local') return LOCAL_HOST.test(host) ?"],
     'via-loose':            ["  if (via === 'local') return LOCAL_HOST.test(host)", "  if (via !== 'remote') return LOCAL_HOST.test(host)"],
@@ -41,14 +44,39 @@ if (process.argv.includes('--mutants')) {
     'load-id-array':        ["    if (!d || typeof d.id !== 'string' || ", "    if (!d || "],
     'name-keeps-bidi':      ["\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]/g", "]/g"],
     'pair-hash-kept':       ["  try { history.replaceState(null, '', location.pathname); } catch (e) {}\n", ""],
+    "apns-missing-on": ["if (v === undefined) return off('');\n  if (!v ||", "if (v === undefined) return { on: true, why: '' };\n  if (!v ||"],
+    "apns-key-loose": ["const APNS_ID = /^[A-Z0-9]{10}$/;", "const APNS_ID = /^[A-Za-z0-9]{1,20}$/;"],
+    "apns-topic-loose": ["if (typeof v.topic !== 'string' || v.topic.length > 200 || !APNS_TOPIC.test(v.topic))", "if (typeof v.topic !== 'string')"],
+    "push-token-loose": ["const PUSH_TOKEN = /^[0-9a-f]{64,200}$/;", "const PUSH_TOKEN = /^[A-Fa-f0-9]{1,300}$/;"],
+    "push-env-loose": ["v === 'sandbox' || v === 'production'", "typeof v === 'string'"],
+    "push-load-dropped": ["if (validPush(d.push)) dev.push = { token: d.push.token, env: d.push.env, at: d.push.at };", ""],
+    "push-load-keeps-bad": ["if (validPush(d.push)) dev.push", "if (d.push) dev.push"],
+    "push-single-key": ["reply: 'PUSH_REPLY_ONE'", "reply: 'PUSH_STOP_ONE'"],
+    "push-ask-key": ["ask: 'PUSH_ASK_ONE'", "ask: 'PUSH_STOP_ONE'"],
+    "push-crash-key": ["crash: 'PUSH_CRASH'", "crash: 'PUSH_STOP_ONE'"],
+    "push-multi-key": ["waits === items.length ? 'PUSH_WAIT_MANY'", "waits === items.length ? 'PUSH_MIXED_MANY'"],
+    "push-mixed-key": ["waits ? 'PUSH_MIXED_MANY' : 'PUSH_STOP_MANY'", "waits ? 'PUSH_STOP_MANY' : 'PUSH_STOP_MANY'"],
+    "push-count-off": ["[String(items.length)]", "[String(items.length + 1)]"],
+    "push-sid-many": ["items.length === 1 && typeof items[0].sid", "items.length >= 1 && typeof items[0].sid"],
+    "push-sid-loose": ["/^[\\w-]{8,64}$/.test(items[0].sid)", "true"],
+    "push-title-leak": ["return { aps: { alert, sound:", "return { title: items[0].title, aps: { alert, sound:"],
+    "jwt-wrong-issuer": ["iss: teamId, iat: nowSec", "iss: keyId, iat: nowSec"],
+    "jwt-wrong-kid": ["alg: 'ES256', kid: keyId", "alg: 'ES256', kid: teamId"],
+    "jwt-der": ["dsaEncoding: 'ieee-p1363'", "dsaEncoding: 'der'"],
+    "verdict-keeps-410": ["status === 410 || (status === 400", "false || (status === 400"],
+    "verdict-drops-all-400": ["(reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic')", "true"],
   };
   let bad = 0;
   for (const [name, [a, b]] of Object.entries(M)) {
     if (src.split(a).length !== 2) { console.log('FAIL ' + name + '：要替换的原文不是正好 1 处'); bad++; continue; }
     const f = path.join(dir, name + '.mjs'); fs.writeFileSync(f, src.replace(a, () => b));   // 函数替换：b 里的 $` 不当特殊符号
     const r = spawnSync(process.execPath, [new URL(import.meta.url).pathname, f], { encoding: 'utf8' });
-    const red = r.status !== 0; if (!red) bad++;
-    console.log((red ? 'ok   ' : 'FAIL ') + name + '：' + (r.stdout.trim().split('\n').filter((l) => /FAIL/.test(l)).slice(0, 1).join('').trim() || r.stderr.trim().split('\n')[0] || ''));
+    const rows = r.stdout.trim().split('\n'), failures = rows.filter((l) => /^  FAIL /.test(l));
+    const red = r.status !== 0 && failures.length > 0; if (!red) bad++;
+    console.log((red ? 'ok   ' : 'FAIL ') + name + '：变红 ' + failures.length + ' 条');
+    console.log(rows.find((l) => l.startsWith('结果：')) || '无结果行');
+    for (const row of failures) console.log(row);
+    if (!red && r.stderr) console.log(r.stderr.trim().split('\n')[0]);
   }
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`\n${Object.keys(M).length} 个改坏版，${Object.keys(M).length - bad} 个被测试抓到`);
@@ -100,9 +128,9 @@ ok(g({ host: H, 'tailscale-user-login': LOGIN }, ON, 'POST').deny === 'no origin
 for (const o of ['http://' + H, 'https://evil.com', 'https://other.tail1a2b.ts.net', 'null', 'https://' + H + ':8443', 'https://' + H + '/']) ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: o }, ON, 'POST').deny === 'bad origin', 'Origin 是 ' + o + ' → 拒');
 ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: 'https://evil.com' }).deny === 'bad origin', 'GET 带着别人的 Origin 也拒');
 
-console.log('\n第二道：远程能碰的接口恰好 9 个，按「方法 + 路径」整串查');
-const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive'];
-ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 9, '状态、对话、归档列表、发话、答选择框、开新任务、知道了、审完了、归档：放行，恰好这 9 个', [...R.REMOTE_API].join(','));
+console.log('\n第二道：远程能碰的接口恰好 10 个，按「方法 + 路径」整串查');
+const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push'];
+ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 10, '原有九条加设备推送登记：放行，恰好这 10 个', [...R.REMOTE_API].join(','));
 const NO = ['POST /api/delete', 'POST /api/open', 'POST /api/reveal', 'POST /api/focus', 'POST /api/attach', 'POST /api/pick', 'POST /api/crash', 'POST /api/auto', 'POST /api/upload', 'POST /api/preview', 'POST /api/unarchive', 'POST /api/cancel',
   'POST /api/remote/pair', 'POST /api/remote/revoke', 'GET /api/remote/devices', 'POST /api/remote/claim', 'GET /health', 'GET /api/send', 'POST /api/state', 'GET /api/state/', 'GET /API/STATE', 'GET /api/state%20', 'GET /api/constructor', 'GET constructor', 'HEAD /api/state', 'OPTIONS /api/send'];
 const leak = NO.filter((x) => R.allowed(...x.split(' ')));
@@ -154,6 +182,64 @@ ok(iGone > 0 && iGone < iRep && /if \(has && !gone\)/.test(P), '配对页：先�
 ok(iRep > 0 && iFetch > iRep && P.includes('location.hash.slice(1)'), '从 # 后面读码，先从地址栏和历史记录里抹掉，再发给服务');
 ok(!P.includes('__TOKEN__') && !/x-ccboard['"]?\s*:/.test(P) && !/\?(?:code|k)=/.test(P), '页面里没有口令占位、不带 x-ccboard、不把码放进查询串');
 ok(P.includes("localStorage.setItem('ccb_device'") && P.includes("location.replace('/')"), '换到的凭证存在这台手机上，然后进总控台');
+
+
+console.log('\nAPNs：配置、设备令牌、锁屏类别、签名和失效判定');
+const AP = { keyId: 'ABCDE12345', teamId: 'ZXCVB12345', topic: 'dev.example.remote' };
+const call = (name, ...args) => { try { return R[name]?.(...args); } catch { return undefined; } };
+ok(R.PUSH_AWAY_MS === 120000, '空闲常量：两分钟');
+// 现场 ioreg 的一行格式；数值为夹具编造，含不足一毫秒的尾数。
+for (const [text, expected, label] of [
+  ['    | |     "HIDIdleTime" = 123456789012', 123456, '现场行格式、纳秒转毫秒取整'],
+  ['"HIDIdleTime" = 9000001\n"HIDIdleTime" = 20000000', 9, '两处取第一处'],
+  ['"OtherTime" = 9000000', null, '没有这个键'], ['"HIDIdleTime" = nope', null, '非数字'], ['', null, '空串'],
+  ['"HIDIdleTime" = 12.5', null, '非整数'], ['"HIDIdleTime" = -1', null, '负数'], ['"HIDIdleTime" = 0', 0, '零'],
+]) ok(call('parseHidIdle', text) === expected, 'HID 空闲：' + label);
+for (const [focus, idle, expected, label] of [
+  [6000, 0, 'sent', 'f 旧边界'], [6001, null, 'sent', 'f 旧不读空闲'],
+  [0, 0, 'ui', 'f 新、0'], [5999, 119999, 'ui', 'f 新、119999'],
+  [0, 120000, 'sent', 'f 新、120000'], [5999, null, 'ui', 'f 新、null'],
+]) ok(call('pushWould', focus, idle) === expected, '推送空闲门：' + label);
+const ac = call('parseApns', AP);
+ok(ac?.on === true && ac.keyId === AP.keyId && ac.teamId === AP.teamId && ac.topic === AP.topic, 'APNs 配置：三项原样保留');
+ok(call('parseApns', undefined)?.on === false && call('parseApns', undefined)?.why === '', 'APNs 配置：没写时关闭且不多说');
+for (const [label, v] of [['null', null], ['数组', []], ['字符串', 'on'], ['布尔', true], ['空对象', {}],
+  ...['keyId', 'teamId'].flatMap((k) => [9, 11, 'lower', 'type', 'space'].map((x) => [k + '-' + x, { ...AP, [k]: x === 9 ? 'A'.repeat(9) : x === 11 ? 'A'.repeat(11) : x === 'lower' ? 'abcde12345' : x === 'type' ? 1234567890 : ' ABCDE12345' }])),
+  ...['single', '.dev.app', 'dev..app', 'dev.app ', 'dev/app', 'a.' + 'b'.repeat(199), [], null, 5].map((v) => ['topic-' + JSON.stringify(v), { ...AP, topic: v }])]) {
+  const c = call('parseApns', v); ok(c?.on === false && !!c.why, 'APNs 配置写错只关推送且不抛：' + label);
+}
+ok(call('parseApns', { ...AP, topic: 'a.' + 'b'.repeat(198) })?.on === true, 'APNs topic：200 字边界可用');
+const PT = 'ab'.repeat(32), sid = 'fixture-1234';
+for (const [v, yes] of [[PT, true], ['a'.repeat(200), true], ['a'.repeat(63), false], ['a'.repeat(201), false], [PT.toUpperCase(), false], [PT + ' ', false], [null, false], [[], false], [123, false]]) ok(call('pushToken', v) === yes, '推送 token 校验：' + (typeof v === 'string' ? v.length + ' 位/' + (yes ? '合法' : '拒绝') : typeof v));
+for (const [v, yes] of [['sandbox', true], ['production', true], ['Sandbox', false], ['sandbox ', false], [undefined, false], [null, false], [[], false]]) ok(call('pushEnv', v) === yes, '推送 env 校验：' + String(v));
+const dp = (push) => call('loadDevices', JSON.stringify({ devices: [{ ...good, push }] }))?.get(good.id);
+ok(JSON.stringify(dp({ token: PT, env: 'sandbox', at: 123 })?.push) === JSON.stringify({ token: PT, env: 'sandbox', at: 123 }), '设备表：合法 push 留下');
+for (const push of [null, [], {}, { token: PT.toUpperCase(), env: 'sandbox', at: 123 }, { token: PT, env: 'dev', at: 123 }, { token: PT, env: 'sandbox', at: '123' }, { token: PT, env: 'sandbox', at: -1 }]) {
+  const d = dp(push); ok(d?.id === good.id && !('push' in d), '设备表：push 写错只丢 push、设备留着');
+}
+const payloadCases = [
+  [[{ kind: 'reply', sid }], 'PUSH_REPLY_ONE'], [[{ kind: 'ask', sid }], 'PUSH_ASK_ONE'], [[{ kind: 'crash', sid }], 'PUSH_CRASH'],
+  ...['limit', 'auth', 'flagged', 'error', 'unfinished', 'stall', 'interrupt'].map((kind) => [[{ kind, sid }], 'PUSH_STOP_ONE']),
+  [[{ kind: 'reply', sid }, { kind: 'ask', sid }], 'PUSH_WAIT_MANY'],
+  [[{ kind: 'reply' }, { kind: 'limit' }], 'PUSH_MIXED_MANY'], [[{ kind: 'limit' }, { kind: 'crash' }, { kind: 'auth' }], 'PUSH_STOP_MANY']
+];
+for (const [items, key] of payloadCases) {
+  const v = call('pushPayload', items); let j; try { j = JSON.parse(JSON.stringify(v)); } catch {}
+  const expected = { aps: { alert: { 'loc-key': key, ...(items.length > 1 ? { 'loc-args': [String(items.length)] } : {}) }, sound: 'default', 'thread-id': 'cc-board' }, ...(items.length === 1 && items[0].sid ? { sid } : {}) };
+  ok(JSON.stringify(j) === JSON.stringify(expected), '锁屏 JSON：' + key + '，' + items.length + ' 件、数量和 sid 精确');
+}
+for (const bad of ['short', '../fixture', 'x'.repeat(65), ['fixture-1234'], null, 'fixture-1234\n']) ok(!('sid' in (call('pushPayload', [{ kind: 'reply', sid: bad }]) || { sid: true })), '锁屏 sid 格式不合规就不带');
+const privateWords = ['PRIVATE_TITLE', 'PRIVATE_BODY', 'PRIVATE_NAME'];
+const clean = call('pushPayload', [{ kind: 'reply', sid, title: privateWords[0], text: privateWords[1], name: privateWords[2] }]);
+ok(!!clean && privateWords.every((w) => !JSON.stringify(clean).includes(w)), '锁屏只取类别和 sid，输入额外的标题正文登记名均不能漏出');
+const keys = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const jwt = call('apnsJwt', keys.privateKey, AP.keyId, AP.teamId, 1700000000);
+let head, claims, valid = false, sigLen = 0;
+try { const [h, c, signature] = jwt.split('.'); head = JSON.parse(Buffer.from(h, 'base64url')); claims = JSON.parse(Buffer.from(c, 'base64url')); const sig = Buffer.from(signature, 'base64url'); sigLen = sig.length; valid = crypto.verify('sha256', Buffer.from(h + '.' + c), { key: keys.publicKey, dsaEncoding: 'ieee-p1363' }, sig); } catch {}
+ok(JSON.stringify(head) === JSON.stringify({ alg: 'ES256', kid: AP.keyId }), 'JWT 头只有 alg=ES256 和 kid');
+ok(JSON.stringify(claims) === JSON.stringify({ iss: AP.teamId, iat: 1700000000 }), 'JWT 载荷只有 iss 和给定秒时间 iat');
+ok(valid && sigLen === 64 && /^[\w-]+\.[\w-]+\.[\w-]+$/.test(jwt), 'JWT 用独立公钥验签：P-256 / ieee-p1363 / base64url');
+for (const [status, reason, verdict] of [[200, '', 'ok'], [410, 'Unregistered', 'drop'], [400, 'BadDeviceToken', 'drop'], [400, 'DeviceTokenNotForTopic', 'drop'], [400, 'BadTopic', 'err'], [403, 'InvalidProviderToken', 'err'], [429, 'TooManyRequests', 'err'], [500, 'InternalServerError', 'err'], [0, '', 'err']]) ok(call('apnsVerdict', status, reason) === verdict, 'APNs 应答：' + status + '/' + reason + ' → ' + verdict);
 
 console.log(`\n结果：${pass} 过，${fail} 没过`);
 process.exit(fail || !pass ? 1 : 0);

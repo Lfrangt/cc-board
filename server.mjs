@@ -2,8 +2,10 @@
 /**
  * [INPUT]: 依赖 ~/.claude/sessions 的会话登记（进程号、状态）、~/.claude/projects 和 ~/.codex/sessions 的对话记录（jsonl，只读）；
  *          依赖 tmux（每个窗口一台：-S ~/.cc-board/tmux/<会话名>.sock，11/16 之前开的在 -S ~/.cc-board/tmux.sock；每台由一个 /bin/sh 看护起在前台，退出状态写 <数据目录>/tmux-exit.log）和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 ./suggest.mjs 读输入框上的预判；依赖 ./limits.mjs 汇总各订阅的周额度；依赖 ./route.mjs 把 /api/new 里声明的档位 tier 翻成模型和强度；依赖 /usr/bin/open 打开正文里的路径（/api/open）；依赖 ./preview.mjs 起内置预览的只读端口；
- *          依赖 ./org.mjs 定「哪个窗口归哪个窗口管」；依赖 /usr/sbin/lsof 和 /bin/ps 认出是哪个会话在调 /api/new（测试用 CCBOARD_LSOF / CCBOARD_PS 换掉）；config.json 的 org.chief 指向的 JSON 文件（只读，点名总管）
- * [OUTPUT]: 对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state（带 peek=1 只看不取提示；org = 架构视图的上下级）、turns、diff（只读这一轮逐笔补丁）、send、new、archive、unarchive、delete、ack、answer、open、preview…）；
+ *          依赖 ./org.mjs 定「哪个窗口归哪个窗口管」；依赖 /usr/sbin/lsof 和 /bin/ps 认出是哪个会话在调 /api/new（测试用 CCBOARD_LSOF / CCBOARD_PS 换掉）；config.json 的 org.chief 指向的 JSON 文件（只读，点名总管）。
+ *          依赖 node:http2 发 APNs；remote.mjs 生成载荷和 JWT；生产在前台推送前异步读 HIDIdleTime，试验场只读空闲夹具文件；首次发送时异步读 cc-board-apns 钥匙串项，试验场改读显式密钥文件。
+ * [OUTPUT]: APNs 设备登记与通知合批推送；前台空闲两分钟时额外放行手机推送，Mac 横幅门不变；密钥只在首次发送时异步读，试验场只连显式假地址。
+ *           对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state（带 peek=1 只看不取提示；org = 架构视图的上下级）、turns、diff（只读这一轮逐笔补丁）、send、new、archive、unarchive、delete、ack、answer、open、preview…）；
  *           另起 preview.mjs 的只读预览端口（默认 4747 + 1000），/api/preview 给正文里的路径发预览网址和类型（网页、PDF、图、音视频、文本；多半是图 / 视频的文件夹、或 body.paths 里的一批图回 gallery）
  * [POS]: 总控台唯一的服务进程，由 app/main.swift 启动和重启，ui.html 只通过 /api 和它说话。
  *        它把每个会话压成四样：你问了什么 / 它在干嘛 / 它交付了什么 / 它为什么停了（alertOf 是「要不要你跟进」的唯一判断处）。
@@ -31,28 +33,29 @@
  *        「这一轮改了哪些文件」和撞车提示：apply() / applyCodex() 把改文件的工具（Edit / Write / MultiEdit / NotebookEdit、Codex 的 apply_patch 补丁头）交给 noteWrite 记下；
  *        出状态时 markWrites() 给每个会话挂 wrote / wroteMore（这一轮写过的文件，新的一轮开始才清）和 collide（30 分钟内墙上另一个会话也往同一个 git 仓库里写过；仓库 = 最近一层有 .git 的上级文件夹，只用 existsSync，不起 git）。
  *        seat-history.json 保留点名岗位的进程时代；归属跨拍裁剪，启动按日志核验后恢复。
- * [PROTOCOL]: Update this header on change, then check CLAUDE.md
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 // 只读 ~/.claude/sessions（会话登记）和 ~/.claude/projects（对话记录），不读终端画面（弹着选择框的会话除外）。
 // 只监听 127.0.0.1；所有接口要带口令（.token），别的网页调不了。
 import http from 'node:http';
+import http2 from 'node:http2';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseSuggest } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
+import { parseSuggest, promptEmpty } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
 import { codexLimits, claudeLimits, purgeTaps, TAP_PREFIX } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件）
 import { noteTool, classify, pinnable, useRules } from './projects.mjs';
-import { judgeArgs, judgeInput, parseJudge, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
+import { judgeArgs, judgeInput, parseJudge, failReason, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
 import { routeNew } from './route.mjs';                                         // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数
-import { parseAccounts, accountState, wrapLaunch, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
+import { parseAccounts, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
 import { startPreview } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 import { buildOrg } from './org.mjs';
-import { parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 手机远程（经 tailscale serve）的三道拦：规则全在那里
+import { parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
 import { qrSvg } from './qr.mjs';                                               // 配对链接画成二维码（零依赖）
-import { parseAutoConfig, autoArgs, autoInput, parseAuto, hardStop, autoMessage, isAutoPrompt, autoBlock, quotaHold } from './autopilot.mjs';   // 自动续跑：哪些窗口能替他把灰字建议发出去、先问小模型                                         // 架构视图：哪个窗口归哪个窗口管（规则全在那里，这里只备料）
+import { parseAutoConfig, autoArgs, autoInput, parseAuto, hardStop, autoMessage, isAutoPrompt, autoBlock, quotaHold, KW_TEXT, isKeepWarm, parseKeepWarm, keepWarmDue, kwPaneGate } from './autopilot.mjs';   // 自动续跑：哪些窗口能替他把灰字建议发出去、先问小模型                                         // 架构视图：哪个窗口归哪个窗口管（规则全在那里，这里只备料）
 
 const HOME = os.homedir();
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -182,7 +185,7 @@ function parseOrg(o) {                   // 写错了就抛出去，和别的键
 }
 let CONFIG_OK = false;                   // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote() };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
@@ -192,12 +195,15 @@ const CONFIG = (() => {
     // 没选账号时开哪个号（总管 11/17 17:3x）：只认 accounts 里登记过的 id；写错和别的键一样整份不用，不悄悄退回钥匙串当前登录的号
     if ('defaultAccount' in c && !accounts.some((a) => a.id === c.defaultAccount)) throw new Error('defaultAccount 要是 accounts 里登记过的 id');
     const defaultAccount = c.defaultAccount || '';
+    // 判官（judge、自动续跑的小模型）用哪个号（总管 11/20 23:1x 定朋友号）：只认登记过的 id，规矩同 defaultAccount；不写就跟 defaultAccount，两个都没有才是钥匙串当前登录的号
+    if ('judgeAccount' in c && !accounts.some((a) => a.id === c.judgeAccount)) throw new Error('judgeAccount 要是 accounts 里登记过的 id');
+    const judgeAccount = c.judgeAccount || '';
     const org = parseOrg(c.org);
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto, remote: parseRemote(c.remote) };   // remote 写错只关远程、不抛（见 remote.mjs）
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -247,6 +253,119 @@ function remoteLog(m, key) {
 }
 const pathOf = (req) => String(req.url || '').split(/[?#]/)[0].slice(0, 80);
 
+// ───────────── APNs：通知合批之后才进来，网络和密钥只留在服务层 ─────────────
+const APNS = CONFIG.apns;
+const APNS_JWT_MS = 40 * 60000, APNS_KEY_RETRY_MS = 10 * 60000, APNS_REQUEST_MS = 10000;
+const apnsSessions = new Map();
+let apnsKey = null, apnsKeyTask = null, apnsKeyRetryAt = 0, apnsJWT = '', apnsJWTAt = 0;
+const pushLog = (m) => console.log(`push ${new Date().toISOString()} ${m}`);
+const pushCode = (e) => String(e?.code ?? 'key').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 48) || 'key';
+if (APNS.on) pushLog(`on：${APNS.keyId.slice(0, 4)}…`);
+else if (APNS.why) pushLog('off：' + APNS.why);
+async function pushKey() {
+  if (apnsKey) return apnsKey;
+  if (Date.now() < apnsKeyRetryAt) return null;
+  if (apnsKeyTask) return apnsKeyTask;
+  apnsKeyTask = (async () => {
+    try {
+      let raw;
+      if (SANDBOX) {
+        if (!process.env.CCBOARD_APNS_KEY_FILE) throw Object.assign(new Error(), { code: 'ENOKEY' });
+        raw = await fs.promises.readFile(process.env.CCBOARD_APNS_KEY_FILE, 'utf8');
+      } else raw = await new Promise((resolve, reject) => execFile('/usr/bin/security',
+        ['find-generic-password', '-s', 'cc-board-apns', '-a', APNS.keyId, '-w'], { timeout: 5000 },
+        (e, stdout) => e ? reject(e) : resolve(stdout)));
+      const b64 = raw.trim();
+      if (!b64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw Object.assign(new Error(), { code: 'EBADKEY' });
+      const key = crypto.createPrivateKey(Buffer.from(b64, 'base64').toString('utf8'));
+      if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') throw Object.assign(new Error(), { code: 'EBADKEY' });
+      apnsKey = key; return key;
+    } catch (e) {
+      apnsKeyRetryAt = Date.now() + APNS_KEY_RETRY_MS;
+      pushLog(`off：读不到密钥（${pushCode(e)}）`); return null;
+    }
+  })();
+  try { return await apnsKeyTask; } finally { apnsKeyTask = null; }
+}
+function apnsSession(host) {
+  let session = apnsSessions.get(host);
+  if (session && !session.closed && !session.destroyed) return session;
+  session = http2.connect(host); apnsSessions.set(host, session); session.unref();
+  const discard = () => { if (apnsSessions.get(host) === session) apnsSessions.delete(host); };
+  session.on('error', discard); session.on('close', discard);
+  session.on('goaway', () => { discard(); session.close(); });
+  return session;
+}
+function apnsRequest(host, token, jwt, payload) {
+  return new Promise((resolve) => {
+    let req, timer, status = 0, body = '', ended = false;
+    const finish = (code, reason = '') => {
+      if (ended) return; ended = true; clearTimeout(timer);
+      resolve({ verdict: apnsVerdict(code, reason), status: code, reason });
+    };
+    try {
+      req = apnsSession(host).request({ ':method': 'POST', ':path': '/3/device/' + token,
+        authorization: 'bearer ' + jwt, 'apns-topic': APNS.topic, 'apns-push-type': 'alert',
+        'apns-priority': '10', 'apns-expiration': String(Math.floor(Date.now() / 1000) + 3600) });
+      timer = setTimeout(() => req.destroy(Object.assign(new Error(), { code: 'ETIMEDOUT' })), APNS_REQUEST_MS);
+      req.on('response', (h) => { status = Number(h[':status']) || 0; });
+      req.setEncoding('utf8'); req.on('data', (s) => { if (body.length < 4096) body += s.slice(0, 4096 - body.length); });
+      req.on('end', () => {
+        let reason = ''; try { const r = JSON.parse(body).reason; if (typeof r === 'string' && /^[A-Za-z]{1,60}$/.test(r)) reason = r; } catch {}
+        finish(status, reason);
+      });
+      req.on('error', (e) => finish(pushCode(e)));
+      req.on('close', () => finish('ECLOSED'));
+      req.end(JSON.stringify(payload));
+    } catch (e) { finish(pushCode(e)); if (req) req.destroy(); }
+  });
+}
+function pushReady() {
+  return APNS.on && REMOTE.on && !READONLY && [...devices.values()].some((d) => d.push);
+}
+let idleUnknownAt = 0;
+async function readHidIdleMs() {
+  try {
+    if (SANDBOX) {
+      const file = SANDBOX && process.env.CCBOARD_IDLE_FILE;
+      if (!file) return 0;
+      const text = (await fs.promises.readFile(file, 'utf8')).trim(), ms = Number(text);
+      if (/^\d+$/.test(text) && Number.isSafeInteger(ms)) return ms;
+      throw Object.assign(new Error(), { code: 'EBADIDLE' });
+    }
+    const text = await new Promise((resolve, reject) => execFile('/usr/sbin/ioreg', ['-c', 'IOHIDSystem', '-d', '4'],
+      { timeout: 2000 }, (e, stdout) => e ? reject(e) : resolve(stdout)));
+    const ms = parseHidIdle(text);
+    if (ms != null) return ms;
+    throw Object.assign(new Error(), { code: 'EBADIDLE' });
+  } catch (e) {
+    if (Date.now() - idleUnknownAt >= APNS_KEY_RETRY_MS) { idleUnknownAt = Date.now(); pushLog('idle-unknown ' + pushCode(e)); }
+    return null; // 空闲未知时不额外放行
+  }
+}
+async function sendPush(items) {
+  if (!pushReady()) return;
+  const payload = pushPayload(items), key = payload.aps.alert['loc-key'];
+  if (SANDBOX && !process.env.CCBOARD_APNS_URL) { pushLog('dry ' + key); return; }
+  const privateKey = await pushKey(); if (!privateKey) return;
+  const targets = [...devices.values()].filter((d) => d.push).map((d) => ({ d, push: d.push }));
+  if (!targets.length) return;
+  if (!apnsJWT || Date.now() - apnsJWTAt >= APNS_JWT_MS) { apnsJWTAt = Date.now(); apnsJWT = apnsJwt(privateKey, APNS.keyId, APNS.teamId, Math.floor(apnsJWTAt / 1000)); }
+  const jwt = apnsJWT;
+  const result = await Promise.all(targets.map(async ({ d, push }) => {
+    if (devices.get(d.id) !== d || d.push !== push) return false;
+    const { token, env } = push;
+    const host = (SANDBOX && process.env.CCBOARD_APNS_URL) || (env === 'production' ? 'https://api.push.apple.com' : 'https://api.sandbox.push.apple.com');
+    const r = await apnsRequest(host, token, jwt, payload);
+    if (r.verdict === 'drop' && devices.get(d.id) === d && d.push === push) {
+      delete d.push; saveDevices();
+      pushLog(`drop ${d.id} ${token.slice(0, 8)} ${r.status} ${r.reason}`);
+    } else if (r.verdict === 'err') pushLog(`err ${d.id} ${r.status} ${r.reason}`);
+    return r.verdict === 'ok';
+  }));
+  pushLog(`sent ${result.filter(Boolean).length}/${targets.length} ${key}`);
+}
+
 function run(cmd, args, { input, timeout = 15000, env, maxBuffer = 8 << 20 } = {}) {
   return new Promise((resolve) => {
     const child = execFile(cmd, args, { timeout, maxBuffer, ...(env ? { env } : {}) }, (err, stdout, stderr) => {
@@ -285,6 +404,15 @@ async function startServer(name) {
   console.log(`tmux ${new Date().toISOString()} ${name} 看护 5 秒内没把 tmux 起来，退回不加看护`);
   return { sock, watched: false };
 }
+// 开完要站得住（新开的会话偶尔一开就退）：选了号的那层 zsh 先读钥匙串、再 exec claude，claude 那一秒正被自动更新换掉时 exec 落空，会话 1 秒内才退，
+// 这时 has-session 早过了，接口照样回 ok，开窗口的一方以为开成了。所以开完先看一次，之后 SETTLE_MS 里每 200 ms 再看一次（新任务因此多等这么久才回）。
+// tmux 的回答分三种：在 / 确定没了（找不到会话、服务器不在、套接字文件不在：11/18 tmux 3.7c 实测的三句；11/19 又补两句：会话一开就退、那台 tmux 正关到一半时连上去，
+// 回 server exited unexpectedly（话没说完服务器就没了）或 no current target（服务器还在、会话已经没了），自己的套接字上 1000 次里 19 + 5 次）/ 说不准（超时之类）。
+// 只有确定没了才回 gone 让调用方重开；说不准的不算退：机器忙时 has-session 超时就重开，会开出两个一样的窗口
+const SETTLE_MS = Number(process.env.CCBOARD_SETTLE_MS || 2000);
+const RESPAWN_MS = Number(process.env.CCBOARD_RESPAWN_MS || 3000);
+const GONE_RE = /can't find session|no server running|\(No such file or directory\)|server exited unexpectedly|no current target/;
+const GONE_MSG = '会话一开就退了（claude 可能正在更新），重开一次也没起来，过一会儿再试';
 // 在它自己那台上开会话。-D 会关掉 exit-empty：开完再打开，会话结束（他 /exit）那台 tmux 就自己退，不留空服务器（会话先退了再打开也一样会退，11/16 实测）
 async function openSession(name, args) {
   const sv = await startServer(name);
@@ -292,7 +420,15 @@ async function openSession(name, args) {
   const e = await tmuxAt(sv.sock, ['set', '-g', 'exit-empty', 'on']);   // 不论开没开成、看护起没起来都下：没开成时空的 -D 服务器也自己退
   if (!r.ok) return { ok: false, error: 'tmux：' + r.err };
   if (!e.ok) console.log(`tmux ${new Date().toISOString()} ${name} exit-empty 没打开：${e.err}`);
-  if (!(await tmuxAt(sv.sock, ['has-session', '-t', name])).ok) return { ok: false, error: 'tmux 没开出会话（套接字目录 ' + TMUX_DIR + ' 还在吗？）' };   // -S 的目录不在时 new-session 也回 0
+  const settle = Date.now() + SETTLE_MS;
+  for (let i = 0; i === 0 || Date.now() < settle; i++) {
+    if (i) await sleep(200);
+    const h = await tmuxAt(sv.sock, ['has-session', '-t', name]);
+    if (h.ok) continue;
+    if (!fs.existsSync(path.dirname(sv.sock))) return { ok: false, error: 'tmux 没开出会话（套接字目录 ' + TMUX_DIR + ' 还在吗？）' };   // -S 的目录不在时 new-session 也回 0；目录在就不是它的事（11/18 以前一律这么说）
+    if (GONE_RE.test(h.err)) return { ok: false, gone: true, error: '会话一开就退了' };
+    if (!i) return { ok: false, error: 'tmux 没开出会话：' + h.err };   // 刚开完那一下就说不准：照以前算没开成，不重开
+  }
   sockOf.set(name, sv.sock);
   return { ok: true, sock: sv.sock };
 }
@@ -411,15 +547,17 @@ function apply(st, d, off) {
     case 'custom-title': st.custom = d.customTitle || d.title || st.custom; return;
     case 'repl-mode': st.codeMode = d.replMode === true; return;   // Code Mode：每次保存都写一条，他中途关掉会写 false；只认最后一条（Claude Code 自己读回也是 last-wins）
     case 'queue-operation':
-      if (d.operation === 'enqueue' && d.content) st.queued = { text: String(d.content), at: d.timestamp };
+      if (d.operation === 'enqueue' && d.content && !isKeepWarm(String(d.content))) st.queued = { text: String(d.content), at: d.timestamp };
       return;
     case 'user': {
       if (d.isSidechain) return;
       if (isToolResult(d)) {
+        if (st.inKw) return;                                 // 保温那一轮里它还是调了工具：结果也不算
         if (st.ask && d.message.content.some((x) => x && x.tool_use_id === st.ask.id)) st.ask = null;
         st.lastAt = d.timestamp; return;
       }
       if (d.origin && d.origin.kind === 'peer') {          // 别的窗口发来的话
+        st.inKw = false; st.kwN = 0; st.kwErr = false;       // 有人说话了：保温从头数
         const p = notePeer(st, d);                         // 每条都记到发信人名下（架构视图：谁在给它派活）
         if (!st.open) { st.turnBy = 'peer'; st.turnPeer = p ? { pid: p.pid, name: p.name, at: Date.parse(d.timestamp) || 0 } : null; }   // 它开了这一轮：这一轮交付的是给它的，不是给你的
         if (!st.open) newTurnWrites(st, off);                   // 它开了新的一轮：「这一轮改了哪些文件」从这里重新数；一轮做到一半发来的不算
@@ -427,7 +565,13 @@ function apply(st, d, off) {
       }
       if (d.isMeta || d.isCompactSummary) return;            // 压缩对话时自动写的摘要，不是你说的话
       const text = userText(d);
+      // 总控台保温（11/20 khalil-99，见 autopilot.mjs 的 KW_MARK）：只为续缓存打的一句，整轮不算——卡片上的话、交付、状态行、时间、轮数都不动，
+      // 只记这一次保温的时间和连着第几次。总管 khalil-4c 11/20 23:07 的条件：它回的那个点不能顶掉卡片上挂着的【待跟进】/【待审阅】。
+      // 只在没有一轮开着时认（11/21 1b 审查 M4）：万一插进了正在做的一轮，这一句本身不算（不上卡片、不算轮数），后面的回复照常算那一轮的，不被当成保温的回复吞掉
+      if (isKeepWarm(text)) { if (st.open) return; st.inKw = true; st.kwAt = d.timestamp; st.kwN = (st.kwN || 0) + 1; st.kwErr = false; return; }
+      const wasKw = st.inKw; st.inKw = false; st.kwN = 0; st.kwErr = false;   // 别的话（他本人、后台通知、斜杠命令）：保温从头数
       if (isInterrupt(text)) {                               // 一轮做到一半被打断：记下来；没在做事时按的 Esc 不算
+        if (wasKw) return;                                   // 打断的是保温那一轮：不算停住
         if (st.open) { st.halt = { kind: 'interrupt', text: '', at: d.timestamp }; st.open = false; st.ask = null; }
         st.lastAt = d.timestamp; return;
       }
@@ -450,6 +594,13 @@ function apply(st, d, off) {
       if (d.isSidechain) return;
       const m = d.message;
       if (!m || !Array.isArray(m.content)) return;
+      if (st.inKw) {                                         // 保温那一轮的回复：只记上下文多大、有没有报错，交付和状态都不动
+        if (m.model === '<synthetic>' && d.isApiErrorMessage) { st.kwErr = true; st.inKw = false; return; }   // 报错（额度用完、登录过期）：不再保温，等下一次有人说话
+        if (m.model === '<synthetic>') return;                // 别的合成记录（Code Mode 的虚拟调用之类）不算回复
+        if (m.usage && typeof m.usage === 'object') { const u = m.usage, c = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].reduce((a, k) => a + (Number.isFinite(u[k]) && u[k] > 0 ? u[k] : 0), 0); if (c > 0) st.ctx = c; }
+        if (m.stop_reason === 'end_turn' || m.stop_reason === 'stop_sequence') st.inKw = false;   // 这一轮完了：之后的记录照常
+        return;
+      }
       if (m.model === '<synthetic>') {                       // 额度用完、登录过期、请求被拒：这一轮到此为止
         if (d.isApiErrorMessage) {
           const h = haltOf(d, m);                            // 同一种错连着报（额度没恢复时每次被叫醒都会再报一遍）算同一次停住，时间记第一次的
@@ -908,11 +1059,24 @@ function readTurns(file, want) {
   const size = fs.statSync(file).size;
   let span = Math.min(size, 8 << 20), turns = [];
   for (;;) {
-    turns = []; let cur = null, finalId = null;
+    turns = []; let cur = null, finalId = null, kw = false, open = false;   // open：有一轮开着、还没收尾（和 apply() 的 st.open 一样，保温那句插在一轮中间时不认）
     scanRange(file, size - span, size, span < size, null, (d) => {
       if (d.isSidechain) return;
+      if (kw && d.type === 'assistant') {                 // 保温那一轮的回复（含它还是调了的工具）：不算步数、不算交付；这一轮的最后一条（或报错）之后照常
+        const m = d.message || {};
+        if (d.isApiErrorMessage || (d.isVirtual !== true && (m.stop_reason === 'end_turn' || m.stop_reason === 'stop_sequence'))) kw = false;
+        return;
+      }
+      if (d.type === 'assistant' && d.message) {          // 和 apply() 一样：报错收尾；它开口了就看这一条是不是最后一条（Code Mode 的虚拟调用不算开口）
+        if (d.isApiErrorMessage) open = false;
+        else if (d.message.model !== '<synthetic>') open = !(d.message.stop_reason === 'end_turn' || d.message.stop_reason === 'stop_sequence');
+      }
       if (d.type === 'user' && !isToolResult(d) && !d.isMeta && !d.isCompactSummary) {
         const text = userText(d);
+        if (isKeepWarm(text)) { if (!open) kw = true; return; }   // 总控台保温那一轮：不算一轮，它回的点也不算交付；插在一轮中间的不认，这一句本身也不算
+        kw = false;
+        if (isInterrupt(text)) open = false;
+        else if (isHuman(d, text) || (!(d.origin && d.origin.kind === 'peer') && !/^\s*<(command-|local-command)/.test(text))) open = true;   // 他开了一轮、后台通知叫醒它；别的窗口的话和斜杠命令不动（apply() 也不动）
         if (isHuman(d, text) && !isInterrupt(text)) { cur = { prompt: cleanPrompt(text), at: d.timestamp, results: [], steps: 0 }; turns.push(cur); finalId = null; }
       } else if (d.type === 'assistant' && cur && d.message && Array.isArray(d.message.content) && d.message.model !== '<synthetic>') {
         const m = d.message, final = m.stop_reason === 'end_turn' || m.stop_reason === 'stop_sequence';
@@ -1430,6 +1594,11 @@ async function flushAlerts() {
   const how = SANDBOX ? 'dry:' + would : would;                                  // 试验场里只写日志，不真发
   console.log(`alert ${new Date().toISOString()} ${how} n=${q.length} ${q.map((x) => x.kind).join(',')}`);
   console.log(`notify ${new Date().toISOString()} ${how} ${q.map((x) => x.kind + ':' + (x.sid ? x.sid.slice(0, 8) : '-')).join(',')} | ${title} | ${body}`);   // 本来会发 / 发了什么（试验场里测试读这一行）
+  if (would === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));
+  else if (pushReady()) {
+    const idleMs = await readHidIdleMs();
+    if (pushWould(Date.now() - uiFocusAt, idleMs) === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));
+  }
   if (how !== 'sent') return;
   await new Promise((resolve) => execFile('/usr/bin/osascript', ['-e', 'display notification (system attribute "CCB_BODY") with title (system attribute "CCB_TITLE")'],
     { timeout: 8000, env: { ...process.env, CCB_TITLE: '总控台 · ' + title, CCB_BODY: body } }, () => resolve()));
@@ -1724,6 +1893,7 @@ async function waitDelivered(sid, text, since, files = []) {
     const st = tr.st;
     if (st.promptAt && Date.parse(st.promptAt) >= since - 2000 && hit(st.prompt)) return true;
     if (st.queued && Date.parse(st.queued.at) >= since - 2000 && hit(st.queued.text)) return true;
+    if (isKeepWarm(text) && st.kwAt && Date.parse(st.kwAt) >= since - 2000) return true;   // 保温那句不进 st.prompt（整轮跳过），看保温的时间
   }
   return false;
 }
@@ -1955,7 +2125,7 @@ function tidyDue(s, now) {
   // 只有明说做完了（done）才收。waiting = 它自己还有后续；yours = 还有要他定的事（三种答案互斥，同时有后续和问题时它可能只报 yours，所以 yours 也不收）；
   // 判不出来（命令失败、答非所问）= 保护性的判断拿不准，落在「不收」。离线考的数见 CLAUDE.md「还有后续的不收」
   const v = j.v ? j.v.verdict : null;
-  if (v !== 'done') return { line: 'hold', from: d.line, why: v === 'waiting' ? '它自己还有后续：' + (j.v.why || '在等') : v === 'yours' ? '还有要你定的事：' + (j.v.ask || j.v.why || '') : '判不出来，拿不准就不收' };
+  if (v !== 'done') return { line: 'hold', from: d.line, why: v === 'waiting' ? '它自己还有后续：' + (j.v.why || '在等') : v === 'yours' ? '还有要你定的事：' + (j.v.ask || j.v.why || '') : j.quota ? '判官没额度，拿不准就不收（' + (j.failWhy || '') + '）' : '判不出来，拿不准就不收' };
   return d;
 }
 // ── 收之前看一眼（tidyJudge）：无需处理的交付安静了 TIDY_SMART_MS，让小模型读一遍它最后那段交付 ──
@@ -1982,29 +2152,47 @@ try {
   if (j && typeof j === 'object' && !Array.isArray(j)) for (const [k, x] of Object.entries(j)) {
     if (!/^[\w-]{8,80}$/.test(k) || !x || typeof x.at !== 'string' || !okVerdict(x.v)) continue;   // 同 SID_RE（它定义在下面）
     const owed = x.owed && typeof x.owed.tail === 'string' ? { at: String(x.owed.at || ''), why: String(x.owed.why || ''), tail: x.owed.tail.slice(-1500) } : null;
-    judged.set(k, { at: x.at, v: x.v, failAt: Number(x.failAt) || 0, owed, seen: Date.now() });
+    judged.set(k, { at: x.at, v: x.v, failAt: Number(x.failAt) || 0, quota: x.quota === true, failWhy: typeof x.failWhy === 'string' ? x.failWhy.slice(0, 160) : '', owed, seen: Date.now() });
   }
 } catch {}
 function saveJudged() {
   if (READONLY) return;
-  const out = {}; for (const [k, x] of judged) if (x.v !== 'pending') out[k] = { at: x.at, v: x.v, ...(x.failAt ? { failAt: x.failAt } : {}), ...(x.owed ? { owed: x.owed } : {}) };
+  const out = {}; for (const [k, x] of judged) if (x.v !== 'pending') out[k] = { at: x.at, v: x.v, ...(x.failAt ? { failAt: x.failAt } : {}), ...(x.quota ? { quota: true, failWhy: x.failWhy || '' } : {}), ...(x.owed ? { owed: x.owed } : {}) };
   try { const tmp = JUDGED_FILE + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(out, null, 1)); fs.renameSync(tmp, JUDGED_FILE); } catch (e) { console.log(`judged ${new Date().toISOString()} 写不进 judged.json：${e.message}`); }
+}
+// 判官（judge、自动续跑）用哪个号：config.judgeAccount，不写就跟 defaultAccount（新窗口的默认号），都没写才是钥匙串当前登录的号。
+// 起因：判官一直走钥匙串当前登录的号，那个号周额度用完以后，自动收工很长一段时间一个都没收。
+// 登记的号这会儿用不了（钥匙串里没有它的 token）：这一次算判不出来、照旧不收，不悄悄退回当前登录的号（同 defaultAccount 的规矩）
+// 服务刚起、号表还没读完（refreshAccounts 没 await）：这一拍先不问，什么都不记，下一拍再来。不然会记成假的「号不可用」、一小时后才重问（审查 #3）
+const smallModelWaits = () => !!(CONFIG.judgeAccount || CONFIG.defaultAccount) && !acctLoaded;
+function smallModelLaunch(cmd, args) {
+  const id = CONFIG.judgeAccount || CONFIG.defaultAccount;
+  if (!id) return { argv: [cmd, ...args] };
+  const a = acctList.find((x) => x.id === id);
+  if (!a || !a.ready) return { error: '号不可用：' + String(id).slice(0, 40) + '（钥匙串里没有它的 token）' };
+  return { argv: wrapBackground(a, [cmd, ...args]) };
 }
 let judgeBusy = false;
 const judgeOn = () => CONFIG.tidyJudge && (!SANDBOX || !!process.env.CCBOARD_JUDGE);
 async function askJudge(s) {
+  if (smallModelWaits()) return;
   const at = String(s.resultAt), tr = tracks.get(s.sid) || codexTracks.get(s.sid), prev = judged.get(s.sid), owed = (prev && prev.owed) || null;
   const text = (tr && tr.st.result) || s.result;
   judgeBusy = true; judged.set(s.sid, { at, v: 'pending', owed, seen: Date.now() });
-  let v = null, err = '';
+  let v = null, err = '', quota = false, failWhy = '';
   try {
     const cmd = process.env.CCBOARD_JUDGE || await findClaude();
-    const r = await run(cmd, judgeArgs(), { input: judgeInput({ title: s.title, prompt: s.prompt, text, earlier: owed ? owed.tail : '' }), timeout: 90000 });
-    v = parseJudge(r.out); if (!v) err = r.ok ? '答非所问' : '命令失败：' + r.err.replace(/\s+/g, ' ').slice(0, 120);
+    const L = smallModelLaunch(cmd, judgeArgs());
+    if (L.error) err = L.error;
+    else {
+      const r = await run(L.argv[0], L.argv.slice(1), { input: judgeInput({ title: s.title, prompt: s.prompt, text, earlier: owed ? owed.tail : '' }), timeout: 90000 });
+      v = parseJudge(r.out);
+      if (!v) { const f = failReason(r); quota = f.kind === 'quota'; failWhy = f.text; err = quota ? '判官没额度：' + f.text : f.kind ? '命令失败：' + f.text : '答非所问'; }
+    }
   } catch (e) { err = e.message; }
   // owed：判 done 清掉；之前没欠着、这次判 waiting → 记下这次的结尾；别的（yours、判不出来、已经欠着又判 waiting）原样带着最早没了结的那次
   const next = v && v.verdict === 'done' ? null : owed || (v && v.verdict === 'waiting' ? { at, why: v.why, tail: String(text || '').slice(-1500) } : null);
-  judged.set(s.sid, { at, v, failAt: v ? 0 : Date.now(), owed: next, seen: Date.now() });
+  judged.set(s.sid, { at, v, failAt: v ? 0 : Date.now(), quota: !v && quota, failWhy: !v && quota ? failWhy : '', owed: next, seen: Date.now() });
   saveJudged();
   judgeBusy = false;
   console.log(`judge ${new Date().toISOString()} ${s.sid.slice(0, 8)} ${v ? v.verdict + ' ' + (v.ask || v.why) : 'fail ' + err}`);
@@ -2124,13 +2312,18 @@ async function unarchive(sid) {
     }
     if (acct && !acct.ready) return { ok: false, error: '钥匙串里还没有「' + acct.name + '」的 token' };
   }
-  const name = newName();
+  let name = newName();
   it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now();   // 先同步占住：排队接和他手点同一个、双击，都只会接一次（下面几个 await 期间别人看到的已经是 restoring）
   const cm = it.provider !== 'codex' && await lastReplMode(it.file || locate(sid, it.cwd), sid);   // 所有接回（单张卡、一起退出后的排队接回）都从这里过：上次是 Code Mode 的，接回来还是
   const cl = it.provider === 'codex' ? null : [await findClaude(), '--resume', sid];   // Codex 不找 claude（第一次找可能等到 15 秒，接回的看护是 12 秒）
   const cmd = it.provider === 'codex' ? [codexBin || 'codex', 'resume', sid] : wrapLaunch(acct, cm ? withCodeMode(cl) : cl);
-  const r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);   // 接回来的也是自己一台 tmux
-  if (!r.ok) { if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r; }
+  let r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);   // 接回来的也是自己一台 tmux
+  if (r.gone && cl) {                               // 一开就退了：和 newSession 一样重开一次。先占上新名字、重新计 12 秒（重开前那几秒别人再点接回，拿到的是要开的那个）
+    const was = name; name = newName(); if (archive.items[sid] === it) { it.tmux = name; it.restoreAt = Date.now(); }
+    cmd[cmd.length - cl.length] = await refindClaude(was);
+    r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);
+  }
+  if (!r.ok) { if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r.gone ? { ok: false, error: cl ? GONE_MSG : '会话一开就退了' } : r; }
   if (it.provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: it.prompt || '', sid, rollout: it.file }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // 11/15：恢复出来的窗口也要过信任框（主目录的信任不存）和可能有的首次向导，以前只有 newSession 点
   launches.set(name, { at: Date.now(), prompt: '恢复「' + it.title + '」', cwd: dir });
@@ -2228,6 +2421,14 @@ async function findClaude() {
   const p = r.out.split('\n').map((x) => x.trim()).filter((x) => x.startsWith('/')).pop();
   claudeBin = p || 'claude';
   return claudeBin;
+}
+// 新开的会话一开就退了：多半是 claude 那一刻正被自动更新换掉（不止一次撞上过）。等 RESPAWN_MS 让更新写完，
+// 丢掉缓存的路径重新找（缓存是服务起来后第一次找到的，更新那一秒找到的可能是空的、退回成光秃秃的 claude），调用方再换个新名字开一次。
+// 不用原来的名字：那台 tmux 的看护在它退出后会 rm -f 那个套接字路径，同名新服务器的套接字可能被它删掉
+async function refindClaude(name) {
+  console.log(`launch ${new Date().toISOString()} ${name} 一开就退了，${RESPAWN_MS} ms 后重新找 claude、换个名字再开一次`);
+  await sleep(RESPAWN_MS); claudeBin = null;
+  return findClaude();
 }
 
 const BORDER = /^[\s─━═│┃╭╮╰╯┌┐└┘▔▁]+$/;
@@ -2379,13 +2580,19 @@ function watchAuto() {
   }
 }
 async function askAuto(s, at, ghost) {
+  if (smallModelWaits()) return;
   const tr = tracks.get(s.sid);
   autoAsking = true; autoJudged.set(s.sid, { at, ghost, v: 'pending' });
   let v = null, err = '';
   try {
     const cmd = process.env.CCBOARD_AUTO_JUDGE || await findClaude();
-    const r = await run(cmd, autoArgs(), { input: autoInput({ title: s.title, prompt: s.prompt, text: (tr && tr.st.result) || s.result, next: ghost }), timeout: 90000 });
-    v = parseAuto(r.out); if (!v) err = r.ok ? '答非所问' : '命令失败：' + r.err.replace(/\s+/g, ' ').slice(0, 120);
+    const L = smallModelLaunch(cmd, autoArgs());
+    if (L.error) err = L.error;
+    else {
+      const r = await run(L.argv[0], L.argv.slice(1), { input: autoInput({ title: s.title, prompt: s.prompt, text: (tr && tr.st.result) || s.result, next: ghost }), timeout: 90000 });
+      v = parseAuto(r.out);
+      if (!v) { const f = failReason(r); err = f.kind === 'quota' ? '判官没额度：' + f.text : f.kind ? '命令失败：' + f.text : '答非所问'; }
+    }
   } catch (e) { err = e.message; }
   const cur = autoJudged.get(s.sid);
   if (cur && cur.at === at && cur.ghost === ghost) autoJudged.set(s.sid, { at, ghost, v });   // 问的这段时间里交付或建议变了：答案作废，下一轮重新问
@@ -2436,8 +2643,8 @@ async function findCodex() {
   codexBin = p && fs.existsSync(p) ? p : null;
 }
 // 账号表和「当前登录的是谁」放在内存里，每 30 秒刷新一次：providers() 每次轮询都要调，不能每次都读钥匙串和 170 KB 的 ~/.claude.json
-let acctList = [], loginNow = null;
-async function refreshAccounts() { acctList = await accountState(CONFIG.accounts, run); loginNow = acctList.length ? loginLabel(HOME) : null; }
+let acctList = [], loginNow = null, acctLoaded = false;   // acctLoaded：号表读完过一次（判官换号要等它，见 smallModelWaits）
+async function refreshAccounts() { acctList = await accountState(CONFIG.accounts, run); loginNow = acctList.length ? loginLabel(HOME) : null; acctLoaded = true; }
 function providers() {
   let cm = null, ce = null, xm = null, xe = null;
   try { const j = JSON.parse(fs.readFileSync(path.join(HOME, '.claude/settings.json'), 'utf8')); cm = j.model || null; ce = j.effortLevel || null; } catch {}
@@ -2548,6 +2755,68 @@ async function callerOf(port) {
   return null;
 }
 const findCaller = (port) => Promise.race([callerOf(port).catch(() => null), sleep(CALLER_MS).then(() => null)]);
+
+// ───────────── 总管保温（11/20 khalil-99）─────────────
+// Khalil 11/20 23:01：「你直接把保温和压缩后装回章程的 SessionStart 钩子做出来」。账和理由在 autopilot.mjs 的 KW_MARK 一节。
+// 每一拍（suggestLoop，约 2.5 秒）看点名的会话（org.chief 的总管 + keepWarm.sids）：keepWarmDue 说该打了，再读一次屏幕确认输入框是空的，
+// 经 sendTo 打 KW_TEXT。一次只打一个；同一个会话打过以后 KW_GAP_MS 内不再打（万一记录里一直没认出那一句，也不会每拍都打）。
+// 开关不用重启：config.json 的 keepWarm 这一个键最多每 KW_CFG_MS 重读一次；写错或读不了 → 关，日志写一行。启动时不读它，写错不连累整份 config。
+// 发之前（11/21 1b 审查 M1、M4）：同一次 tmux 查询核他是不是正对着这个窗口（kwPaneGate：只有一个窗格、不在 copy-mode、没有客户端 KW_QUIET_S 秒内按过键），
+// 再重新扫一次会话登记、用最新的状态把 keepWarmDue 过一遍（读屏这一会儿它可能被叫醒了）。粘贴到 Enter 那 0.5 秒是 sendTo 本来就有的（/api/send 也一样），不在这里管。
+// 真打字只在线上服务（M3）：只读预览可能指着线上数据目录和真窗口；试验服务（换了端口、数据目录或主目录）主目录没换、又没给私有套接字时看得到所有真窗口，
+// 会和线上服务同时往真总管里打（11/16 两次总控台全体崩溃就是测试碰了线上 tmux）。试验场要真打：CCBOARD_KW_SANDBOX=1，并且 CCBOARD_TMUX_SOCKET 指着 ~/.cc-board 以外的私有套接字。
+// 日志：kw <时间> <会话号前 8 位> fire n=<第几次> ctx=<上下文> delivered|sent-unconfirmed|fail …；只读服务、试验服务记 dry n=… <哪道闸> 不打；不打的原因变了才记一行 skip <原因>。
+const KW_CFG_MS = Number(process.env.CCBOARD_KW_CFG_MS) || 10000;
+const KW_GAP_MS = Number(process.env.CCBOARD_KW_GAP_MS) || 10 * 60000;
+let kwCfg = { at: 0, v: parseKeepWarm(), desc: 'off' }, kwFiring = false;   // 起点当作 off：没开保温的机器启动时不多记一行（「写坏的 config 只有一行说明」）
+const kwSent = new Map(), kwWhy = new Map();   // sid → 上次打的时刻（服务的钟）；sid → 上次记的不打原因
+const kwLog = (sid, what) => console.log(`kw ${new Date().toISOString()} ${sid.slice(0, 8)} ${what}`);
+const KW_RO = READONLY ? '只读' : '';
+const KW_SB = SANDBOX && !(process.env.CCBOARD_KW_SANDBOX === '1' && process.env.CCBOARD_TMUX_SOCKET && !TMUX_SOCKET.startsWith(path.join(REAL_HOME, '.cc-board') + path.sep)) ? '试验服务' : '';
+function kwConf() {
+  if (Date.now() - kwCfg.at < KW_CFG_MS) return kwCfg.v;
+  let v = parseKeepWarm(), why = '';
+  if (CONFIG_OK) try {
+    const c = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    v = parseKeepWarm(c && typeof c === 'object' && !Array.isArray(c) ? c.keepWarm : undefined);
+  } catch (e) { v = parseKeepWarm(); why = '（读不了或写错：' + e.message + '）'; }
+  const desc = v.on ? `on(空闲 ${v.idleMin}–${v.idleMax} 分、上下文≥${v.minCtx}、连续≤${v.maxRun}${v.chief ? '、总管' : ''}${v.sids.length ? '、另 ' + v.sids.length + ' 个' : ''})` : 'off';
+  if (desc + why !== kwCfg.desc) console.log(`config ${new Date().toISOString()} keepWarm → ${desc}${why}`);
+  kwCfg = { at: Date.now(), v, desc: desc + why }; return v;
+}
+async function watchKeepWarm() {
+  const cf = kwConf();
+  if (!cf.on || kwFiring) return;
+  const chief = chiefNow().sid, live = new Set(sessions.map((x) => x.sid));
+  for (const m of [kwSent, kwWhy]) for (const k of [...m.keys()]) if (!live.has(k)) m.delete(k);
+  const skip = (sid, why) => { if (kwWhy.get(sid) !== why) { kwWhy.set(sid, why); kwLog(sid, 'skip ' + why); } };
+  for (const s of sessions) {
+    if (!((cf.chief && chief && s.sid === chief) || cf.sids.includes(s.sid))) continue;
+    const tr = tracks.get(s.sid); if (!tr) continue;
+    const pre = keepWarmDue(s, tr.st, cf, { now: Date.now(), chief, box: true });   // 别的条件都过了才去读屏幕
+    if (pre !== null) { skip(s.sid, pre); continue; }
+    if (Date.now() - (kwSent.get(s.sid) || 0) < KW_GAP_MS) { skip(s.sid, 'gap'); continue; }
+    const cap = await tmuxFor(s.tmux, ['capture-pane', '-e', '-p', '-t', s.tmux]);   // -e 带颜色：promptEmpty 靠暗色认灰字
+    const box = cap.ok ? promptEmpty(cap.out) : null;
+    const why = keepWarmDue(s, tr.st, cf, { now: Date.now(), chief, box });
+    if (why !== null) { skip(s.sid, why); continue; }
+    const pg = await tmuxFor(s.tmux, ['list-panes', '-s', '-t', s.tmux, '-F', 'P #{pane_in_mode}', ';', 'list-clients', '-t', s.tmux, '-F', 'C #{client_activity}']);
+    const near = pg.ok ? kwPaneGate(pg.out, Date.now() / 1000) : 'tmux-unknown';
+    if (near !== null) { skip(s.sid, near); continue; }
+    scanSessions();                                // 读屏、查 tmux 这一会儿它可能被叫醒了：用最新的登记再过一遍
+    const s2 = sessions.find((x) => x.sid === s.sid), again = s2 ? keepWarmDue(s2, tr.st, cf, { now: Date.now(), chief, box }) : 'gone';
+    if (again !== null) { skip(s.sid, again); continue; }
+    const n = (tr.st.kwN || 0) + 1;
+    kwSent.set(s.sid, Date.now()); kwWhy.delete(s.sid);
+    if (KW_RO || KW_SB) { kwLog(s.sid, `dry n=${n} ctx=${s.ctx} ${KW_RO || KW_SB}`); return; }   // 只读预览、试验服务只记不打（见上面 M3）
+    kwFiring = true;
+    try {
+      const r = await sendTo(s.sid, KW_TEXT);
+      kwLog(s.sid, `fire n=${n} ctx=${s.ctx} ${r.ok ? (r.delivered ? 'delivered' : 'sent-unconfirmed') : 'fail ' + String(r.error || '').replace(/\s+/g, ' ')}`);
+    } finally { kwFiring = false; }
+    return;                                        // 一拍只打一个
+  }
+}
 
 // config 里 org.chief 指向的文件（比如总管窗口自己维护的 state.json）：读 session_id 和 generation，最多每 10 秒读一次。
 // 文件不在、不是 JSON、没有 session_id 都当成「没点名」，org.mjs 就按名字里的总管字样认。不往这个文件里写任何东西。
@@ -2804,19 +3073,20 @@ async function newSession(prompt, cwd, opt = {}) {
   const shown = text;                                 // 卡片上显示的那一份，不带下面附的那段
   const pin = opt.project ? pinnable(opt.project.key, opt.project.name) : null;   // 在哪一列的列头开的；核不过就当右上角开的
   if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;   // 明确指定了别的文件夹（界面上已经没有这一格，接口还认）就不附
-  const name = newName();
+  let name = newName(), cl = null;
   const args = ['-x', '160', '-y', '48', '-c', dir];                // openSession 在它自己那台 tmux 上 new-session -d -s <名字> 加上这些
   if (provider === 'codex') {
     if (!codexBin) return { ok: false, error: '这台机器上没找到 codex 命令' };
     args.push(codexBin); if (model) args.push('-m', model); if (effort) args.push('-c', 'model_reasoning_effort="' + effort + '"');
     if (text) args.push(text);
   } else {
-    const cl = [await findClaude()]; if (model) cl.push('--model', model); if (effort) cl.push('--effort', effort);
+    cl = [await findClaude()]; if (model) cl.push('--model', model); if (effort) cl.push('--effort', effort);
     if (text) cl.push(text);
     args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));   // 没选账号原样不变；选了就在外面包一层读钥匙串的 zsh。Code Mode 套在这一层里面
   }
-  const r = await openSession(name, args);           // 每个窗口一台 tmux（P0-0）
-  if (!r.ok) return r;
+  let r = await openSession(name, args);             // 每个窗口一台 tmux（P0-0）
+  if (r.gone && cl) { args[args.length - cl.length] = await refindClaude(name); name = newName(); r = await openSession(name, args); }   // 一开就退了：重开一次。claude 那段总在 argv 最后（选号的 zsh、Code Mode 的 env 都包在它外面），只换它的路径
+  if (!r.ok) return r.gone ? { ok: false, error: cl ? GONE_MSG : '会话一开就退了' } : r;
   launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });
   if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}${opt.account ? '' : ' default'}`);
   const codeMode = provider === 'claude' && opt.codeMode === true;
@@ -2857,6 +3127,7 @@ async function slowLoop() {
 async function suggestLoop() {
   try { await refreshSuggest(); } catch {}
   try { watchAuto(); } catch (e) { console.error('auto', e); }      // 读完屏幕马上看要不要自动续跑：灰字是它唯一的输入
+  try { await watchKeepWarm(); } catch (e) { console.error('kw', e); }   // 总管空闲快到 1 小时：打一句续上缓存
   setTimeout(suggestLoop, SUGGEST_MS);
 }
 // 各订阅的周额度。Codex 只在 config.json 的 codex 打开时读（和「交给谁」同一个开关）；Claude 永远读，没人取数就是空数组。
@@ -3018,6 +3289,24 @@ const handle = async (req, res, via) => {
       if (devices.get(rem.dev.id) !== rem.dev) { remoteLog(`deny revoked-in-flight ${rem.dev.id} POST ${pathOf(req)}`, 'd:inflight:' + rem.dev.id); return reply(res, 401, { error: 'device', why: 'unknown device' }); }
       const sid8 = (/^[\w-]{1,8}/.exec(typeof body.sid === 'string' ? body.sid : '') || [''])[0];   // 只取字母数字横杠：正文里的换行不能伪造日志行
       remoteLog(`act ${rem.dev.id} ${rem.login} POST ${pathOf(req)}${sid8 ? ' ' + sid8 : ''}`);   // 远程做了什么留一行（不记正文）
+    }
+    if (rem && u.pathname === '/api/remote/push') {
+      const d = rem.dev;
+      const { token, env } = body;
+      if (token !== null && !pushToken(token)) return reply(res, 400, { ok: false, error: 'bad token' });
+      if (token !== null && !pushEnv(env)) return reply(res, 400, { ok: false, error: 'bad env' });
+      let changed = false;
+      if (token === null) { if (d.push) { delete d.push; changed = true; } }
+      else {
+        for (const other of devices.values()) if (other !== d && other.push?.token === token) { delete other.push; changed = true; }
+        if (d.push?.token !== token || d.push?.env !== env) { d.push = { token, env, at: Date.now() }; changed = true; }
+      }
+      if (!changed) return reply(res, 200, { ok: true });
+      const se = saveDevices();
+      if (token !== null) {
+        pushLog(`token ${d.id} ${env} ${token.slice(0, 8)}`);
+      } else pushLog(`token ${d.id} cleared`);
+      return reply(res, se ? 500 : 200, se ? { ok: false, error: 'save' } : { ok: true });
     }
     if (rem && u.pathname === '/api/remote/claim') {  // 手机打开配对链接：一次性的码换成这台设备自己的凭证。核对和作废之间没有 await
       const now = Date.now(), r = useCode(pairing, body.code, now);

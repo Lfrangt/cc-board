@@ -26,6 +26,23 @@ export const JUDGE_PROMPT = [
 ].join('\n');
 
 // claude -p 的参数：不读任何设置文件（没有 hook、插件、CLAUDE.md、MCP），不带工具，不存会话，用最小的模型
+// 小模型那一下没答出来时，原因是什么。claude -p --output-format json 失败时 stderr 常是空的（node 的 err.message 只剩「Command failed: 命令行」），
+// 真原因在 stdout 那份 json 的 result 里。判官的号额度用完时，judge 一直失败，日志每行却只有命令行（judge 换号）。
+// 返回 kind：'quota'（额度用完 / 限流：429 或 result 里那几句）、'error'（别的失败）、null（命令成功、也不是 is_error：那是答非所问）；text：一句原因
+const QUOTA_RE = /weekly limit|usage limit|limit reached|hit your [\w ]{0,20}limit|out of (usage )?credits|rate.?limit/i;
+export function failReason(r) {
+  let j = null; try { j = JSON.parse(String(r.out || '')); } catch {}
+  const flat = (s) => String(s || '').replace(/\s+/g, ' ').trim();   // 先拿全文认额度，再截 160 字（额度那句可能在长 stderr 后面，审查 #4a）
+  if (j && typeof j === 'object' && j.is_error === true) {
+    const full = flat(j.result || j.api_error || ('api_error ' + (j.api_error_status || '')));
+    return { kind: j.api_error_status === 429 || QUOTA_RE.test(full) ? 'quota' : 'error', text: full.slice(0, 160) };
+  }
+  if (r.ok) return { kind: null, text: '' };
+  const full = flat(r.err);
+  // stderr 空时 run() 给的是 node 的「Command failed: 整条命令行」：命令行里有系统提示、包了号以后还有 zsh 脚本，没用，换成一句话（审查 #4c）
+  return { kind: QUOTA_RE.test(full) ? 'quota' : 'error', text: /^Command failed: /.test(full) ? '命令退出、没有输出（也可能是超时）' : full.slice(0, 160) };
+}
+
 export function judgeArgs(model = 'haiku') {
   return ['-p', '--model', model, '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--disable-slash-commands',
     '--no-session-persistence', '--output-format', 'json', '--system-prompt', JUDGE_PROMPT];

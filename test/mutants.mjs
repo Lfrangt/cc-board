@@ -1,11 +1,11 @@
 /**
  * [INPUT]: 依赖 ../server.mjs、../preview.mjs、../autopilot.mjs、../remote.mjs 的原文（按字符串精确替换造改坏版）和 ./state.test.mjs。分组规则本身（projects.mjs）的改坏对照不在这里，跑 projects.test.mjs --mutants
- * [OUTPUT]: 每个改坏版变红了几条；有一个没变红就退出码 1
+ * [OUTPUT]: 每个改坏版（含 APNs 接线与空闲门）变红了几条；有一个没变红就退出码 1
  * [POS]: test/ 的「测试自己靠不靠得住」检查：每次只改坏服务的一处规则，state.test.mjs 必须变红。
  *        diff-* 验证逐笔补丁的轮首、扫描终点、工具筛选、安全门和应答上限。
  *        改坏版仍带着试验场保护（不碰 Ghostty、不发通知）。要替换的原文在 server.mjs 里找不到或不唯一时直接报错，免得悄悄没改成。
  *        架构历任那一批的 9 个改坏版（历任、裁剪、启动恢复），完整套件逐个运行。
- * [PROTOCOL]: Update this header on change, then check CLAUDE.md
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 // 用法：node test/mutants.mjs        （全部改坏版，一次跑 4 个，约 7 分钟）；node test/mutants.mjs 名字,名字 只跑这几个
 import fs from 'node:fs'; import path from 'node:path'; import { spawn } from 'node:child_process';
@@ -41,6 +41,20 @@ const MUTANTS = {
   // 架构历任那一批评审时的必改第 2 条：名单里的前任进程不走名字兜底。
   'org-past-name-fallback': ["  if (hs) return live.some((x) => x.sid === hs) ? hs : null;\n", ""],
 
+  // APNs 接线：每个单独走轻道，不能用整批并行入口。
+  'push-idle-ignored': ["else if (pushReady()) {", "else if (false) {"],
+  'push-idle-unknown-away': ["return null; // 空闲未知时不额外放行", "return 180000; // 改坏：空闲未知也放行"],
+  'push-idle-threshold-flipped': ["idleMs >= PUSH_AWAY_MS", "idleMs < PUSH_AWAY_MS", 'remote.mjs'],
+  'push-bad-path': ["':path': '/3/device/' + token,", "':path': '/wrong/device/' + token,"],
+  "push-ignores-ui": ["if (would === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));\n  else if (pushReady()) {\n    const idleMs = await readHidIdleMs();\n    if (pushWould(Date.now() - uiFocusAt, idleMs) === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));\n  }", "void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));"],
+  "push-without-config": ["const APNS = CONFIG.apns;", "const APNS = CONFIG.apns.on ? CONFIG.apns : { on: true, keyId: 'ABCDE12345', teamId: 'ZXCVB12345', topic: 'dev.example.remote' };"],
+  "push-revoke-keeps-token": ["devices.delete(id); devSeen.delete(id);", "if (!d.push) devices.delete(id); devSeen.delete(id);"],
+  "push-410-kept": ["delete d.push; saveDevices();", "saveDevices();"],
+  "push-network-retries": ["const r = await apnsRequest(host, token, jwt, payload);", "let r = await apnsRequest(host, token, jwt, payload); if (r.verdict === 'err') r = await apnsRequest(host, token, jwt, payload);"],
+  "push-token-in-log": ["${token.slice(0, 8)}`);\n      } else", "${token}`);\n      } else"],
+  "push-token-duplicate": ["if (other !== d && other.push?.token === token) { delete other.push; changed = true; }", "if (false) { delete other.push; changed = true; }"],
+  "push-local-registers": ["if (rem && u.pathname === '/api/remote/push') {\n      const d = rem.dev;", "if (u.pathname === '/api/remote/push') {\n      const d = rem ? rem.dev : devices.values().next().value;"],
+  "push-readonly-off": ["const READONLY = process.env.CCBOARD_READONLY === '1';", "const READONLY = process.env.CCBOARD_READONLY === '1' && !(() => { try { return parseApns(JSON.parse(fs.readFileSync(path.join(DATA, 'config.json'), 'utf8')).apns).on; } catch { return false; } })();"],
   // 每个窗口一台 tmux / 一起退出 / 全部接回（P0-0，win-bf）。tmux 那几个不许写回 -L：perwindow-shared 是退回到老的 -S tmux.sock
   "perwindow-shared": ["  const sv = await startServer(name);\n", "  const sv = { sock: TMUX_SOCKET, watched: false };\n"],
   "enum-legacy-only": ["  const socks = [TMUX_SOCKET, ...winSocks()];", "  const socks = [TMUX_SOCKET];"],
@@ -70,6 +84,18 @@ const MUTANTS = {
   'tmux-env-not-scrubbed': ["  fastLoop(); slowLoop(); suggestLoop(); limitsLoop(); scrubTmuxEnv();", "  fastLoop(); slowLoop(); suggestLoop(); limitsLoop();"],
   // 被测服务不认 CCBOARD_TMUX_SOCKET（11/16 两次全体崩溃的修复）。故意指向一个不存在的 -S 套接字，不写回 -L ccboard：改坏版本身不能把隐患带回来
   'tmux-socket-ignored': ["const TMUX_SOCKET = (SANDBOX && process.env.CCBOARD_TMUX_SOCKET) || path.join(HOME, '.cc-board', 'tmux.sock');", "const TMUX_SOCKET = '/dev/null/ccb-mutant.sock';"],
+  'kw-turn-counts': ["      if (isKeepWarm(text)) { if (st.open) return; st.inKw = true; st.kwAt = d.timestamp;", "      if (false && isKeepWarm(text)) { if (st.open) return; st.inKw = true; st.kwAt = d.timestamp;"],   // 11/20 总管保温（win-99）
+  'kw-reply-delivers': ["      if (st.inKw) {                                         // 保温那一轮的回复", "      if (false) {                                         // 保温那一轮的回复"],   // 11/20 总管保温（win-99）
+  'kw-startup-logs-off': ["let kwCfg = { at: 0, v: parseKeepWarm(), desc: 'off' }", "let kwCfg = { at: 0, v: parseKeepWarm(), desc: '' }"],   // 11/20 总管保温（win-99）
+  // 11/21 1b 审查后（win-99）：只读闸、试验服务闸、他正对着窗口（copy-mode / 分屏）、config 的 on:false 和拼错的键、收尾清 in-kw、插在一轮中间不认。都由 [7s] / [7s-2] 抓
+  'kw-readonly-fires':   ["const KW_RO = READONLY ? '只读' : '';", "const KW_RO = '';"],
+  'kw-sandbox-fires':    ["const KW_SB = SANDBOX && !(", "const KW_SB = false && !("],
+  'kw-pane-gate-off':    ["    if (near !== null) { skip(s.sid, near); continue; }", "    void near;"],
+  'kw-on-false-ignored': ["const out = { ...KW_DEF, on: v.on !== false, sids: [] };", "const out = { ...KW_DEF, on: true, sids: [] };", 'autopilot.mjs'],
+  'kw-odd-key-ok':       ["  if (odd.length) throw new Error('keepWarm 里有不认识的键：' + odd.join('、'));\n", "", 'autopilot.mjs'],
+  'kw-endturn-stays':    ["        if (m.stop_reason === 'end_turn' || m.stop_reason === 'stop_sequence') st.inKw = false;", "        if (false) st.inKw = false;"],
+  'kw-midturn-taken':    ["{ if (st.open) return; st.inKw = true;", "{ st.inKw = true;"],
+  'kw-turns-midturn':    ["if (isKeepWarm(text)) { if (!open) kw = true; return; }", "if (isKeepWarm(text)) { kw = true; return; }"],
   'peek-clears':         ["      if (peek) out.peek = true; else notices = [];", "      if (peek) out.peek = true; notices = [];"],
   'tidy-keeps-all':      ["return { keep: false, why: '只聊了几句，没改过文件' };", "return { keep: true, why: '只聊了几句，没改过文件' };"],
   'tidy-drop-not-moved': ["    if (r.ok && cur.drop) { dropArchived(sid, cur); return; }", "    if (false) { dropArchived(sid, cur); return; }"],
@@ -105,7 +131,7 @@ const MUTANTS = {
   'codex-new-off':       ["  if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };\n  const provider", "  const provider"],
   'codex-listed-off':    ["...(CONFIG.codex ? { codex:", "...(true ? { codex:"],
   'codex-pane-pending':  ["    if (agents[pane.name] && !CONFIG.codex) continue;", ""],
-  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto, remote: parseRemote(c.remote) };", "    return def;"],
+  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return def;"],
   'limits-codex-ungated': ['codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null', 'codex: codexLimits(CODEX_HOME, now)'],
   'limits-not-in-state': ['sandbox: SANDBOX, limits: LIMITS };', 'sandbox: SANDBOX };'],
   'account-not-wrapped': ['    args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));', '    args.push(...(opt.codeMode === true ? withCodeMode(cl) : cl));'],   // 11/17 Code Mode：这一行多了套 /usr/bin/env 那一层，原文跟着改
@@ -129,8 +155,8 @@ const MUTANTS = {
   'suggest-plain-screen': ["['capture-pane', '-p', '-e', '-t', s.tmux]", "['capture-pane', '-p', '-t', s.tmux]"],
   'suggest-stale-kept':  ["  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);", ""],
   // 自动收工（autoTidy）：每一道守卫、每一条线、两个开关，各有一个改坏版
-  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], defaultAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote() };"],
-  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto, remote: parseRemote(c.remote) };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, org, auto, remote: parseRemote(c.remote) };"],
+  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };"],
+  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };"],
   // 'auto-ignores-focus' 11/17 car5 换成 tidy-archives-watching（他看着时小模型照问，只把「收」推后）
   'auto-acts-in-readonly': ["      if (READONLY) { const k = s.sid + '@' + s.resultAt;", "      if (false) { const k = s.sid + '@' + s.resultAt;"],
   'auto-stale-mark':     ["if (need === 'review' && p && p.at === String(s.resultAt) &&", "if (need === 'review' && p && true &&"],
@@ -188,7 +214,7 @@ const MUTANTS = {
   // 收之前看一眼（tidyJudge，11/15 win-2b）：[4d] 必须抓到
   'judge-review':        ["  else if (need === 'fyi' && quiet >= TIDY_SMART_MS && judgeOn()) d =", "  else if ((need === 'fyi' || need === 'review') && quiet >= TIDY_SMART_MS && judgeOn()) d ="],   // 11/17 car5 起这一行改成先定线再统一问
   'judge-reask': ["  if (!j || j.at !== String(s.resultAt)) return { line: 'judge', from: d.line };", "  if (!j || j.at !== String(s.resultAt) || !j.v) return { line: 'judge', from: d.line };"],
-  'judge-fail-as-done': ["  judged.set(s.sid, { at, v, failAt: v ? 0 : Date.now(), owed: next, seen: Date.now() });", "  judged.set(s.sid, { at, v: v || { verdict: 'done', ask: null, why: '' }, failAt: 0, owed: next, seen: Date.now() });"],
+  'judge-fail-as-done': ["  judged.set(s.sid, { at, v, failAt: v ? 0 : Date.now(), quota: !v && quota, failWhy: !v && quota ? failWhy : '', owed: next, seen: Date.now() });", "  judged.set(s.sid, { at, v: v || { verdict: 'done', ask: null, why: '' }, failAt: 0, quota: false, failWhy: '', owed: next, seen: Date.now() });"],
   // 'judge-waiting-closes' 11/17 car5 拿掉：waiting 先被 hold 挡住，smart 线那一句只剩防竞态（判 yours 的回答到了、卡片还没改成待跟进的那一拍），改了也测不出来
   'judge-yours-hidden':  ["  for (const o of out) { applyJudged(o); applyAuto(o); }\n", "  for (const o of out) { applyAuto(o); }\n"],
   // 自动续跑的接线（11/16 win-60）：纯函数（autopilot.mjs）的改坏对照在 autopilot.test.mjs --mutants，这里只改坏服务接它的地方；[7e-2] 必须抓到
@@ -390,6 +416,12 @@ const MUTANTS = {
   "eta-codex-message-ignored": ["if (st.busy) { st.note = text; st.noteAt = d.timestamp; } const eta = etaIn(text); if (eta) st.eta = { at: d.timestamp, mins: eta }; }", "if (st.busy) { st.note = text; st.noteAt = d.timestamp; } }"],
   "eta-not-exported": ["      eta: st.eta || null,                                // 它自己报的预计", "      eta: null,                                // 它自己报的预计"],
   "eta-codex-not-exported": ["codeMode: false, eta: st.eta || null };", "codeMode: false, eta: null };"],
+  // 11/18 新开的会话一开就退了（[7r]）：开完不再多看那一会儿（晚一点退的那种 has-session 早过了的看不出来）、新任务不重开、两次都退还问套接字、重开前不重新找 claude
+  'launch-no-settle':      ["  const settle = Date.now() + SETTLE_MS;", "  const settle = 0;"],
+  'launch-no-respawn':     ["  if (r.gone && cl) { args[args.length - cl.length]", "  if (false) { args[args.length - cl.length]"],
+  'launch-gone-says-socket': ["const GONE_MSG = '会话一开就退了（claude 可能正在更新），重开一次也没起来，过一会儿再试';", "const GONE_MSG = 'tmux 没开出会话（套接字目录 ' + TMUX_DIR + ' 还在吗？）';"],
+  'launch-cached-claude':  ["  await sleep(RESPAWN_MS); claudeBin = null;", "  await sleep(RESPAWN_MS);"],
+  'launch-gone-midexit':   ["|server exited unexpectedly|no current target/;", "/;"],   // [7r] 关到一半（11/19）：has-session 回这两句也算一开就退
 };
 for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边

@@ -24,6 +24,8 @@ if (process.argv.includes('--mutants')) {
     'earlier-not-defanged': ["|title|earlier_followup)\\b", "|title)\\b"],   // 11/17 car5：之前那次交付里自带的 </earlier_followup> 不拆
     'head-not-tail':       ["'…' + body.slice(-MAX_TEXT)", "body.slice(0, MAX_TEXT) + '…'"],
     'no-clean':            ["\\u{e007f}]/gu, ' ')", "\\u{e007f}]/gu, (c) => c)"],
+    'quota-ignored':       ["j.api_error_status === 429 || QUOTA_RE.test(full) ? 'quota' : 'error'", "'error'"],   // 11/20 judge 换号：429 不单独认
+    'stdout-ignored':      ["if (j && typeof j === 'object' && j.is_error === true) {", 'if (false) {'],            // 只看 stderr：真原因丢了（11/20 那 21 小时的样子）
     'quiz-counts':         ['回复结尾为了教他而请他用自己的话讲一个知识点、或考他一个词，也不算 yours（那是练习，不是要他定的事）。', ''],
   };
   let bad = 0;
@@ -86,6 +88,24 @@ for (const [x, name] of [['', '空输出'], ['not json', '外层不是 JSON'], [
 const dirty = p(out({ verdict: 'yours', ask: '选\u0000 A‮ 还是\n B' + '很'.repeat(200), why: 'w​' }));
 ok(dirty && !/[\u0000-\u001f‮​]/.test(dirty.ask + dirty.why) && dirty.ask.startsWith('选 A 还是 B') && dirty.ask.length <= 90 && dirty.why === 'w', '控制字符、方向字符、零宽去掉，ask 最长 90 字（它会显示在卡片上）', JSON.stringify(dirty));
 ok(J.VERDICTS.join() === 'done,waiting,yours', '答案恰好三种');
+
+// failReason（11/20 judge 换号）：命令失败时的真原因。第一条是 11/20 23:0x 拿服务的参数原样复现时 claude -p 的输出（字段照抄，退出码 1、stderr 空）
+const F = J.failReason, CMDLINE = 'Command failed: /usr/local/bin/claude -p --model haiku --setting-sources  --strict-mcp-config --tools';
+const real429 = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, api_error_status: 429, terminal_reason: 'api_error', result: "You've hit your weekly limit · resets Jan 5 at 9am (America/Los_Angeles) · out of usage credits" });
+const fq = F({ ok: false, out: real429, err: CMDLINE });
+ok(fq.kind === 'quota' && fq.text.startsWith("You've hit your weekly limit · resets Jan 5") && !/Command failed/.test(fq.text), '11/20 真拿到的 429：认成 quota，原因取 json 的 result，不是命令行', JSON.stringify(fq));
+ok(F({ ok: false, out: JSON.stringify({ is_error: true, api_error_status: 429 }), err: '' }).kind === 'quota', '只有 429、没写 result：也是 quota');
+const fe = F({ ok: false, out: JSON.stringify({ is_error: true, api_error_status: 401, result: 'Invalid API key ·  Please run /login' }), err: CMDLINE });
+ok(fe.kind === 'error' && fe.text === 'Invalid API key · Please run /login', '别的 API 错（401）：error，原因取 result、空白压成一个', JSON.stringify(fe));
+ok(JSON.stringify(F({ ok: false, out: '', err: 'boom' })) === JSON.stringify({ kind: 'error', text: 'boom' }), '不是 json、stderr 有字：error，原因是 stderr');
+ok(F({ ok: false, out: '', err: 'API Error: 429 rate limit exceeded' }).kind === 'quota', 'stderr 里写着限流：quota');
+ok(F({ ok: false, out: '', err: '钥匙串里没有这个账号的 token（friend）' }).kind === 'error', '读不到 token（后台包法退 45）：error，不是 quota');
+ok(JSON.stringify(F({ ok: true, out: out('我觉得可以关'), err: '' })) === JSON.stringify({ kind: null, text: '' }), '命令成功、不是 is_error：kind 是 null（那是答非所问，不是失败）');
+ok(F({ ok: false, out: JSON.stringify({ is_error: true, result: '很'.repeat(400) }), err: '' }).text.length === 160, '原因最长 160 字（会写进日志和卡片）');
+ok(F({ ok: true, out: real429, err: '' }).kind === 'quota' && F({ ok: true, out: JSON.stringify({ is_error: true, result: 'Invalid API key' }), err: '' }).kind === 'error', '命令退出码是 0、json 却是 is_error：照样按 json 分 quota / error，不当成答非所问');
+ok(F({ ok: false, out: '', err: 'x'.repeat(300) + ' You have hit your 5-hour limit reached' }).kind === 'quota', '额度那句在长 stderr 后面（截短以后看不到）：照样认出 quota');
+const fc = F({ ok: false, out: '', err: CMDLINE + ' --system-prompt 你是判官' });
+ok(fc.kind === 'error' && fc.text === '命令退出、没有输出（也可能是超时）', 'stderr 空、只剩 node 的「Command failed: 命令行」：换成一句话，不把命令行和系统提示写进日志', JSON.stringify(fc));
 
 console.log('\n' + pass + ' 项过，' + fail + ' 项失败');
 process.exit(fail ? 1 : 0);

@@ -1,10 +1,10 @@
 /**
- * [INPUT]: 只用 node:crypto。调用方（server.mjs）给 config.json 的 remote 值、请求头、设备表、配对码槽。
- * [OUTPUT]: 导出 parseRemote()、gate()、proxied()、allowed()、REMOTE_API、checkDevice()、newCode()、useCode()、newDevice()、loadDevices()、devName()、PAIR_HTML、PAIR_MS。
+ * [INPUT]: 只用 node:crypto。服务传入 remote / apns 配置、设备表、请求头、通知类别和签名密钥对象。
+ * [OUTPUT]: 导出远程准入与配对规则；APNs 配置、锁屏类别与签名规则；parseHidIdle()、pushWould() 和 PUSH_AWAY_MS 定空闲放行规则。
  * [POS]: 手机远程（经 tailscale serve 进来，11/17 Khalil 14:13 要的最小版）的三道拦：从哪个端口来、认哪些 Host、远程能碰哪些接口、凭证对不对。
  *        这里只有规则，不起进程、不读写文件（读写设备表、记日志在 server.mjs），所以 test/remote.test.mjs 能直接断言。
  *        总控台的窗口都是 --dangerously-skip-permissions：能发话 = 能在这台机器上跑任意命令。所以每一道都是「认不出就拒」，没有落到放行的分支。
- * [PROTOCOL]: Update this header on change, then check CLAUDE.md
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import crypto from 'node:crypto';
 
@@ -15,6 +15,50 @@ const TS_HOST = new RegExp(`^(?=.{1,253}(?::|$))${LABEL}(?:\\.${LABEL})*\\.ts\\.
 const LOGIN = /^[^\s,\x00-\x1f\x7f]{1,200}$/;               // Tailscale-User-Login：邮箱或 名字@github；同名头出现两次 node 会用「, 」连起来，带逗号 / 空白的一律不认
 const SECRET = /^[A-Za-z0-9_-]{43}$/;                        // 32 字节随机数的 base64url
 const HEX64 = /^[0-9a-f]{64}$/;
+const APNS_ID = /^[A-Z0-9]{10}$/;
+const APNS_TOPIC = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const PUSH_TOKEN = /^[0-9a-f]{64,200}$/;
+export const PUSH_AWAY_MS = 120000;
+export function parseHidIdle(text) {
+  const match = typeof text === 'string' ? text.match(/"HIDIdleTime" = (\d+)(?=\s|$)/m) : null;
+  const ms = match ? Math.floor(Number(match[1]) / 1e6) : NaN;
+  return Number.isSafeInteger(ms) ? ms : null;
+}
+export function pushWould(focusAgoMs, idleMs) {
+  return focusAgoMs >= 6000 || (idleMs != null && idleMs >= PUSH_AWAY_MS) ? 'sent' : 'ui';
+}
+
+// ───────────── APNs 规则：配置只给标识，载荷只取类别与会话号 ─────────────
+export function parseApns(v) {
+  const off = (why) => ({ on: false, why });
+  if (v === undefined) return off('');
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return off('apns 要是对象');
+  for (const k of ['keyId', 'teamId']) if (typeof v[k] !== 'string' || v[k].length !== 10 || !APNS_ID.test(v[k])) return off('apns.' + k + ' 要是 10 位大写字母数字');
+  if (typeof v.topic !== 'string' || v.topic.length > 200 || !APNS_TOPIC.test(v.topic)) return off('apns.topic 要是 200 字以内的包标识');
+  if (v.topic !== v.topic.trim()) return off('apns.topic 不能带空白');
+  return { on: true, keyId: v.keyId, teamId: v.teamId, topic: v.topic, why: '' };
+}
+export const pushToken = (v) => typeof v === 'string' && PUSH_TOKEN.test(v) && v === v.trim();
+export const pushEnv = (v) => v === 'sandbox' || v === 'production';
+const validPush = (v) => v && pushToken(v.token) && pushEnv(v.env) && Number.isSafeInteger(v.at) && v.at >= 0;
+export function pushPayload(items) {
+  const keys = { __proto__: null, reply: 'PUSH_REPLY_ONE', ask: 'PUSH_ASK_ONE', crash: 'PUSH_CRASH' };
+  const waits = items.filter((x) => x.kind === 'reply' || x.kind === 'ask').length;
+  const key = items.length === 1 ? keys[items[0].kind] || 'PUSH_STOP_ONE' : waits === items.length ? 'PUSH_WAIT_MANY' : waits ? 'PUSH_MIXED_MANY' : 'PUSH_STOP_MANY';
+  const alert = { 'loc-key': key, ...(items.length > 1 ? { 'loc-args': [String(items.length)] } : {}) };
+  const sid = items.length === 1 && typeof items[0].sid === 'string' && /^[\w-]{8,64}$/.test(items[0].sid) && items[0].sid === items[0].sid.trim() ? items[0].sid : '';
+  return { aps: { alert, sound: 'default', 'thread-id': 'cc-board' }, ...(sid ? { sid } : {}) };
+}
+export function apnsJwt(keyObject, keyId, teamId, nowSec) {
+  const enc = (v) => Buffer.from(JSON.stringify(v)).toString('base64url');
+  const input = enc({ alg: 'ES256', kid: keyId }) + '.' + enc({ iss: teamId, iat: nowSec });
+  return input + '.' + crypto.sign('sha256', Buffer.from(input), { key: keyObject, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+}
+export function apnsVerdict(status, reason) {
+  if (status === 200) return 'ok';
+  if (status === 410 || (status === 400 && (reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic'))) return 'drop';
+  return 'err';
+}
 
 // ───────────── config.json 的 remote ─────────────
 // { "on": true, "hosts": ["mini.tailXXXX.ts.net"] } 才算开。没有这个键、false、写错（类型不对、on 不是 true、任何一个名字不像 *.ts.net）一律关，
@@ -60,7 +104,7 @@ export function gate(h, R, method, via) {
 // 只给看和说话：状态、对话、发话、答选择框、开新任务、知道了、审完了、归档。删除、打开 / 选中文件、聚焦、去终端、选文件框、
 // 自动续跑、一起退出、上传、预览、接回、取消、配对管理本身……不在表里的一律拒。按「方法 + 路径」整串查，不做前缀匹配。
 export const REMOTE_API = new Set(['GET /api/state', 'GET /api/turns', 'GET /api/archive',
-  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive']);
+  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push']);
 export const allowed = (method, pathname) => REMOTE_API.has(method + ' ' + pathname);
 
 // ───────────── 第三道：这台设备的凭证 ─────────────
@@ -108,7 +152,9 @@ export function loadDevices(text) {
   try { j = JSON.parse(text); } catch { return out; }
   for (const d of (j && Array.isArray(j.devices) ? j.devices : [])) {
     if (!d || typeof d.id !== 'string' || !/^[0-9a-f]{16}$/.test(d.id) || typeof d.hash !== 'string' || !HEX64.test(d.hash) || typeof d.login !== 'string' || !LOGIN.test(d.login)) continue;   // 数组会被正则转成字符串，先核类型
-    out.set(d.id, { id: d.id, name: devName(d.name), login: d.login, hash: d.hash, at: Number(d.at) || 0 });
+    const dev = { id: d.id, name: devName(d.name), login: d.login, hash: d.hash, at: Number(d.at) || 0 };
+    if (validPush(d.push)) dev.push = { token: d.push.token, env: d.push.env, at: d.push.at };
+    out.set(d.id, dev);
   }
   return out;
 }

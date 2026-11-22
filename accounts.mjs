@@ -59,6 +59,14 @@ export function wrapLaunch(account, argv) {
   if (!account) return argv;
   return ['/bin/zsh', '-fc', SCRIPT, 'ccboard', SECURITY, SERVICE_PREFIX + account.id, account.id, ...argv];
 }
+// 后台调用（判官 judge、自动续跑的小模型）用同一个包法，只是读不到 token 时马上退（码 45）、原因写 stderr：
+// 窗口那一版会在屏幕上停 2 分钟给人看，后台调用照搬就白等到 90 秒超时（11/20 judge 换号）
+const SCRIPT_BG = SCRIPT.replace('print -u2 "总控台：钥匙串里没有这个账号的 token（$CCBOARD_ACCOUNT）。窗口 2 分钟后关闭。"; sleep 120; exit 1', 'print -u2 "钥匙串里没有这个账号的 token（$CCBOARD_ACCOUNT）"; exit 45');
+if (SCRIPT_BG === SCRIPT) throw new Error('accounts.mjs：SCRIPT_BG 没换掉等 2 分钟那一句');
+export function wrapBackground(account, argv) {
+  if (!account) return argv;
+  return ['/bin/zsh', '-fc', SCRIPT_BG, 'ccboard', SECURITY, SERVICE_PREFIX + account.id, account.id, ...argv];
+}
 
 // 默认那一项写成「默认（当前登录 ben…）」：从 ~/.claude.json 取邮箱的前 3 个字符，界面只给这么多
 export function loginLabel(home) {

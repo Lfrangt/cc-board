@@ -2,7 +2,8 @@
  * [INPUT]: 依赖 ./limits.mjs 的 tapWindows（状态栏取数文件里的 rate_limits 怎么读）。不读文件、不起进程、不联网。
  *          server.mjs 把会话快照、这个会话的取数文件内容、各号的额度汇总、命令输出交进来。
  * [OUTPUT]: 导出 AUTO_MARK、AUTO_TEXT、AUTO_PROMPT、AUTO_VERDICTS、AUTO_DEF、SELF_WHY、parseAutoConfig()、autoArgs()、autoInput()、parseAuto()、
- *           hardStop()、autoMessage()、isAutoPrompt()、autoBlock()、quotaHold()
+ *           hardStop()、autoMessage()、isAutoPrompt()、autoBlock()、quotaHold()；
+ *           总管保温（11/20 khalil-99；11/21 1b 审查后加 KW_QUIET_S、kwPaneGate()）：KW_MARK、KW_TEXT、isKeepWarm()、KW_DEF、parseKeepWarm()、keepWarmDue()、KW_QUIET_S、kwPaneGate()
  * [POS]: 「自动续跑」的纯函数部分（11/16 khalil-97）。Khalil 11/16 11:09：「它这个 Tab 的决策就挺好的，那你为什么还要让我去点这个 Tab？
  *        你不能让它直接自己实现继续跑吗？……总管们应该持续帮我继续跟进，而不是让我主动去催你们」。
  *        一个窗口交付完、输入框里有它预判的下一步（灰字），这里回答：能不能替他发、要不要先问小模型、问的话怎么问、答案怎么认。
@@ -12,6 +13,7 @@
  *        11/17 修法（cc-board-9e 转来、总管 khalil-b4 批，起因见 autoBlock 和 SELF 两处的注释）：只有无需处理（fyi）的交付够格；
  *        灰字替他下结论、放行的不发；发出去的是固定的 AUTO_TEXT，灰字只当判断材料，一个字都不进终端。
  *        重开前 ①（11/17 总管批，cc-board-9e 转来）：替他下结论、放行的灰字从 yours 改成 never，只是不发、卡片不动，卡片上写原因（SELF_WHY）。
+ *        总管保温（文件末尾）：空闲快到 1 小时、上下文够大时，给总管打一句固定的短话续上缓存；什么时候打在 server.mjs 的 watchKeepWarm。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 import { tapWindows } from './limits.mjs';
@@ -161,5 +163,88 @@ export function quotaHold(tap, entries, now, { weekMax, fiveMax }) {
   }
   if (five != null && five >= fiveMax) return '这个号 5 小时额度用了 ' + Math.round(five) + '%';
   if (week != null && week >= weekMax) return '这个号周额度用了 ' + Math.round(week) + '%';
+  return null;
+}
+
+// ── 总管保温（11/20 khalil-99；Khalil 23:01「保温……直接做出来」）──
+// 为什么：Fable 的缓存读是新输入的 1/40，缓存过期以后整段重写是 2 倍。常驻的总管窗口常常隔一两个小时才被叫醒一次，每次醒来都整段重写一遍，
+// 积少成多是一笔不小的开销。缓存读一次就会重新计时，
+// 所以空闲快到 1 小时时给它打一句固定的短话、让它只回一个点，续上缓存。读一遍 20 万约 $0.04，比过期重写（约 $3.2）便宜得多。
+// 这一轮不是他本人的话、也不是交付：server.mjs 的 apply() 认出 KW_MARK 开头的那条以后整轮跳过（卡片的话、交付、状态行、未读都不动），
+// aichat 不记进群聊，wake-gate 整轮放行、不交出攒着的知会（这两处也只认开头的 KW_MARK）。
+export const KW_MARK = '【总控台保温】';
+export const KW_TEXT = KW_MARK + '（不是 Khalil 本人，也不是别的窗口）只为续上缓存：只回一个点「·」，不调工具，不写状态行；别的事留到下一条真消息再做';
+export const isKeepWarm = (t) => String(t || '').trimStart().startsWith(KW_MARK);
+
+// config.json 的 keepWarm：true = 用默认值打开；对象 = 改其中几项，on 不写当开、"on": false 是关；false / 不写 = 关。
+// 写错就抛（server.mjs 接住，按关处理、日志写一行）：不认识的键（拼错的 idlemin、别处抄来的 enabled）、类型不对、超出范围都算写错，不悄悄吞掉（11/21 1b 审查 M2）。
+// idleMin / idleMax：离上一次用到缓存（最近一条记录或上一次保温）多少分钟以内才保温。缓存 1 小时过期，过了 idleMax 再打只会整段重写，不打。
+// minCtx：上下文小于它不保温（刚压缩完 8–9 万，重写一次也就一块多，不值得）。
+// maxRun：他和别的窗口都没说话，最多连着保温几次。4 次约 4.5 小时；过夜 8–10 小时要保 10 次，和醒来重写一次差不多，让它过期（报告第 1 条）。
+// chief：org.chief 点名的总管保温；sids：另外点名的会话号（测试窗口用）。
+export const KW_DEF = { on: false, idleMin: 50, idleMax: 57, minCtx: 100000, maxRun: 4, chief: true, sids: [] };
+const KW_KEYS = new Set(Object.keys(KW_DEF));
+export function parseKeepWarm(v) {
+  if (v === undefined || v === false) return { ...KW_DEF, sids: [] };
+  if (v === true) return { ...KW_DEF, on: true, sids: [] };
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('keepWarm 要是 true、false 或一个对象');
+  const odd = Object.keys(v).filter((k) => !KW_KEYS.has(k));
+  if (odd.length) throw new Error('keepWarm 里有不认识的键：' + odd.join('、'));
+  if ('on' in v && typeof v.on !== 'boolean') throw new Error('keepWarm.on 要是 true 或 false');
+  const out = { ...KW_DEF, on: v.on !== false, sids: [] };
+  for (const [k, lo, hi] of [['idleMin', 1, 59], ['idleMax', 1, 59], ['minCtx', 0, 2000000], ['maxRun', 1, 20]]) if (k in v) {
+    if (!Number.isInteger(v[k]) || v[k] < lo || v[k] > hi) throw new Error(`keepWarm.${k} 要是 ${lo}–${hi} 的整数`);
+    out[k] = v[k];
+  }
+  if (out.idleMin >= out.idleMax) throw new Error('keepWarm.idleMin 要小于 idleMax');
+  if ('chief' in v) { if (typeof v.chief !== 'boolean') throw new Error('keepWarm.chief 要是 true 或 false'); out.chief = v.chief; }
+  if ('sids' in v) {
+    if (!Array.isArray(v.sids) || !v.sids.every((x) => typeof x === 'string' && /^[0-9a-f-]{36}$/.test(x))) throw new Error('keepWarm.sids 要是会话号的列表');
+    out.sids = [...v.sids];
+  }
+  return out;
+}
+
+// 现在要不要给这个会话保温：null = 要；否则是不保温的原因（只记日志，不上卡片）。
+// s：/api/state 里的会话（sid、channel、provider、status、ask、alert、halt、ctx）；k：这个会话扫描出来的保温记账（lastAt 最近一条真记录、kwAt 上一次保温、kwN 连着几次、kwErr 上一次保温报错）；
+// cf：parseKeepWarm 的结果；ctx：{ now, chief（总管的会话号）, box（输入框是不是空的：true / false / null 认不出）}。
+// 拿不准一律不打：认不出输入框、时间读不出来、离上次用缓存已过 idleMax（打了也是整段重写）。
+export function keepWarmDue(s, k, cf, ctx) {
+  if (!cf || !cf.on) return 'off';
+  if (!((cf.chief && ctx.chief && s.sid === ctx.chief) || (cf.sids || []).includes(s.sid))) return 'not-target';
+  if (s.channel !== 'tmux' || s.provider !== 'claude') return 'not-tmux';
+  if (s.status !== 'idle' || s.ask) return 'not-idle';
+  if (s.alert || s.halt) return 'halted';          // 额度用完、登录过期、被安全检查拦住、一轮没做完就停了：卡片上挂着提醒，等他处理，不在后面再插一轮（11/21 1b 审查 M5）
+  if (k.inKw) return 'in-kw';
+  if (k.kwErr) return 'kw-error';
+  if (!(Number(s.ctx) >= cf.minCtx)) return 'small';
+  if ((k.kwN || 0) >= cf.maxRun) return 'max-run';
+  const last = Math.max(Date.parse(k.lastAt) || 0, Date.parse(k.kwAt) || 0);
+  if (!last) return 'no-time';
+  const idle = (ctx.now - last) / 60000;
+  if (idle < cf.idleMin) return 'fresh';
+  if (idle >= cf.idleMax) return 'expired';
+  if (ctx.box !== true) return ctx.box === false ? 'typed' : 'no-box';
+  return null;
+}
+
+// 他是不是正对着这个窗口（11/21 1b 审查 M1）：发之前在同一次 tmux 查询里读
+//   list-panes -s -F 'P #{pane_in_mode}'（这个会话所有窗口的每个窗格一行：1 = 在 copy-mode 之类的模式里，比如他往上翻着看）
+//   list-clients -F 'C #{client_activity}'（连着这个会话的每个客户端一行：最后一次按键的时刻，秒）。
+// null = 可以打；否则是不打的原因。拿不准就不打：
+//   有一行认不出 → tmux-unknown；窗格不止一个 → split（不去猜哪个是 claude，读屏和打字都按会话名落在当前那个窗格上）；
+//   窗格在模式里 → pane-mode（copy-mode 下粘贴进了输入框、Enter 却被吃掉，那句会留在他的输入框里）；有客户端 quietSec 秒内按过键 → client-active。
+export const KW_QUIET_S = 120;
+export function kwPaneGate(out, nowSec, quietSec = KW_QUIET_S) {
+  const panes = [], acts = [];
+  for (const l of String(out || '').split('\n').map((x) => x.trim()).filter(Boolean)) {
+    const m = /^([PC]) (\d+)$/.exec(l);
+    if (!m) return 'tmux-unknown';
+    (m[1] === 'P' ? panes : acts).push(Number(m[2]));
+  }
+  if (!panes.length || !Number.isFinite(nowSec)) return 'tmux-unknown';
+  if (panes.length > 1) return 'split';
+  if (panes[0] !== 0) return 'pane-mode';
+  if (acts.some((a) => nowSec - a < quietSec)) return 'client-active';   // 客户端的钟比这里快（差是负的）也算刚按过
   return null;
 }
