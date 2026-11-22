@@ -394,8 +394,8 @@ fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\nfor a in "$@"; do printf 
 fs.mkdirSync(path.join(FH, 'altbin'), { recursive: true });
 fs.writeFileSync(path.join(FH, 'altbin', 'claude'), '#!/bin/sh\necho alt >> "$T_ARGV.alt"\nexec "' + path.join(BIN, 'claude') + '" "$@"\n', { mode: 0o755 });
 fs.writeFileSync(path.join(FH, '.zprofile'), '[ -f "$HOME/alt-claude-on" ] && PATH="$HOME/altbin:$PATH"\n');
-// 假的 security：钥匙串里只有 ccboard-account-good（token 是 tok-good）。服务和会话里那层 zsh 都经 CCBOARD_SECURITY 用它，真钥匙串碰不到
-fs.writeFileSync(path.join(BIN, 'security'), '#!/bin/sh\nsvc=; w=0\nwhile [ $# -gt 0 ]; do case "$1" in -s) svc="$2"; shift;; -w) w=1;; esac; shift; done\n[ "$svc" = ccboard-account-good ] || exit 44\n[ $w = 1 ] && echo tok-good\nexit 0\n', { mode: 0o755 });
+// 假的 security：钥匙串里只有 ccboard-account-good（token 是 tok-good）和 ccboard-account-spare（tok-spare，只有 [8c] 的 config 登记它）。服务和会话里那层 zsh 都经 CCBOARD_SECURITY 用它，真钥匙串碰不到
+fs.writeFileSync(path.join(BIN, 'security'), '#!/bin/sh\nsvc=; w=0\nwhile [ $# -gt 0 ]; do case "$1" in -s) svc="$2"; shift;; -w) w=1;; esac; shift; done\ncase "$svc" in ccboard-account-good) t=tok-good;; ccboard-account-spare) t=tok-spare;; *) exit 44;; esac\n[ $w = 1 ] && echo $t\nexit 0\n', { mode: 0o755 });
 // 假的判断命令（CCBOARD_JUDGE）：读 stdin，记下参数和收到的原文（J_LOG 一行一次），按原文里的记号答，格式和 claude -p --output-format json 一样
 const JLOG = path.join(ROOT, 'judge.log');
 fs.writeFileSync(path.join(BIN, 'judge.mjs'), `import fs from 'node:fs';
@@ -2698,6 +2698,72 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
   clearArgv(); clearEnv(); n1 = await post('/api/new', { prompt: 'x', cwd: CWD, provider: 'claude', account: 'none' });
   ok(!n1.body.ok && /token/.test(n1.body.error), '设了 defaultAccount，明说的号照旧优先：选了没 token 的号照样不开', JSON.stringify(n1.body));
   ok(/^account \S+ \S+ good default$/m.test(fs.readFileSync(path.join(ROOT, 'server4.out'), 'utf8')), '服务日志 account 那一行标 default（默认号顶上的，不是调用方选的）');
+
+  console.log('\n[8c] config 的 accountFallback（11/22 作者：「我之后新建的任务开到主号」；总管 win-4c：主号真到顶才退回朋友号）：界面新建、没明说账号的开默认号，默认号这周或这 5 小时到 95% 才退；接口不带 account 的保持现状；明说的照明说的');
+  // 情形照 4c 列的：界面新建（带 Origin、account 空串）、主号高于以前的读数、主号到顶、5 小时到顶、接口带 account、接口不带 account、重置以后、没有读数；
+  // 审查加的：退回的号自己也到了 toMax、退回的号没 token、写错只关这一项、试验服务不往数据目录外面写退回记录
+  const FB_NOTE = path.join(DATA, 'fb-note.md'), FB_OUT = path.join(ROOT, 'fb-out.md'), FB_TAP = path.join(DATA, 'limits', 'claude-acctfb01-0001.json'), FB_TAP2 = path.join(DATA, 'limits', 'claude-acctfb02-0002.json');
+  const accC = [{ id: 'good', name: '主号' }, { id: 'spare', name: '朋友号' }, { id: 'none', name: '还没存 token 的号' }];
+  const fbTapOf = (file, sess, account, week, five, weekReset = Date.now() + 2 * 86400000) => fs.writeFileSync(file, JSON.stringify({ v: 1, at: Date.now(), session: sess, account, rate_limits: { five_hour: { used_percentage: five, resets_at: Math.floor((Date.now() + 3 * 3600000) / 1000) }, seven_day: { used_percentage: week, resets_at: Math.floor(weekReset / 1000) } } }));
+  const fbTap = (week, five, weekReset) => fbTapOf(FB_TAP, 'acctfb01-0001', 'good', week, five, weekReset);
+  const fbSeen = async (pred, who = 'good') => { for (let i = 0; i < 30; i++) { const c = (((await get('/api/state')).limits || {}).claude || []).find((x) => x.account === who); if (pred(c)) return true; await sleep(300); } return false; };
+  const wkOf = (c, k) => ((c && c.windows) || []).find((w) => w.key === k);
+  const postUi = async (p, body) => { const r = await fetch('http://127.0.0.1:' + PORT + p, { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://127.0.0.1:' + PORT }, body: JSON.stringify(body) }); return { code: r.status, body: await r.json() }; };
+  const fbNew = async (extra, ui) => { clearArgv(); clearEnv(); const r = await (ui ? postUi : post)('/api/new', { prompt: '分号规则', cwd: CWD, provider: 'claude', ...extra }); await readArgv(); return { body: r.body, env: await readEnv() }; };
+  const fbLines = (log) => fs.readFileSync(path.join(ROOT, log), 'utf8').split('\n').filter((l) => l.startsWith('account '));
+  const fbNoteLines = (f = FB_NOTE) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean); } catch { return []; } };
+  for (const f of [FB_NOTE, FB_OUT, FB_TAP, FB_TAP2]) { try { fs.unlinkSync(f); } catch {} }
+  cB = await restartB({ ...cfgB, accounts: accC, defaultAccount: 'good', accountFallback: { to: 'spare', at: 95, toMax: 78, note: FB_NOTE } }, 'server8c.out');
+  ok(cB && /accounts=3，defaultAccount=good，/.test(cB) && /accountFallback=spare@95%，/.test(cB), 'accountFallback 写对：config 用上了，启动行写着退到哪个号、多少算到顶', String(cB));
+  fbTap(77, 20); ok(await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 77), '夹具：主号（good）周 77% 的读数进了 limits');
+  let f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body) && f8.env === 'tok-good|good', '界面新建（带 Origin、account 空串），主号 77%：开主号，应答不带 fallback', JSON.stringify(f8));
+  fbTap(90, 20); await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 90);
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body), '界面新建，主号 90%：照开主号（没有「过了某个读数就分流」）', JSON.stringify(f8.body));
+  fbTap(96, 20); await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 96);
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'spare' && f8.body.fallback && f8.body.fallback.from === 'good' && f8.body.fallback.key === 'week' && f8.body.fallback.used === 96 && f8.env === 'tok-spare|spare', '主号周 96%（到顶）：界面新建的退回朋友号，会话里是 spare 的 token，应答带 fallback（从哪个号、哪个窗口、读数）', JSON.stringify(f8));
+  const fbName1 = f8.body.name;
+  ok(fbLines('server8c.out').some((l) => new RegExp('^account \\S+ ' + fbName1 + ' spare default fallback good week 96%$').test(l)), '日志 account 那一行写明是退回的：spare default fallback good week 96%', JSON.stringify(fbLines('server8c.out')));
+  let nl = fbNoteLines();
+  ok(nl.length === 1 && nl[0].includes(fbName1) && /默认号 good 周额度 96%（到了 95%）/.test(nl[0]) && /开在 spare/.test(nl[0]) && /重置后回到 good/.test(nl[0]), '退回时往 note 文件追加一行（给总管看）：哪个号、读数、从哪个窗口起、几点重置', JSON.stringify(nl));
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'spare' && fbNoteLines().length === 1, '再从界面新建一个、主号仍到顶：一样退回；同一个额度窗口 note 只写一次', JSON.stringify([f8.body, fbNoteLines().length]));
+  f8 = await fbNew({});
+  ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body), '接口不带 account（不带 Origin）、主号到顶：保持现状，照开默认号（主号），不退', JSON.stringify(f8.body));
+  f8 = await fbNew({ account: 'good' }, true);
+  ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body) && f8.env === 'tok-good|good', '界面里明说选了 good：主号到顶也照明说的开主号，不退', JSON.stringify(f8));
+  f8 = await fbNew({ account: 'none' });
+  ok(!f8.body.ok && /token/.test(f8.body.error || ''), '明说的号没 token：照旧报错不开，不悄悄退回', JSON.stringify(f8.body));
+  fbTapOf(FB_TAP2, 'acctfb02-0002', 'spare', 80, 10); await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 80, 'spare');
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body) && fbLines('server8c.out').some((l) => /^account \S+ - 默认号 good 周额度 96%，该退回的 spare 周额度也到了 80%（线 78%），照旧开 good$/.test(l)) && fbNoteLines().length === 2 && /该退回的 spare 周额度也到了 80%/.test(fbNoteLines()[1]), '主号到顶、朋友号自己也到了 toMax（78%）：不退，照旧开主号，日志和 note 各写明', JSON.stringify([f8.body, fbNoteLines()]));
+  try { fs.unlinkSync(FB_TAP2); } catch {} await fbSeen((c) => !c, 'spare');
+  fbTap(60, 97); await fbSeen((c) => wkOf(c, 'five_hour') && wkOf(c, 'five_hour').used === 97);
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'spare' && f8.body.fallback && f8.body.fallback.key === 'five_hour' && f8.body.fallback.used === 97 && fbNoteLines().length === 3, '主号周 60%、5 小时 97%：也退回（开出来马上就卡额度），note 多一行', JSON.stringify([f8.body, fbNoteLines()]));
+  fbTap(99, 20, Date.now() - 60000); await fbSeen((c) => !wkOf(c, 'week'));
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body), '重置以后：周 99% 那个窗口过了截止时间，读数作废，回到主号', JSON.stringify(f8.body));
+  try { fs.unlinkSync(FB_TAP); } catch {} await fbSeen((c) => !c);
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'good', '主号没有读数（没有窗口说过话）：开主号', JSON.stringify(f8.body));
+  cB = await restartB({ ...cfgB, accounts: accC, defaultAccount: 'good', accountFallback: { to: 'none' } }, 'server8c2.out');
+  fbTap(96, 20); await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 96);
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'good' && fbLines('server8c2.out').some((l) => /^account \S+ - 默认号 good 周额度 96%，该退回 none，但它钥匙串里没有 token，照旧开 good$/.test(l)), '该退回的号钥匙串里没 token：照旧开主号，不因为退不了就不开，日志说清', JSON.stringify([f8.body, fbLines('server8c2.out')]));
+  cB = await restartB({ ...cfgB, accounts: accC, defaultAccount: 'good', accountFallback: { to: 'spare', note: FB_OUT } }, 'server8c2b.out');
+  await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 96);
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'spare' && !fs.existsSync(FB_OUT) && fbLines('server8c2b.out').some((l) => /^account \S+ - 试验服务只往自己的数据目录里写退回记录，不写 /.test(l)), '试验服务的 note 指到数据目录外面（像拿真 config 拷贝起的）：照样退回，但不往那个文件写，日志说清', JSON.stringify([f8.body, fs.existsSync(FB_OUT), fbLines('server8c2b.out')]));
+  cB = await restartB({ ...cfgB, accounts: accC, defaultAccount: 'good', accountFallback: { to: 'spare', notes: FB_NOTE } }, 'server8c3.out');
+  ok(cB && /accountFallback 不用（不认识的键：notes）/.test(cB) && /accounts=3，defaultAccount=good，/.test(cB) && /accountFallback=无，/.test(cB), 'accountFallback 写错（note 拼成 notes）：只关这一项、日志说清，别的键照用（不像 defaultAccount 写错那样整份不用）', String(cB));
+  await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 96);
+  f8 = await fbNew({ account: '' }, true);
+  ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body), 'accountFallback 写错时界面新建、主号 96% 也照开主号（和没这一项一样）', JSON.stringify(f8.body));
+  for (const f of [FB_TAP, FB_TAP2]) { try { fs.unlinkSync(f); } catch {} }
+  cB = await restartB({ ...cfgB, accounts: accB, defaultAccount: 'good' }, 'server8c4.out');   // 还原成 [8b] 结尾的样子，后面几段照旧
 
   console.log('\n[9] 不改脑子（P0-2）：这一整趟里总控台起的每个 Claude 会话，参数只有模型、强度、--resume 和任务原文；假主目录里的 CLAUDE.md / AGENTS.md / settings / .claude.json 一个没动');
   // 白名单，不是黑名单：--append-system-prompt、--system-prompt、--disallowedTools、--settings、--mcp-config、--agents……任何没列在这里的旗子都算违约

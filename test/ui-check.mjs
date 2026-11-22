@@ -2708,9 +2708,10 @@ try {
   // ── 新任务：模型是下拉菜单，已经记着 fable 时也能换成别的（11/12 作者：「怎么只有 Fable？我要 Opus」）──
   for (const saved of ['fable', 'claude-opus-5-5']) {
     const c2 = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: 'dark' });
-    await c2.addInitScript((m) => { try { localStorage.setItem('ccb_new', JSON.stringify({ provider: 'claude', model: { claude: m }, effort: { claude: 'max' } })); } catch (e) {} }, saved);
-    const pg = await c2.newPage(); let sent = null;
-    await pg.route('**/api/new', async (route) => { sent = JSON.parse(route.request().postData() || '{}'); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, name: 'ccb-test00' }) }); });   // 拦在浏览器里，不真的开会话
+    // account: 'good' = 旧版界面记下的号（那时选过一次就一直记着）；新界面载入时要把它清掉
+    await c2.addInitScript((m) => { try { localStorage.setItem('ccb_new', JSON.stringify({ provider: 'claude', model: { claude: m }, effort: { claude: 'max' }, account: 'good' })); } catch (e) {} }, saved);
+    const pg = await c2.newPage(); let sent = null, fbResp = null;
+    await pg.route('**/api/new', async (route) => { sent = JSON.parse(route.request().postData() || '{}'); await route.fulfill({ contentType: 'application/json', body: JSON.stringify(fbResp || { ok: true, name: 'ccb-test00' }) }); });   // 拦在浏览器里，不真的开会话
     await pg.goto(FX.url + '&lang=zh'); await pg.waitForSelector('.card'); await sleep(1800);
     await pg.click('#newBtn'); await sleep(500);
     const m = await pg.evaluate(() => { const el = document.querySelector('#nModel'); return { tag: el.tagName, value: el.value, opts: [...el.options].map((o) => o.value + '=' + o.textContent) }; });
@@ -2721,6 +2722,8 @@ try {
       await pg.screenshot({ path: path.join(OUT, 'new-task.png') });
       const ac = await pg.evaluate(() => [...document.querySelector('#nAcct').options].map((o) => o.value + '=' + o.textContent + (o.disabled ? '(灰)' : '')));
       ok(ac.join('|') === '=默认|good=旧号|none=还没存 token 的号（钥匙串里还没有 token）(灰)', '新任务：账号下拉列出 config 里的号，钥匙串里没有 token 的灰着不能选', JSON.stringify(ac));
+      const ac0 = await pg.evaluate(() => ({ v: document.querySelector('#nAcct').value, kept: JSON.parse(localStorage.getItem('ccb_new') || '{}') }));
+      ok(ac0.v === '' && !('account' in ac0.kept) && ac0.kept.model && ac0.kept.model.claude === 'fable', '新任务（11/22）：旧版记着的号（good）不再带上，打开就是「默认」；存的那份把账号清掉、模型照留', JSON.stringify(ac0));
       const acD = await ev(pg, () => { const c = last.providers.claude, keep = c.defaultAccount; c.defaultAccount = 'good'; fillNew(); const t = document.querySelector('#nAcct').options[0].textContent; c.defaultAccount = keep; fillNew(); return t; });
       ok(acD === '默认（旧号）', '新任务：config 设了 defaultAccount，「默认」那一项写那个号的名字，不再写当前登录的号', JSON.stringify(acD));
       await pg.selectOption('#nModel', 'opus'); await pg.selectOption('#nAcct', 'good'); await pg.fill('#nPrompt', '测试'); await pg.click('#nGo'); await sleep(600);
@@ -2728,7 +2731,18 @@ try {
       ok(sent && sent.model === 'opus' && sent.provider === 'claude' && sent.effort === 'max' && sent.prompt === '测试', '新任务：选 Opus 再开工，发给服务的就是 opus', JSON.stringify(sent));
       ok(sent && sent.cwd === '~', '新任务：不带你选的文件夹，一律开在主目录', JSON.stringify(sent));
       const keptPick = await pg.evaluate(() => JSON.parse(localStorage.getItem('ccb_new')));
-      ok(keptPick.model.claude === 'opus' && keptPick.account === 'good', '新任务：下次打开还记着 Opus 和选的号', JSON.stringify(keptPick));
+      ok(keptPick.model.claude === 'opus' && !('account' in keptPick), '新任务：下次打开还记着 Opus，不记选的号（旧版选过一次就一直记着）', JSON.stringify(keptPick));
+      await pg.click('#newBtn'); await sleep(400);
+      const ac2 = await pg.evaluate(() => document.querySelector('#nAcct').value);
+      ok(ac2 === '', '新任务：上一次选了「旧号」，再打开弹窗账号回到「默认」', JSON.stringify(ac2));
+      fbResp = { ok: true, name: 'ccb-test01', account: 'good', codeMode: false, fallback: { from: 'none', key: 'week', used: 96 } };
+      await pg.fill('#nPrompt', '默认号到顶'); await pg.click('#nGo'); await sleep(600);
+      const fbT = await pg.evaluate(() => ({ on: document.querySelector('#toast').classList.contains('on'), t: document.querySelector('#toast span').textContent }));
+      ok(sent && sent.account === '' && fbT.on && fbT.t === '还没存 token 的号周额度用了 96%，这个任务开在了旧号', '新任务：没选号（默认）；服务说默认号到顶、退回了别的号，提示条写明哪个号用了多少、开在了哪个号', JSON.stringify({ sent: sent && sent.account, fbT }));
+      fbResp = null; sent = null; await pg.evaluate(() => window.ccbBlank()); await sleep(500);
+      ok(sent && sent.prompt === '' && sent.account === '', '⌘T 开空会话：不带账号，走默认（服务按默认号、到顶才退回）', JSON.stringify(sent));
+      const fbEn = await pg.evaluate(() => ['主号周额度用了 96%，这个任务开在了朋友号', '主号 5 小时额度用了 97%，这个任务开在了朋友号'].map((s) => { const r = RULES.find(([re]) => re.test(s)); return r ? s.replace(r[0], r[1]) : null; }));
+      ok(fbEn[0] === '主号 is at 96% of its weekly limit, so this task opened on 朋友号' && fbEn[1] === '主号 is at 97% of its 5-hour limit, so this task opened on 朋友号', '退回的提示有英文（周、5 小时两种）', JSON.stringify(fbEn));
     } else {
       ok(m.value === saved && m.opts.includes(saved + '=' + saved) && m.opts.length === 6, '新任务：以前存的完整模型名还在列表里，没被丢掉', JSON.stringify(m));
     }

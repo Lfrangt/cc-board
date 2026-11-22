@@ -50,7 +50,7 @@ import { codexLimits, claudeLimits, purgeTaps, TAP_PREFIX } from './limits.mjs';
 import { noteTool, classify, pinnable, useRules } from './projects.mjs';
 import { judgeArgs, judgeInput, parseJudge, failReason, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
 import { routeNew } from './route.mjs';                                         // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数
-import { parseAccounts, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
+import { parseAccounts, parseFallback, pickDefault, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
 import { startPreview } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 import { buildOrg } from './org.mjs';
 import { parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
@@ -185,7 +185,7 @@ function parseOrg(o) {                   // 写错了就抛出去，和别的键
 }
 let CONFIG_OK = false;                   // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
@@ -198,12 +198,15 @@ const CONFIG = (() => {
     // 判官（judge、自动续跑的小模型）用哪个号（总管 11/20 23:1x 定朋友号）：只认登记过的 id，规矩同 defaultAccount；不写就跟 defaultAccount，两个都没有才是钥匙串当前登录的号
     if ('judgeAccount' in c && !accounts.some((a) => a.id === c.judgeAccount)) throw new Error('judgeAccount 要是 accounts 里登记过的 id');
     const judgeAccount = c.judgeAccount || '';
+    // 默认号到顶才退回哪个号（11/22 Khalil：「我之后新建的任务开到主号」）：写错只关这一项，不连累整份（同 remote / apns）
+    const fbr = parseFallback(c.accountFallback, accounts, defaultAccount);
+    if (fbr.error) console.log(`config ${CONFIG_FILE}：accountFallback 不用（${fbr.error}），默认号到顶也不退`);
     const org = parseOrg(c.org);
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -3061,7 +3064,21 @@ async function newSession(prompt, cwd, opt = {}) {
   const model = String(opt.model || '').trim(), effort = String(opt.effort || '').trim();
   if ((model && !SAFE_ARG.test(model)) || (effort && !SAFE_ARG.test(effort))) return { ok: false, error: '模型或强度的写法不对' };
   let acct = null;                                    // 选了账号：只认 config 里登记过、钥匙串里有 token 的
-  const want = opt.account || (provider === 'claude' ? CONFIG.defaultAccount : '');   // 没选：config 有 defaultAccount 就用它（照样要钥匙串里有 token），没有才是钥匙串当前登录的号
+  let want = opt.account || (provider === 'claude' ? CONFIG.defaultAccount : '');   // 没选：config 有 defaultAccount 就用它（照样要钥匙串里有 token），没有才是钥匙串当前登录的号
+  // 他从界面（含手机远程）新建、没明说账号的（「默认」、⌘T）：默认号这周或这 5 小时的读数到了 accountFallback.at 才退回 accountFallback.to（11/22）。
+  // 只认带 Origin 的界面请求（opt.fromUi）：接口不带 account 的照旧开默认号（总管 4c：「保持现状」）；明说了账号的一律照明说的。
+  // 退回的号钥匙串里没 token、或它自己也到了 toMax：照旧开默认号，不因为退不了就不开
+  let fell = null;
+  if (want && !opt.account && opt.fromUi === true && provider === 'claude' && CONFIG.accountFallback) {
+    const d = pickDefault(CONFIG.defaultAccount, CONFIG.accountFallback, LIMITS.claude, Date.now()), kw = (k) => (k === 'week' ? '周' : '5 小时');
+    const to = d.from ? acctList.find((a) => a.id === d.id) : null;
+    if (to && to.ready) { want = d.id; fell = d; }
+    else if (d.from) console.log(`account ${new Date().toISOString()} - 默认号 ${d.from} ${kw(d.key)}额度 ${d.used}%，该退回 ${d.id}，但它${to ? '钥匙串里没有 token' : '还不在号表里'}，照旧开 ${d.from}`);
+    else if (d.blocked) {
+      const b = d.blocked, s = `默认号 ${CONFIG.defaultAccount} ${kw(b.key)}额度 ${b.used}%，该退回的 ${b.to} ${kw(b.toKey)}额度也到了 ${b.toUsed}%（线 ${CONFIG.accountFallback.toMax}%），照旧开 ${CONFIG.defaultAccount}`;
+      console.log(`account ${new Date().toISOString()} - ${s}`); noteOnce('blocked|' + b.key + '|' + b.resetsAt, s);
+    }
+  }
   if (want && provider === 'claude') {
     acct = acctList.find((a) => a.id === String(want));
     if (!acct) return { ok: false, error: '没有这个账号：' + String(want).slice(0, 40) };
@@ -3088,13 +3105,24 @@ async function newSession(prompt, cwd, opt = {}) {
   if (r.gone && cl) { args[args.length - cl.length] = await refindClaude(name); name = newName(); r = await openSession(name, args); }   // 一开就退了：重开一次。claude 那段总在 argv 最后（选号的 zsh、Code Mode 的 env 都包在它外面），只换它的路径
   if (!r.ok) return r.gone ? { ok: false, error: cl ? GONE_MSG : '会话一开就退了' } : r;
   launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });
-  if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}${opt.account ? '' : ' default'}`);
+  if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}${opt.account ? '' : ' default'}${fell ? ` fallback ${fell.from} ${fell.key} ${fell.used}%` : ''}`);
+  if (fell) noteOnce(fell.from + '|' + fell.key + '|' + fell.resetsAt, `默认号 ${fell.from} ${fell.key === 'week' ? '周' : '5 小时'}额度 ${fell.used}%（到了 ${CONFIG.accountFallback.at}%），新任务从 ${name} 起开在 ${fell.id}；${hmOf(fell.resetsAt)} 重置后回到 ${fell.from}`);
   const codeMode = provider === 'claude' && opt.codeMode === true;
   if (codeMode) console.log(`codemode ${new Date().toISOString()} ${name} new on`);
   if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
   if (provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: shown, sid: null, rollout: null, model, effort }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // config 里打开就替他点，开在哪个文件夹都一样；不等它，卡片先出来
-  return { ok: true, name, project: pin, account: acct ? acct.id : null, codeMode };
+  return { ok: true, name, project: pin, account: acct ? acct.id : null, codeMode, ...(fell ? { fallback: { from: fell.from, key: fell.key, used: fell.used } } : {}) };
+}
+// 退回时让总管知道（总管 khalil-4c 11/22 要的）：config 的 accountFallback.note 写了文件就追加一行。同一件事（同一个号、同一个额度窗口）只写一次（只记在内存：服务重启后可能再写一次）。
+// 试验服务只往它自己的数据目录里写：拿真 config 拷贝起的试验服务不能往总管的 fyi.md 写假记录（11/22 审查）
+const fellNoted = new Set();
+const hmOf = (ms) => { const d = new Date(ms), z = (n) => String(n).padStart(2, '0'); return `${d.getMonth() + 1}/${d.getDate()} ${z(d.getHours())}:${z(d.getMinutes())}`; };
+function noteOnce(k, text) {
+  const fb = CONFIG.accountFallback; if (!fb || !fb.note || READONLY || fellNoted.has(k)) return;
+  fellNoted.add(k);
+  if (SANDBOX && !path.resolve(fb.note).startsWith(path.resolve(DATA) + path.sep)) { console.log(`account ${new Date().toISOString()} - 试验服务只往自己的数据目录里写退回记录，不写 ${fb.note}`); return; }
+  try { fs.appendFileSync(fb.note, `- ${hmOf(Date.now())} 总控台：${text}\n`); } catch (e) { console.log(`account ${new Date().toISOString()} - 退回的记录写不进 ${fb.note}：${e.code || e.message}`); }
 }
 
 // 新开的会话如果卡在「是否信任这个文件夹」，界面上给一个确认按钮
@@ -3428,7 +3456,7 @@ const handle = async (req, res, via) => {
       const rt = routeNew({ provider: body.provider, model: body.model, effort: body.effort, tier: body.tier });
       if (!rt.ok) return reply(res, 200, rt);
       if (body.codeMode != null && typeof body.codeMode !== 'boolean') return reply(res, 200, { ok: false, error: 'codeMode 只能是 true 或 false' });   // "1"、1 这类写法不猜：只有 true 才开
-      const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null, codeMode: body.codeMode === true });
+      const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, fromUi: !!req.headers.origin, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null, codeMode: body.codeMode === true });
       if (r.ok) { await refreshPanes(); if (rt.tier) console.log(`route ${new Date().toISOString()} ${r.name} ${rt.tier} ${body.provider === 'codex' ? 'codex' : 'claude'} ${rt.model || '-'} ${rt.effort}`); }
       if (r.ok && who) {
         const w = await who;

@@ -881,6 +881,7 @@ const EN = {
 };
 const RULES = [
   [/^第 (\d+) 笔$/, 'Change $1'],
+  [/^(.+?)周额度用了 (\d+)%，这个任务开在了(.+)$/, '$1 is at $2% of its weekly limit, so this task opened on $3'], [/^(.+?) 5 小时额度用了 (\d+)%，这个任务开在了(.+)$/, '$1 is at $2% of its 5-hour limit, so this task opened on $3'],
   [/^(\d+) 秒后发$/, 'in $1s'], [/^已经自动接着做了 (\d+) 轮，等你说一句$/, 'Auto-continued $1 times — waiting for you'], [/^这个号周额度用了 (\d+)%$/, 'This account is at $1% of its weekly limit'], [/^这个号 5 小时额度用了 (\d+)%$/, 'This account is at $1% of its 5-hour limit'],
   [/^图集 · (\d+) 张$/, 'Gallery · $1'], [/^在总控台里一起看这 (\d+) 张图$/, 'View these $1 images together'], [/^共 (\d+) 个$/, '$1 items'], [/^只显示了前 (\d+) 个$/, 'Showing the first $1'],
   [/^运行中 · (\d+) 分钟没动静$/, 'Running · no activity for $1 min'], [/^运行中 · (.+)$/, 'Running · $1'],
@@ -2333,7 +2334,10 @@ function followDetail() {
 }
 
 // ── 新任务：交给谁、用哪个模型、多大强度 ──
-let pick = store('ccb_new') || { provider: 'claude', model: {}, effort: {} };   // pick.account：选的账号 id，'' = 默认（config 的 defaultAccount；没设就是钥匙串当前登录的那个号）
+let pick = store('ccb_new') || { provider: 'claude', model: {}, effort: {} };
+// 账号不记上一次（11/22 Khalil：「我之后新建的任务开到主号」）：以前记在 ccb_new.account，下拉里另选过一次号，之后从界面开的任务就都明说要那个号，盖过 config 的 defaultAccount。
+// 现在每次打开弹窗都是「默认」（config 的 defaultAccount，主号到顶时服务自己退回 accountFallback），下拉里另选的只管这一次；⌘T 一律走默认。存过的旧值在这里清掉
+if (pick && 'account' in pick) { delete pick.account; store('ccb_new', pick); }
 function fillNew() {
   const P = (last && last.providers) || { claude: { label: 'Claude Code', ok: true, models: [], efforts: [] } };
   if (!P[pick.provider] || !P[pick.provider].ok) pick.provider = 'claude';
@@ -2349,9 +2353,10 @@ function fillNew() {
   $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
   // 账号：config.json 里登记了 accounts 才出现。默认 = config 的 defaultAccount（写它的名字），没设就是当前登录的号；钥匙串里还没有 token 的号列出来但不能选
   const A = p.accounts || [], dA = A.find((a) => a.id === p.defaultAccount);
+  const aNow = $('#newDlg').open ? $('#nAcct').value : '';   // 弹窗开着时换「交给谁」再回来，保留这一次选的；重新打开一律回到默认（下面重写选项会把值清掉，先记下）
   $('#nAcctField').style.display = A.length ? '' : 'none';
   $('#nAcct').innerHTML = L('<option value="">默认' + (dA ? '（' + esc(dA.name) + '）' : p.login ? '（当前登录 ' + esc(p.login) + '）' : '') + '</option>' + A.map((a) => '<option value="' + esc(a.id) + '"' + (a.ready ? '' : ' disabled') + '>' + esc(a.name) + (a.ready ? '' : '（钥匙串里还没有 token）') + '</option>').join(''));
-  $('#nAcct').value = A.some((a) => a.ready && a.id === pick.account) ? pick.account : '';
+  $('#nAcct').value = A.some((a) => a.ready && a.id === aNow) ? aNow : '';
   const cmHide = pick.provider !== 'claude'; $('#nCmField').hidden = cmHide; if (cmHide) setCm(false);   // Code Mode 只有 Claude Code 有：选了 Codex 就收起，并关掉（看不见的开关不能还开着）
 }
 $('#nProv').addEventListener('click', (e) => { const b = e.target.closest('[data-prov]'); if (!b || b.disabled) return; keepPick(); pick.provider = b.dataset.prov; fillNew(); });
@@ -2359,7 +2364,7 @@ $('#nProv').addEventListener('click', (e) => { const b = e.target.closest('[data
 function setCm(on) { const b = $('#nCm'), v = on ? 'true' : 'false'; if (b.getAttribute('aria-checked') !== v) b.setAttribute('aria-checked', v); }   // function 声明：fillNew() 先于这一行被调也认得
 function cmOn() { return $('#nCm').getAttribute('aria-checked') === 'true' && !$('#nCmField').hidden; }
 $('#nCm').addEventListener('click', () => setCm(!cmOn()));
-function keepPick() { pick.model = pick.model || {}; pick.effort = pick.effort || {}; pick.model[pick.provider] = $('#nModel').value.trim(); pick.effort[pick.provider] = $('#nEffort').value; pick.account = $('#nAcct').value; store('ccb_new', pick); }
+function keepPick() { pick.model = pick.model || {}; pick.effort = pick.effort || {}; pick.model[pick.provider] = $('#nModel').value.trim(); pick.effort[pick.provider] = $('#nEffort').value; store('ccb_new', pick); }
 // 在哪一列的列头点的「新任务」：{key, name}，跟着任务交给服务，新卡落进那一列。右上角、⌘N 和「其他」那一列开的是 null（它自己找项目）
 let newIn = null;
 const NEW_TIP = '直接写任务，它在后台做，做完会站到最前面。放在哪个文件夹它自己定。留空 = 开一个空会话，等你在卡片里说第一句。';
@@ -2372,17 +2377,23 @@ function openNew(proj) {
 async function goNew() {
   const prompt = $('#nPrompt').value.trim(), cwd = '~';      // 不问放哪个文件夹：都开在主目录，服务会让它自己找项目文件夹
   keepPick(); $('#nGo').disabled = true; let r; const nFiles = newHold.atts.length;
-  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '', account: pick.provider === 'claude' ? pick.account || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
+  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '', account: pick.provider === 'claude' ? $('#nAcct').value || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   $('#nGo').disabled = false;
-  if (r.ok) { $('#nPrompt').value = ''; saveDraft(NEW_DRAFT, ''); newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }
+  if (r.ok) { $('#nPrompt').value = ''; saveDraft(NEW_DRAFT, ''); newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); if (fellText(r)) toast(fellText(r), { ms: 6000 }); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }
+}
+// 默认号到顶、服务把这一个退回了别的号（应答的 fallback）：提示一句，不然他以为开在主号
+function fellText(r) {
+  const f = r && r.fallback; if (!f || !r.account) return '';
+  const A = ((last && last.providers && last.providers.claude) || {}).accounts || [], nm = (id) => (A.find((a) => a.id === id) || { name: id }).name;
+  return nm(f.from) + (f.key === 'week' ? '周' : ' 5 小时') + '额度用了 ' + f.used + '%，这个任务开在了' + nm(r.account);
 }
 // ⌘T：不弹窗，直接开一个空会话（相当于「新开一个终端，里面已经是 Claude Code」）
 let focusNew = null, wantFocus = null, pickNext = null;
 async function openBlank() {
   const P = (last && last.providers) || {}; const pv = P[pick.provider] && P[pick.provider].ok ? pick.provider : 'claude';
-  let r; try { r = await api('/api/new', { prompt: '', cwd: '~', provider: pv, model: (pick.model || {})[pv] || '', effort: (pick.effort || {})[pv] || '', account: pv === 'claude' ? pick.account || '' : '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
-  if (r.ok) { focusNew = r.name; toast('新会话启动中'); refresh(); } else toast(r.error || '没开起来');
+  let r; try { r = await api('/api/new', { prompt: '', cwd: '~', provider: pv, model: (pick.model || {})[pv] || '', effort: (pick.effort || {})[pv] || '', account: '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
+  if (r.ok) { focusNew = r.name; toast(fellText(r) || '新会话启动中'); refresh(); } else toast(r.error || '没开起来');
 }
 window.ccbBlank = openBlank;
 const newHold = { atts: [] };

@@ -131,14 +131,22 @@ const MUTANTS = {
   'codex-new-off':       ["  if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };\n  const provider", "  const provider"],
   'codex-listed-off':    ["...(CONFIG.codex ? { codex:", "...(true ? { codex:"],
   'codex-pane-pending':  ["    if (agents[pane.name] && !CONFIG.codex) continue;", ""],
-  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return def;"],
+  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return def;"],
   'limits-codex-ungated': ['codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null', 'codex: codexLimits(CODEX_HOME, now)'],
   'limits-not-in-state': ['sandbox: SANDBOX, limits: LIMITS };', 'sandbox: SANDBOX };'],
   'account-not-wrapped': ['    args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));', '    args.push(...(opt.codeMode === true ? withCodeMode(cl) : cl));'],   // 11/17 Code Mode：这一行多了套 /usr/bin/env 那一层，原文跟着改
   'account-skip-ready':  ["    if (!acct.ready) return { ok: false, error: '钥匙串里还没有「' + acct.name + '」的 token' };\n", ''],
   'account-any-id':      ["    if (!acct) return { ok: false, error: '没有这个账号：' + String(want).slice(0, 40) };", "    if (!acct) acct = { id: String(want), name: String(want), ready: true };"],
   // config 的 defaultAccount（11/17 car3）：没选账号时不按它包；写了没登记的号也照用
-  'default-account-ignored':   ["  const want = opt.account || (provider === 'claude' ? CONFIG.defaultAccount : '');", "  const want = opt.account;"],
+  'default-account-ignored':   ["  let want = opt.account || (provider === 'claude' ? CONFIG.defaultAccount : '');", "  let want = opt.account;"],   // 11/22 accountFallback：const 改成 let（退回时要换掉 want）
+  // 11/22 accountFallback（作者：「我之后新建的任务开到主号」）：默认号到顶才退回；明说的照明说的；退回的号没 token 不退；note 只写一次；写错只关这一项
+  'acct-fb-ignored':        ["    if (to && to.ready) { want = d.id; fell = d; }", "    if (false) { want = d.id; fell = d; }"],
+  'acct-fb-explicit-too':   ["  if (want && !opt.account && opt.fromUi === true && provider === 'claude'", "  if (want && opt.fromUi === true && provider === 'claude'"],
+  'acct-fb-api-too':        ["  if (want && !opt.account && opt.fromUi === true && provider === 'claude'", "  if (want && !opt.account && provider === 'claude'"],
+  'acct-fb-note-sandbox':   ["  if (SANDBOX && !path.resolve(fb.note).startsWith(path.resolve(DATA) + path.sep)) {", "  if (false) {"],
+  'acct-fb-unready-ok':     ["    if (to && to.ready) { want = d.id; fell = d; }", "    if (to) { want = d.id; fell = d; }"],
+  'acct-fb-note-every':     ["READONLY || fellNoted.has(k)) return;", "READONLY) return;"],
+  'acct-fb-bad-drops-all':  ["    if (fbr.error) console.log(", "    if (fbr.error) throw new Error('accountFallback ' + fbr.error); if (fbr.error) console.log("],
   'default-account-unchecked': ["    if ('defaultAccount' in c && !accounts.some((a) => a.id === c.defaultAccount)) throw new Error('defaultAccount 要是 accounts 里登记过的 id');\n", ""],
   'bad-config-crashes':  ["  } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }", "  } catch (e) { throw e; }"],
   'trust-any-dialog':    ["    const i = d.options.findIndex((o) => TRUST_OPT.test(o));", "    const i = d.options.length - 1;"],
@@ -155,8 +163,8 @@ const MUTANTS = {
   'suggest-plain-screen': ["['capture-pane', '-p', '-e', '-t', s.tmux]", "['capture-pane', '-p', '-t', s.tmux]"],
   'suggest-stale-kept':  ["  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);", ""],
   // 自动收工（autoTidy）：每一道守卫、每一条线、两个开关，各有一个改坏版
-  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };"],
-  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };"],
+  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };"],
+  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };"],
   // 'auto-ignores-focus' 11/17 car5 换成 tidy-archives-watching（他看着时小模型照问，只把「收」推后）
   'auto-acts-in-readonly': ["      if (READONLY) { const k = s.sid + '@' + s.resultAt;", "      if (false) { const k = s.sid + '@' + s.resultAt;"],
   'auto-stale-mark':     ["if (need === 'review' && p && p.at === String(s.resultAt) &&", "if (need === 'review' && p && true &&"],
