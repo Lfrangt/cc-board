@@ -20,6 +20,7 @@ jobs:
       - run: node test/suggest.test.mjs
       - run: node test/limits.test.mjs
       - run: node test/route.test.mjs
+      - run: node test/accounts.test.mjs
       - run: node test/autopilot.test.mjs
       - run: node test/judge.test.mjs
       - run: node test/org.test.mjs

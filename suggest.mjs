@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 `tmux capture-pane -p -e` 给出的屏幕文本（带样式码）。不读文件，不起进程，不联网。
- * [OUTPUT]: 导出 parseSuggest(screen) → { ghost, options: [{ n, label }] } | null
+ * [OUTPUT]: 导出 parseSuggest(screen) → { ghost, options: [{ n, label }] } | null；promptEmpty(screen) → true | false | null（输入框是不是空的，11/20 总管保温用）
  * [POS]: 输入框上「预判」的唯一解析器。server.mjs 隔几秒读一次空闲会话的屏幕交给它，界面只收结果。
  *        两样东西都只画在终端上，不写进对话记录，所以只能从屏幕读：
  *        · 灰字：输入框第一行 ❯ 后面的暗色字（SGR 2）。Claude Code 自己的建议，或 next-steps 类插件放进去的第 1 条完整 prompt。
@@ -95,4 +95,21 @@ export function parseSuggest(screen) {
   if (top < 0 || bot - top < 2 || !pl[top + 1].startsWith(PROMPT)) return null;   // 输入框 = 最下面两条边框夹住、以 ❯ 开头的那段
   const ghost = ghostOf(top, bot, raw), options = optionsOf(top, pl);
   return ghost || options.length ? { ghost, options } : null;
+}
+
+// 输入框是不是空的（11/20 总管保温用）：true = 框里只有暗色的灰字或什么都没有；false = 有正常颜色的字（他或谁在里面打了字）；
+// null = 屏幕上认不出输入框（选择框、没有两条边框夹住的 ❯ 行）。认法和 parseSuggest 同一套：最下面两条边框夹住、以 ❯ 开头的那段。
+// 往别人的输入框里打字之前先问它：只有 true 才打，null 落到不打。
+export function promptEmpty(screen) {
+  const raw = String(screen || '').split('\n');
+  const pl = raw.map((l) => l.replace(ANSI, '').replace(/ /g, ' ').replace(/\s+$/, ''));
+  if (pl.some((l) => CONFIRM.test(l))) return null;
+  let bot = -1, top = -1;
+  for (let i = pl.length - 1; i >= 0 && top < 0; i--) if (BORDER.test(pl[i].trim())) { if (bot < 0) bot = i; else top = i; }
+  if (top < 0 || bot - top < 2 || !pl[top + 1].startsWith(PROMPT)) return null;
+  for (let i = top + 1; i < bot; i++) {
+    const segs = i === top + 1 ? afterPrompt(runs(raw[i])) : runs(raw[i]);
+    if (segs.some((s) => !s.dim && s.text.replace(BLANK, '').replace(UNSEEN, ''))) return false;
+  }
+  return true;
 }
