@@ -4,11 +4,15 @@
  * [POS]: test/ 的检查新版本测试。三段：纯函数（版本号、跳转地址、sha256 文件、config 两个键、给界面的那一份）；
  *        createUpdater 对假服务器（302 到 tag、.sha256、dmg）走一遍：下好 / sha 对不上 / 一天只查一次 / 自动下载关着 / 检查关着 / 旧包删掉 / 重启读回 / 用户删了包；
  *        11/22 1b 修复轮加 4 项：断网时一天最多问一次、.sha256 最多 1 KB、dmg 有 content-length 先看 / 没有就边读边数超了中止、update.json 读回的 latest 先核样子；
+ *        11/22 dlfix 加 8 项：⑥ 跳转和时限 4 项（同 origin 跳 3 次照下、超过 5 次不跟、跳到别的 origin 的 http 不跟、发了头就不动到时限断开）；
+ *        ⑦ 慢写盘 4 种（子进程里把写盘每次多等 5 ms，对面 HTTP/1.0 发完就关、HTTP/1.1 Connection: close 发完就关、keep-alive 半截断开、HTTP/1.0 半截断开，各 6 次：
+ *        进程不许崩，日志要是「下好了」或「没成功：」；0.3.9 用 fetch 时 undici 在这里 assert(!this.paused) 抛在事件回调里，服务整个退出）；
  *        起一份试验场服务（假主目录、自己的端口）：/api/state 的 update、/api/update/check、/api/update/open（试验场只记 dry）、没给 BASE 时不连、只读不连、config 写错整份不用。
  *        假服务器的答案是这里自己写死的，不读 update.mjs 拼网址的写法（检查和被检查的不用同一种写法）。
- * 用法：node test/update.test.mjs（53 项，约 10 秒）；--mutants 造 11 个改坏的 update.mjs，每个经 UPDATE_SRC 跑一遍，都必须变红。
+ * 用法：node test/update.test.mjs（61 项，约 7 秒）；--mutants 造 14 个改坏的 update.mjs，每个经 UPDATE_SRC 跑一遍，都必须变红。
  */
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-// --mutants：造 11 个改坏的 update.mjs，每个经 UPDATE_SRC 跑一遍本测试，都必须变红（原文不唯一就报错）
+// --mutants：造 14 个改坏的 update.mjs，每个经 UPDATE_SRC 跑一遍本测试，都必须变红（原文不唯一就报错）
 if (process.argv.includes('--mutants')) {
   const { spawnSync } = await import('node:child_process');
   const src = fs.readFileSync(path.join(HERE, '../update.mjs'), 'utf8');
@@ -35,6 +39,10 @@ if (process.argv.includes('--mutants')) {
     'no-retry-gate': ['(force || now() - st.triedAt >= RETRY)', 'true'],
     'conf-no-throw': ["throw new Error(k + ' 要是 true 或 false')", 'void 0'],
     'check-ignored': ['if (busy || !conf.check) return;', 'if (busy) return;'],
+    // 11/22 dlfix：自己跟跳转和时限以后加的三个（⑥ 那几项守着）
+    'redirect-any-proto': ["if (next.protocol !== 'https:' && next.origin !== origin)", 'if (false)'],
+    'no-hop-limit': ['if (++hops > follow)', 'if (false)'],
+    'no-deadline': ["const timer = setTimeout(() => kill(new Error('超时（' + Math.round(timeout / 1000) + ' 秒没收完）')), timeout);", 'const timer = null;'],
   };
   let miss = 0, bad = 0;
   for (const [n, [a, b]] of Object.entries(M)) {
@@ -157,9 +165,10 @@ const reqs = (re) => fake.hits.filter((h) => re.test(h)).length;
   ok('连不上网：tick 不抛、记下原因、不提示', !err && dead.view() === null && !!dead.state().error, String(err) + JSON.stringify(dead.state()));
 }
 // ② 断网时一天最多问一次（11/22 1b 修复轮）：没修之前 checkedAt 在 fetch 之后才记，fetch 一抛就没记，每小时重问一次
+// （getImpl 是 dlfix 之后的注入名，fetchImpl 是之前的；两个都给，拿旧版 update.mjs 跑时这一项照样有意义）
 { const d = path.join(TMP, 'h'); let n = 0;
   const off = (...a) => { n++; return Promise.reject(new TypeError('fetch failed')); };
-  const mkOff = () => U.createUpdater({ current: '0.3.7', dir: d, conf: { check: true, auto: true }, base: BASE, fetchImpl: off, now: () => clock, log: () => {} });
+  const mkOff = () => U.createUpdater({ current: '0.3.7', dir: d, conf: { check: true, auto: true }, base: BASE, getImpl: off, fetchImpl: off, now: () => clock, log: () => {} });
   const t0 = clock; const a = mkOff(); await a.tick();
   clock += 3600000; await a.tick();
   clock += 3600000; await mkOff().tick();          // 重启（新建一个）读回 update.json：也不重问
@@ -205,9 +214,96 @@ const reqs = (re) => fake.hits.filter((h) => re.test(h)).length;
 // ⑤ update.json 读回来的 latest 先过版本号的样子再用（它要进网址和 path.join）
 { const d = path.join(TMP, 'j'); fs.mkdirSync(d, { recursive: true }); let n = 0;
   fs.writeFileSync(path.join(d, 'update.json'), JSON.stringify({ checkedAt: clock, latest: '9.9.9 /../../../evil', file: null, fileVer: null, triedAt: 0, error: null }));
-  const up = U.createUpdater({ current: '0.3.7', dir: d, conf: { check: true, auto: true }, base: BASE, fetchImpl: (...a) => { n++; return fetch(...a); }, now: () => clock, log: () => {} });
+  const up = U.createUpdater({ current: '0.3.7', dir: d, conf: { check: true, auto: true }, base: BASE, getImpl: (...a) => { n++; return U.httpGet(...a); }, fetchImpl: (...a) => { n++; return fetch(...a); }, now: () => clock, log: () => {} });
   const v0 = up.view(); await up.tick();
   ok('update.json 里的 latest 不像版本号（「9.9.9 /../../../evil」）：当没有，不提示、不拿它拼网址去下', up.state().latest === null && v0 === null && n === 0 && !fs.existsSync(path.join(TMP, 'evil.dmg')), JSON.stringify({ latest: up.state().latest, v0, n }));
+}
+// ⑥ 跳转和时限（11/22 dlfix：不再用 fetch，跳转和时限都是 update.mjs 自己做的）
+//    同一个 origin 的 http 跳几次照常跟（测试的假服务器是 http）；超过 5 次不跟；跳到别的 origin 又不是 https 不跟；对面发了头就不动 → 到时限断开
+{ const f3 = { mode: '', hits: [] }, small = crypto.randomBytes(8192), smallSha = crypto.createHash('sha256').update(small).digest('hex');
+  const other = http.createServer((req, res) => { f3.hits.push('other ' + req.url); res.writeHead(200); res.end(smallSha + '  cc-board.dmg\n'); });
+  await new Promise((r) => other.listen(0, '127.0.0.1', r));
+  const gh3 = http.createServer((req, res) => {
+    f3.hits.push(req.url);
+    if (req.url === '/x/r/releases/latest') { res.writeHead(302, { location: 'https://github.com/x/r/releases/tag/v0.3.8' }); return res.end(); }
+    const m = /^\/x\/r\/(?:releases\/download\/v0\.3\.8\/|hop\/(\d+)\/)cc-board\.dmg(\.sha256)?$/.exec(req.url);
+    if (!m) { res.writeHead(404); return res.end(); }
+    const k = Number(m[1] || 0), isSha = !!m[2], hops = f3.mode === 'hop3' ? 3 : f3.mode === 'loop' ? 8 : 0;
+    if (f3.mode === 'other' && isSha) { res.writeHead(302, { location: 'http://127.0.0.1:' + other.address().port + '/s' }); return res.end(); }
+    if (k < hops) { res.writeHead(302, { location: '/x/r/hop/' + (k + 1) + '/cc-board.dmg' + (isSha ? '.sha256' : '') }); return res.end(); }
+    if (f3.mode === 'stall' && !isSha) { res.writeHead(200, { 'content-length': small.length }); res.write(small.subarray(0, 100)); return; }   // 发了头和 100 字节就不动了
+    res.writeHead(200); res.end(isSha ? smallSha + '  cc-board.dmg\n' : small);
+  });
+  await new Promise((r) => gh3.listen(0, '127.0.0.1', r));
+  const B3 = 'http://127.0.0.1:' + gh3.address().port + '/x/r';
+  let k3 = 0;
+  const run3 = async (mode, extra = {}) => { f3.mode = mode; f3.hits = []; const d = path.join(TMP, 'redir-' + mode + '-' + (k3++));
+    const up = U.createUpdater({ current: '0.3.7', dir: d, conf: { check: true, auto: true }, base: B3, now: () => clock, log: () => {}, ...extra });
+    const t0 = Date.now(), settled = await Promise.race([up.tick().then(() => true), sleep(5000).then(() => false)]);
+    return { settled, ms: Date.now() - t0, error: up.state().error, ready: !!(up.view() && up.view().ready), hits: f3.hits.slice() }; };
+  const h3 = await run3('hop3');
+  ok('跳转：同一个 origin 跳 3 次照常跟到、下好（查 1 + .sha256 4 + dmg 4 个请求）', h3.ready && h3.hits.length === 9, JSON.stringify(h3));
+  const lp = await run3('loop');
+  ok('跳转：超过 5 次就不跟了（记「跳转太多」，不下）', !lp.ready && /跳转太多/.test(lp.error || ''), JSON.stringify(lp));
+  const ot = await run3('other');
+  ok('跳转：跳到别的 origin 又不是 https 的不跟（记原因，那边一个请求都没收到）', !ot.ready && /不是 https/.test(ot.error || '') && !ot.hits.some((h) => h.startsWith('other')), JSON.stringify(ot));
+  const sl = await run3('stall', { dlTimeout: 800 });
+  ok('对面发了头就不动了：到时限断开、记「超时」，不挂住', sl.settled && !sl.ready && /超时/.test(sl.error || '') && sl.ms < 4000, JSON.stringify(sl));
+  gh3.closeAllConnections(); gh3.close(); other.closeAllConnections(); other.close();
+}
+
+// ⑦ 对面发完就关 / 中途断开，再配上慢一点的写盘：检查新版本不能让进程退出（11/22 dlfix）
+//    0.3.9 真起时：假 GitHub 是 HTTP/1.0、发完就关，写盘稍慢，fetch 底下的 undici 在 socket 'end' 的回调里 assert(!this.paused) 抛出来，
+//    事件回调里的异常外面接不住，服务整个退出。这里在子进程里跑（崩了不带走本测试），子进程给 FileHandle.write 每次先等 5 ms，
+//    每种连接跑 SLOW_RUNS 次，4 个一起跑。82e1227 的 update.mjs 上 h10、h11close 两种几乎每次都崩（次数见名字里的「崩 N 次」）。
+{ const SLOW_RUNS = 6, body = crypto.randomBytes(256 * 1024), bodySha = crypto.createHash('sha256').update(body).digest('hex');
+  const MODES = { h10: ['HTTP/1.0 + content-length、发完就关（= 真起用的假 GitHub）', true], h11close: ['HTTP/1.1 + Connection: close、发完就关', true],
+    h11cut: ['HTTP/1.1 keep-alive、发一半就断', false], h10cut: ['HTTP/1.0 + content-length、发一半就关', false] };
+  const raw = net.createServer((s) => {      // 手写 HTTP：协议版本、发多少、什么时候关都由路径里的模式定
+    let buf = ''; s.on('error', () => {});
+    s.on('data', (d) => {
+      buf += d; if (!buf.includes('\r\n\r\n')) return;
+      const m = /^GET \/(\w+)\/r\/releases\/(latest|download\/v0\.3\.8\/cc-board\.dmg(\.sha256)?) /.exec(buf); buf = '';
+      if (!m || !MODES[m[1]]) return s.end('HTTP/1.0 404 Not Found\r\ncontent-length: 0\r\n\r\n');
+      if (m[2] === 'latest') return s.end('HTTP/1.0 302 Found\r\nlocation: https://github.com/o/r/releases/tag/v0.3.8\r\ncontent-length: 0\r\n\r\n');
+      if (m[3]) { const t = bodySha + '  cc-board.dmg\n'; return s.end('HTTP/1.0 200 OK\r\ncontent-length: ' + t.length + '\r\n\r\n' + t); }
+      const mode = m[1], v = mode.startsWith('h10') ? '1.0' : '1.1', cut = mode.endsWith('cut');
+      s.write(`HTTP/${v} 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: ${body.length}\r\n${mode === 'h11close' ? 'connection: close\r\n' : ''}\r\n`);
+      s.end(cut ? body.subarray(0, body.length >> 1) : body);
+    });
+  });
+  await new Promise((r) => raw.listen(0, '127.0.0.1', r));
+  const child = path.join(TMP, 'slow-child.mjs');
+  fs.writeFileSync(child, [
+    "import fs from 'node:fs'; import path from 'node:path'; import { pathToFileURL } from 'node:url';",
+    'const [src, base, dir, delay] = process.argv.slice(2);',
+    'const U = await import(pathToFileURL(src).href);',
+    "fs.mkdirSync(dir, { recursive: true }); const pf = path.join(dir, 'probe'), probe = await fs.promises.open(pf, 'w'), P = Object.getPrototypeOf(probe); await probe.close(); fs.rmSync(pf);",
+    'const write = P.write; let slowed = 0;',
+    'P.write = async function (...a) { slowed++; await new Promise((r) => setTimeout(r, Number(delay))); return write.apply(this, a); };   // 写盘慢一点',
+    'const lines = [];',
+    "const up = U.createUpdater({ current: '0.3.7', dir, conf: { check: true, auto: true }, base, log: (m) => lines.push(m) });",
+    'await up.tick();',
+    'console.log(JSON.stringify({ lines, slowed }));',
+  ].join('\n') + '\n');
+  const runOne = (mode, i) => new Promise((resolve) => {
+    const k = spawn(process.execPath, [child, SRC, 'http://127.0.0.1:' + raw.address().port + '/' + mode + '/r', path.join(TMP, 'slow-' + mode + '-' + i), '5'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = ''; k.stdout.on('data', (c) => { out += c; }); k.stderr.on('data', (c) => { err += c; });
+    const t = setTimeout(() => k.kill('SIGKILL'), 30000);
+    k.on('close', (code, sig) => { clearTimeout(t); let j = null; try { j = JSON.parse(out.trim().split('\n').pop()); } catch {}
+      resolve({ mode, code, sig, j, crash: /assert\(!this\.paused\)/.test(err), err: err.trim().split('\n').slice(0, 2).join(' / ').slice(0, 160) }); });
+  });
+  const jobs = []; for (const mode of Object.keys(MODES)) for (let i = 0; i < SLOW_RUNS; i++) jobs.push([mode, i]);
+  const results = [];
+  await Promise.all([0, 1, 2, 3].map(async () => { while (jobs.length) { const [mode, i] = jobs.shift(); results.push(await runOne(mode, i)); } }));
+  raw.close();
+  for (const [mode, [what, done]] of Object.entries(MODES)) {
+    const rs = results.filter((r) => r.mode === mode), crashed = rs.filter((r) => r.code !== 0).length;
+    const want = done ? /^update 下好了 0\.3\.8/ : /^update 没成功：/;
+    const good = rs.filter((r) => r.code === 0 && r.j && r.j.slowed > 0 && r.j.lines.some((l) => want.test(l))).length;
+    ok(`慢盘 + ${what}：子进程 ${SLOW_RUNS} 次都不崩、日志都是「${done ? '下好了' : '没成功'}」（崩 ${crashed} 次）`, crashed === 0 && good === SLOW_RUNS,
+      JSON.stringify(rs.filter((r) => r.code !== 0 || !r.j).slice(0, 2).map((r) => ({ code: r.code, sig: r.sig, assert: r.crash, err: r.err })).concat(rs.filter((r) => r.j).slice(0, 1).map((r) => r.j))));
+  }
 }
 
 // ───── 三、试验场服务 ─────
