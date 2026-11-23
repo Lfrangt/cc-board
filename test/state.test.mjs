@@ -2,6 +2,7 @@
  * [INPUT]: [4p] 用 node:http2 起本机假 APNs，以独立 P-256 公钥验签；用 CCBOARD_IDLE_FILE 切换空闲值。依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，[4p] 输出假 APNs 接线、空闲放行与日志限流、墙钟；退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
  * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口：网页、PDF、图、音视频、文本，含 Esc 转发脚本）/ 「归档」自己定删还是留；
+ *        另测英文摘要状态标签（`--ui` 不放）。
  *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
  *        架构视图（谁归谁管）：在现有会话上补关系（别的窗口发来的消息、spawn.json、点名总管的文件；`--ui` 也有，卡片不变），再加 6 个专测认发信人的会话（`--ui` 不放）；
  *        [7h] 用真的 lsof 认出用子进程 curl 调 /api/new 的是这个测试进程（它临时登记成一个会话）。场景见 test/CLAUDE.md「架构场景」。
@@ -180,6 +181,15 @@ mk('atKid', 'busy', [R.human('跑一下'), R.tool()], { tmux: 'ccb-atkid1' });  
 // 正文里的本机路径（界面测试核它们变成可点的链接）
 mk('links', 'idle', [R.human('整理资料'), R.final('资料在这里：\n\n- 文件夹 ~/Desktop/示例_封面/\n- `~/Library/Application Support/cc-board`\n- [讲解页](file:///Users/khalil/Desktop/x%20y.html)\n- 网址 https://example.com')], { reg: '总管 · Ops Assistant（win-zz）' });   // 架构场景：名字里带「总管」、但比点名的总管晚开 → 普通窗口；点名的文件坏了时按字样认它当总管
 mk('askTag', 'idle', [R.human('出两版首页'), R.tool(), R.result(), R.final('两版都做好了。\n\n做了什么：出了两版首页\n【待跟进】回 A 或 B，图在桌面')]);
+if (!process.argv.includes('--ui')) {
+  mk('engAsk', 'idle', [R.human('Prepare two drafts'), R.final('The drafts are ready.\n\n[Needs you] Pick a draft')]);
+  mk('engReview', 'idle', [R.human('Prepare a report'), R.final('I need your input on the earlier draft.\n\n**[REVIEW]**: The final report is ready')]);
+  mk('engFyi', 'idle', [R.human('Send a progress update'), R.final('I need your input on the earlier draft.\n\n[FYI] The preview built successfully')]);
+  mk('engGuess', 'idle', [R.human('Prepare two drafts'), R.final('Both drafts are ready. I need your approval to continue.')]);
+  mk('engNone', 'idle', [R.human('Send a progress update'), R.final('The preview built successfully. No reply is required.')]);
+  mk('engQuestion', 'idle', [R.human('Prepare two drafts'), R.final('Both drafts are ready. Which option works best?')]);
+}
+
 // [7s] 总控台保温（11/20 win-99）：KW_MARK 开头的那一轮整轮不算（`--ui` 不放：界面测试按卡数断言）。
 // kwCard：交付挂着【待审阅】，之后来了一轮保温、它回了一个点 → 卡片上的话、交付、交付时间都不变，上下文取保温那一条的。
 // kwTool：保温那一轮它还是调了工具，之后别的窗口发来一条 → 保温那一轮的工具不算步数，别的窗口那一轮照常交付。
@@ -611,6 +621,12 @@ try {
   ok(dg('noneDone').need === 'fyi', 'digest: 写明「不需要你做什么」= 无需处理', JSON.stringify(dg('noneDone')));
   ok(dg('peerAsk').need === 'reply' && /要不要现在提审/.test(dg('peerAsk').ask || ''), 'digest: 别的窗口开的头、但确实要你本人决定 = 待跟进', JSON.stringify(dg('peerAsk')));
   ok(dg('askTag').need === 'reply' && dg('askTag').tag === true && dg('askTag').ask === '回 A 或 B，图在桌面' && !/【待跟进】/.test(by(st, 'askTag').result || '【待跟进】'), 'digest: 它自己写的【待跟进】以它为准，那一行从正文拿掉', JSON.stringify(dg('askTag')) + ' / ' + (by(st, 'askTag') || {}).result);
+  ok(dg('engAsk').tag && dg('engAsk').need === 'reply' && dg('engAsk').ask === 'Pick a draft' && !by(st, 'engAsk').result.includes('[Needs you]'), 'digest: [Needs you] supplies the ask and leaves the displayed text', JSON.stringify(dg('engAsk')));
+  ok(dg('engReview').tag && dg('engReview').need === 'review' && dg('engReview').head === 'The final report is ready', 'digest: bold English [REVIEW] overrides guessed follow-up', JSON.stringify(dg('engReview')));
+  ok(dg('engFyi').tag && dg('engFyi').need === 'fyi' && dg('engFyi').head === 'The preview built successfully', 'digest: [FYI] overrides guessed follow-up', JSON.stringify(dg('engFyi')));
+  ok(!dg('engGuess').tag && dg('engGuess').need === 'reply', 'digest: English request for approval implies follow-up', JSON.stringify(dg('engGuess')));
+  ok(!dg('engNone').tag && dg('engNone').need === 'fyi', 'digest: English no-reply text implies FYI', JSON.stringify(dg('engNone')));
+  ok(!dg('engQuestion').tag && dg('engQuestion').need === 'reply', 'digest: English question about a choice implies follow-up', JSON.stringify(dg('engQuestion')));
   // 正文里的路径点了（/api/open）：看的东西打开，能执行的只在访达里选中；试验场里只写日志、不真打开
   const OD = path.join(FH, 'Desktop', '资料 夹'); fs.mkdirSync(path.join(OD, 'Foo.app'), { recursive: true });
   fs.writeFileSync(path.join(OD, '讲解.html'), '<p>x</p>'); fs.writeFileSync(path.join(OD, 'run.sh'), 'echo hi'); fs.symlinkSync(path.join(OD, 'run.sh'), path.join(OD, 'pic.png'));
