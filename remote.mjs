@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 只用 node:crypto。服务传入 remote / apns 配置、设备表、请求头、通知类别和签名密钥对象。
  * [OUTPUT]: 导出远程准入与配对规则；APNs 配置、锁屏类别与签名规则；parseHidIdle()、pushWould() 和 PUSH_AWAY_MS 定空闲放行规则。
+ *           远程预览（C1，11/21）：pathsIn()（照 ui.html inline() 从交付正文里抽本机路径）、hiddenPath()（真身里点开头的段）、rpKeyOk() / RP_TTL / RP_KEEP（/rp/ 钥匙网址认不认）。
  * [POS]: 手机远程（经 tailscale serve 进来，11/17 Khalil 14:13 要的最小版）的三道拦：从哪个端口来、认哪些 Host、远程能碰哪些接口、凭证对不对。
  *        这里只有规则，不起进程、不读写文件（读写设备表、记日志在 server.mjs），所以 test/remote.test.mjs 能直接断言。
  *        总控台的窗口都是 --dangerously-skip-permissions：能发话 = 能在这台机器上跑任意命令。所以每一道都是「认不出就拒」，没有落到放行的分支。
@@ -104,8 +105,32 @@ export function gate(h, R, method, via) {
 // 只给看和说话：状态、对话、发话、答选择框、开新任务、知道了、审完了、归档。删除、打开 / 选中文件、聚焦、去终端、选文件框、
 // 自动续跑、一起退出、上传、预览、接回、取消、配对管理本身……不在表里的一律拒。按「方法 + 路径」整串查，不做前缀匹配。
 export const REMOTE_API = new Set(['GET /api/state', 'GET /api/turns', 'GET /api/archive',
-  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push']);
+  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push', 'POST /api/remote/preview']);
 export const allowed = (method, pathname) => REMOTE_API.has(method + ' ' + pathname);
+
+// ───────────── 远程预览（C1，11/21）：只给这个会话对话里出现过的文件 ─────────────
+// 从交付正文里认出本机路径，规矩照 ui.html 的 inline()：反引号里整段是路径、[字](路径)、[字](file://…)、直接贴的 file://、直接写的 ~/… 和 /Users/<名>/…。
+// 多认几个不要紧（都是交付里真写过的字），少认了手机上点得出来的链接会被拒；所以这里只会比界面宽、不会比它窄。
+const PATH_RX = /(^|[\s(（「『【“:：，,*])((?:~|\/Users\/[^\/\s]+)\/[^\s<>"'`）」』】》，。、；！？*]*)/g;
+const FILE_URL_RX = /file:\/\/(?:localhost)?\/[^\s<>"'`）」』】》，。、；！？*]+/g;
+const CODE_PATH = /^(~\/|\/Users\/|\/private\/|\/tmp\/|\/Volumes\/)/;
+const trimP = (p) => p.replace(/[.,;:!?)\]]+$/, '');
+const fromUrl = (u) => { try { return decodeURIComponent(u.replace(/^file:\/\/(localhost)?/i, '')); } catch { return u.replace(/^file:\/\/(localhost)?/i, ''); } };
+export function pathsIn(text, max = 4000) {
+  const out = new Set(), add = (p) => { if (p && out.size < max) out.add(p); };
+  let s = String(text || '');
+  s = s.replace(/`([^`\n]+)`/g, (m, c) => { if (/^file:\/\/\S+$/.test(c)) add(fromUrl(c)); else if (CODE_PATH.test(c)) add(c.trim()); return ' '; });
+  s = s.replace(/\[([^\]\n]+)\]\(<?((?:\/|~\/)[^)>\n]*)>?\)/g, (m, t, p) => { add(p); return ' '; });
+  s = s.replace(/\[([^\]\n]+)\]\(<?(file:\/\/[^\s)>]+)>?\)/g, (m, t, u) => { add(fromUrl(u)); return ' '; });
+  s = s.replace(FILE_URL_RX, (u) => { add(fromUrl(trimP(u))); return ' '; });
+  for (const m of s.matchAll(PATH_RX)) add(trimP(m[2]));
+  return [...out];
+}
+// 远程预览的钥匙：媒体、iframe 带不了设备凭证头，网址里的随机编号就是凭证；绑在领它的那台设备和登录名上，过期就作废
+export const RP_TTL = 30 * 60000, RP_KEEP = 512;
+export const rpKeyOk = (it, devs, login, now) => !!it && it.exp > now && devs.get(it.dev.id) === it.dev && it.login === login;
+// 真身路径里有点开头的段（.ssh、.env、.git、.claude）就不给。主目录在 home 里时只看主目录以下那一段：主目录本身放在哪（测试的假主目录在 .tmp 下）不算
+export const hiddenPath = (real, home = '') => { const r = String(real), h = String(home || '').replace(/\/+$/, ''); if (h && r === h) return false; return (h && r.startsWith(h + '/') ? r.slice(h.length + 1) : r).split('/').some((s) => s.startsWith('.')); };   // 主目录自己不算点开头（C1.1：远程要主目录这个文件夹时由「上层不列」那道回话）
 
 // ───────────── 第三道：这台设备的凭证 ─────────────
 // 凭证 = <16 位十六进制设备号>.<43 位随机串>，只在配对那一刻交给手机一次。服务只存随机串的 sha256，比对用定长比较。

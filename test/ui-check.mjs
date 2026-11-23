@@ -6,6 +6,9 @@
  *        undoSeg() 验 ⌘Z 单次 / 时限 / 输入焦点 / 提示覆盖、真实推迟清除、ccb_last 的成功发送 / 按卡取回 / 过期；UN_HTML 换完整页面做改坏对照。
  *        topbarLimitsSeg() 保留原有额度和顶栏尺寸断言，UI_ONLY=limits 可定点复核，LP_HTML 可回放旧顶栏。
  *        etaSeg() 验卡片牌子上的「预计 HH:MM 交 / 比预计晚 N 分钟」、跨到明天、悬停、不显示的三种、英文、窄条；UI_ONLY=eta / ET_HTML 支持红阶段与改坏对照。
+ *        remotePreviewCheck() 验远程预览（C1 / C1.1）：远程模式点卡片上的路径带 sid 问 /api/remote/preview（浏览器里按服务的应答形状回、/rp/ 从预览端口取真文件并加 CSP 沙盒头），
+ *        网页 / 图 / Markdown / 文件夹图集 / 「图集」按钮、拒绝只提示、不在卡片上的路径不发请求；UI_ONLY=rpreview 单跑，RP_HTML 换整页做红阶段与改坏对照。
+ *        11/22 修一：PDF 不画、写明显示不了并给下载链接（点了真开始下载）；「指到别处的链接」「点开头的文件夹」两句拒绝的英文。
  *        wallStripSeg() 独立核窄条、要你筛选、展开与回话、自动续跑、2 秒宽限（含两拍相隔 1.3 秒）和重复绘制；UI_ONLY=strip / ST_HTML 支持红阶段与改坏对照。老的段默认 ccb_strip='off'，保留整格断言。
  *        只读页面 + 点「先不管」和筛选，不往任何会话里发话；新段的发送与自动续跑请求拦在浏览器里。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
@@ -43,6 +46,10 @@ async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900, unp
   const page = await ctx.newPage(); const errs = [];
   if (process.env.UI_ONLY === 'limits' && process.env.LP_HTML) {
     const html = fs.readFileSync(process.env.LP_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+    await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+  }
+  if (process.env.UI_ONLY === 'update' && process.env.UP_HTML) {     // 检查新版本那一段的红阶段、改坏对照：换一份 ui.html
+    const html = fs.readFileSync(process.env.UP_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
     await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
   }
   if (unplaced) await page.route('**/api/state*', unplaceRoute);
@@ -241,6 +248,54 @@ async function dockCheck() {
   }
 }
 
+// 检查新版本（11/22）：UI_ONLY=update 只跑这一段，UP_HTML=<另一份 ui.html> 换页面（红阶段、改坏对照）。--ui 夹具不是公开包装的（没有 .bundle-version）→ 服务不给 update 键、按钮藏着；
+// 有新版的样子在浏览器里改 /api/state 的应答（加 update）造，/api/update/* 拦在浏览器里（不真的 open dmg），window.open 换成记下网址
+async function updateSeg() {
+  console.log('\n[检查新版本]');
+  const U = (ready) => ({ current: '0.3.8', latest: '0.3.9', ready, page: 'https://github.com/Lfrangt/cc-board/releases/tag/v0.3.9', dmg: 'https://github.com/Lfrangt/cc-board/releases/download/v0.3.9/cc-board.dmg' });
+  for (const [lang, scheme] of [['zh', 'dark'], ['en', 'dark'], ['zh', 'light'], ['en', 'light']]) {
+    const { ctx, page, errs } = await open({ mode: 'wall', lang, scheme }); const tag = lang + ' · ' + (scheme === 'dark' ? '深色' : '浅色'), en = lang === 'en';
+    if (lang === 'zh' && scheme === 'dark') ok(await page.$eval('#updBtn', (b) => b.hidden && getComputedStyle(b).display === 'none').catch(() => false), '检查新版本：服务不给 update（不是公开包装的、没有新版）时顶栏没有这个按钮');
+    let upd = U(true), openRes = { ok: true }; const sent = [];
+    await page.evaluate(() => { window.__opened = []; window.open = (u) => { window.__opened.push(u); return null; }; });
+    await page.route('**/api/state**', async (route) => { const r = await fullState(route); const j = await r.json(); j.update = upd; await route.fulfill({ response: r, json: j }); });
+    await page.route('**/api/update/**', async (route) => { const q = route.request(); sent.push([q.method(), new URL(q.url()).pathname, q.headers()['x-ccboard'] ? 'tok' : '']); return route.fulfill({ json: openRes }); });
+    const want = (w) => (en ? (w ? 'Install ' : 'Download ') : (w ? '安装 ' : '下载 ')) + '0.3.9';
+    await page.waitForFunction((t) => { const b = document.querySelector('#updBtn'); return !!b && !b.hidden && b.textContent === t; }, want(true), { timeout: 6000 }).catch(() => {});
+    const m = await page.evaluate(() => { const b = document.querySelector('#updBtn'); if (!b) return { missing: true }; const r = b.getBoundingClientRect(), bar = document.querySelector('.bar'), br = bar.getBoundingClientRect(), nb = document.querySelector('#newBtn').getBoundingClientRect(), arch = document.querySelector('#archBtn').getBoundingClientRect();
+      const over = () => bar.scrollWidth - bar.clientWidth, o1 = over(); b.hidden = true; const o0 = over(); b.hidden = false;
+      const probe = document.createElement('span'); probe.style.color = 'var(--accent)'; document.body.append(probe); const acc = getComputedStyle(probe).color; probe.remove();
+      return { vis: !b.hidden && r.width > 0, text: b.textContent, title: b.title, aria: b.getAttribute('aria-label'), color: getComputedStyle(b).color, acc, inBar: r.top >= br.top - 1 && r.bottom <= br.bottom + 1, leftOfArch: r.right <= arch.left + 1, newIn: nb.right <= innerWidth && nb.left >= 0, o1, o0, w: Math.round(r.width) }; });
+    ok(m.vis && m.text === want(true) && m.color === m.acc && m.inBar && m.leftOfArch && m.aria === m.title, '检查新版本（' + tag + '）：下好了（ready）→ 顶栏「归档」左边青色「' + want(true) + '」，提示和读屏一样', JSON.stringify(m));
+    ok(m.title === (en ? 'Version 0.3.9 is downloaded and its sha256 checked (you have 0.3.8). Click to open the installer' : '新版 0.3.9 已经下好、核过 sha256（本机 0.3.8），点了打开安装包'), '检查新版本（' + tag + '）：ready 的提示写清下好了、核过、本机是几', m.title);
+    ok(m.o1 <= m.o0 + (en ? m.w + 8 : 0) && (en || (m.newIn && m.o1 <= 0)), '检查新版本（' + tag + '）：按钮出来以后' + (en ? '顶栏溢出不超过按钮宽（英文顶栏在 1520 宽原来就溢出）' : '「新任务」还在视口内、顶栏不溢出'), JSON.stringify({ o1: m.o1, o0: m.o0, newIn: m.newIn, w: m.w }));
+    await page.locator('.bar').screenshot({ path: path.join(OUT, 'update-ready-' + lang + '-' + scheme + '.png') });
+    await page.click('#updBtn', { timeout: 2000 }).catch(() => {}); await sleep(500);
+    const t1 = await page.evaluate(() => ({ toast: document.querySelector('#toast span').textContent, on: document.querySelector('#toast').classList.contains('on'), opened: window.__opened.slice() }));
+    ok(sent.some(([mm, p, k]) => mm === 'POST' && p === '/api/update/open' && k === 'tok') && t1.on && t1.toast === (en ? 'Installer opened: drag cc-board into Applications to replace the old one, then reopen it' : '打开了安装包：把 cc-board 拖进「应用程序」替换旧的，再重开') && t1.opened.length === 0, '检查新版本（' + tag + '）：点「' + want(true) + '」= 带口令 POST /api/update/open，提示怎么拖，不开浏览器', JSON.stringify({ sent, t1 }));
+    if (scheme === 'dark') {                               // 服务没打开（文件被删了之类）→ 报它的原因，退回浏览器开 Release 页
+      openRes = { ok: false, error: '新版还没下好' }; await page.click('#updBtn', { timeout: 2000 }).catch(() => {}); await sleep(500);
+      const t2 = await page.evaluate(() => ({ toast: document.querySelector('#toast span').textContent, opened: window.__opened.slice() }));
+      ok(t2.toast === (en ? 'The new version is not downloaded yet' : '新版还没下好') && t2.opened.length === 1 && t2.opened[0] === U(true).page, '检查新版本（' + tag + '）：服务没打开 dmg → 提示它的原因，并在浏览器开 Release 页', JSON.stringify(t2));
+      openRes = { ok: true };
+    }
+    upd = U(false);                                        // 自动下载关着 / 还没下好
+    await page.waitForFunction((t) => (document.querySelector('#updBtn') || {}).textContent === t, want(false), { timeout: 6000 }).catch(() => {});
+    const n0 = sent.length, d = await page.evaluate(() => { const b = document.querySelector('#updBtn'); if (!b) return { missing: true, text: '', title: '' }; return { text: b.textContent, title: b.title }; });
+    ok(d.text === want(false) && d.title === (en ? 'Version 0.3.9 is out (you have 0.3.8). Click to download the installer in your browser' : '有新版 0.3.9（本机 0.3.8），点了用浏览器下载安装包'), '检查新版本（' + tag + '）：没下好 → 写「' + want(false) + '」，提示说用浏览器下', JSON.stringify(d));
+    await page.evaluate(() => { window.__opened = []; }); await page.click('#updBtn', { timeout: 2000 }).catch(() => {}); await sleep(400);
+    const op = await page.evaluate(() => window.__opened.slice());
+    ok(op.length === 1 && op[0] === U(false).dmg && sent.length === n0, '检查新版本（' + tag + '）：点「' + want(false) + '」= 浏览器开 Release 的 dmg 链接，不碰服务', JSON.stringify({ op, extra: sent.slice(n0) }));
+    if (scheme === 'light') await page.locator('.bar').screenshot({ path: path.join(OUT, 'update-download-' + lang + '-' + scheme + '.png') });
+    if (en) ok(!m.missing && !/[一-鿿]/.test(d.title + d.text + m.title + m.text), '检查新版本（' + tag + '）：按钮和提示里没有漏翻的中文', d.title);
+    upd = null;
+    await page.waitForFunction(() => (document.querySelector('#updBtn') || {}).hidden, null, { timeout: 6000 }).catch(() => {});
+    ok(await page.$eval('#updBtn', (b) => b.hidden).catch(() => false), '检查新版本（' + tag + '）：update 回到 null（装上新版了）→ 按钮藏起来');
+    ok(errs.length === 0, '检查新版本（' + tag + '）：页面没报错', errs.join(' | ').slice(0, 300));
+    await ctx.close();
+  }
+}
+
 // 手机远程（11/17）：UI_ONLY=remote 只跑这一段。--ui 夹具的 config 没有 remote → 按钮藏着；开着的样子在浏览器里改 /api/state 的应答（加 remote）造，
 // /api/remote/* 拦在浏览器里（不真的出码）。远程模式：把页面里的口令换成空串（服务经 ts.net 给的就是这样）、localStorage 放一个假凭证，核 api() 带的头、401 回配对页
 async function remoteCheck() {
@@ -330,6 +385,197 @@ async function remoteCheck() {
     await page.waitForURL(/\/pair$/, { timeout: 8000 }).catch(() => {});
     ok(/\/pair$/.test(page.url()) && hdrs.length === 0, '远程打开但这台手机没存凭证：直接去配对页，一个接口都不调', page.url() + ' ' + hdrs.length); await ctx.close();
   }
+}
+
+// ── 远程预览（C1 / C1.1，11/21 win-86 的补丁；11/22 换底到保温线 v2 时补这一段）：UI_ONLY=rpreview 只跑这一段 ──
+// 远程模式照 remoteCheck：首页里的口令换成空串、localStorage 放一个假设备凭证，/api/** 在浏览器里补上口令转给夹具服务。
+// 夹具服务是本机端口，/api/remote/preview 在这里只回 403（只给远程端口），所以它拦在浏览器里、按 server.mjs 的应答形状回：能给的文件交给夹具服务
+// 真的 /api/preview 去登记，再把预览端口的网址换成 /rp/<32 位钥匙>/<文件名>；/rp/ 也拦下来，从预览端口取真文件（serveFile 发的字节和头，HTML 带 ESC_HOOK），
+// 加上 rpServe() 的 CSP 头。服务那一侧的闸（证据、真身、链接、点开头、钥匙）在 state.test.mjs 的 [10]，这里只核界面：点卡片上的路径 → 带这张卡的 sid
+// 问 /api/remote/preview（不问 /api/preview、不去 /api/open）；图、网页（沙盒里照样显示、读不到设备凭证、焦点在页面里 Esc 照样关）、Markdown、
+// 文件夹图集、正文「图集」按钮；服务说不给 → 只弹服务那句话；不在卡片上的路径 → 不发请求；「在浏览器打开 / 在访达中显示」收起；英文。
+async function remotePreviewCheck() {
+  console.log('\n[远程预览]');
+  const TOK = new URL(FX.url).searchParams.get('k'), ORIGIN = new URL(FX.url).origin, CRED = 'fedcba9876543210.' + 'C'.repeat(43), RP = /^\/rp\/[0-9a-f]{32}\/[^/]+$/;
+  const CSP = "sandbox allow-scripts allow-popups allow-forms; frame-ancestors 'self'";     // 照 server.mjs 的 rpServe()：一律套沙盒（11/22 起 PDF 也套），不给 allow-same-origin；PDF 另加 content-disposition: attachment
+  const RPD = path.join(FX.home, 'Desktop', 'rp-ui'), GAL = path.join(RPD, '总控台_封面新版');
+  const png = (w, h, rgb) => {                       // 真的 w × h 纯色 PNG（naturalWidth 能量出来）
+    const ck = (t, d) => { const l = Buffer.alloc(4), c = Buffer.alloc(4), td = Buffer.concat([Buffer.from(t), d]); l.writeUInt32BE(d.length); c.writeUInt32BE(zlib.crc32(td)); return Buffer.concat([l, td, c]); };
+    const ih = Buffer.alloc(13); ih.writeUInt32BE(w, 0); ih.writeUInt32BE(h, 4); ih[8] = 8; ih[9] = 2;
+    const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w * 3 }, (_, i) => rgb[i % 3]))]);
+    return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), ck('IHDR', ih), ck('IDAT', zlib.deflateSync(Buffer.concat(Array.from({ length: h }, () => row)))), ck('IEND', Buffer.alloc(0))]);
+  };
+  fs.mkdirSync(GAL, { recursive: true });
+  fs.writeFileSync(path.join(RPD, 'page.html'), '<!doctype html><meta charset="utf-8"><h1 style="font:600 28px system-ui;margin:32px">remote ok</h1><p id="o" style="font:16px system-ui;margin:0 32px"></p>' +
+    '<script>let ls, par; try { localStorage.getItem("ccb_device"); ls = "read"; } catch (e) { ls = "blocked"; } try { void parent.document.title; par = "read"; } catch (e) { par = "blocked"; }' +
+    ' document.getElementById("o").textContent = self.origin + " | " + ls + " | " + par;</script>');
+  fs.writeFileSync(path.join(RPD, 'shot.png'), png(300, 200, [60, 140, 200])); fs.writeFileSync(path.join(RPD, 'shot-b.png'), png(160, 240, [200, 120, 60]));
+  fs.writeFileSync(path.join(RPD, '说明.md'), '# 远程说明\n\n- 第一条\n- 第二条\n');
+  fs.writeFileSync(path.join(RPD, 'doc.pdf'), '%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n');   // 远程不画 PDF（11/22），只要它是 PDF 类型
+  fs.writeFileSync(path.join(GAL, 'shot1.png'), png(120, 260, [200, 70, 60])); fs.writeFileSync(path.join(GAL, 'shot2.png'), png(300, 200, [60, 140, 200])); fs.writeFileSync(path.join(GAL, 'shot10.png'), png(160, 160, [90, 180, 110]));
+  const MAP = { '/Users/khalil/Desktop/x y.html': path.join(RPD, 'page.html'), '~/Desktop/示例_封面/': GAL + '/' };   // links 卡正文里的两条路径换成假主目录里的真文件
+  const SAYS = {                                     // 服务不给的两种：状态码和原话照 server.mjs 的 /api/remote/preview
+    '~/Library/Application Support/cc-board': [200, { ok: false, reason: 'no-preview', error: '这个文件夹里不是一组图或视频，远程看不了' }],
+    '~/Desktop/rp-ui/没写到.png': [404, { ok: false, reason: 'not-in-conversation', error: '这个文件不在这段对话里，远程不给看' }],
+    '~/Desktop/rp-ui/链接.png': [404, { ok: false, reason: 'not-in-conversation', error: '这是指到别处的链接，远程不给看' }],         // 11/22 补英文的两句
+    '~/Desktop/rp-ui/.ssh/id.txt': [404, { ok: false, reason: 'not-in-conversation', error: '点开头的文件夹（.ssh、.git 这类）远程不给看' }] };
+  const WANT = { zh: { loose: '这里点的路径远程看不了，点卡片或对话里的', notGal: '这个文件夹里不是一组图或视频，远程看不了', notIn: '这个文件不在这段对话里，远程不给看',
+      link: '这是指到别处的链接，远程不给看', dot: '点开头的文件夹（.ssh、.git 这类）远程不给看', pdf: 'PDF 还不能在远程预览里显示。', dl: '下载这个 PDF' },
+    en: { loose: 'Paths here cannot be previewed remotely; use the ones on a card or in a conversation', notGal: 'This folder is not a set of images or videos, so it cannot be opened remotely', notIn: 'This file is not in this conversation, so remote preview will not open it',
+      link: 'This is a link pointing somewhere else, so remote preview will not open it', dot: 'Files in dot-folders (like .ssh or .git) are not shown remotely', pdf: 'PDFs cannot be shown in remote preview yet.', dl: 'Download this PDF' } };
+  const shot = (page, name) => page.waitForFunction(() => getComputedStyle(document.querySelector('#preview')).opacity === '1' || !document.querySelector('#preview').open, null, { timeout: 3000 }).catch(() => {})
+    .then(() => page.screenshot({ path: path.join(OUT, name) }));
+  for (const [lang, scheme] of [['zh', 'dark'], ['en', 'light']]) {
+    const zh = lang === 'zh', W = WANT[lang], tag = '远程预览（' + lang + ' · ' + (scheme === 'dark' ? '深色' : '浅色') + '）：', sfx = lang + '-' + scheme + '.png';
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await ctx.addInitScript((c) => { try { localStorage.setItem('ccb_device', JSON.stringify(c)); localStorage.setItem('ccb_mode', JSON.stringify('wall')); } catch (e) {} }, CRED);
+    const page = await ctx.newPage(), perrs = [], cerrs = [], calls = [], asked = [], rpGot = [], keys = new Map(); let n404 = 0;
+    page.on('pageerror', (e) => perrs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') cerrs.push(m.text()); });
+    await page.route((u) => u.pathname === '/', async (route) => { const r = await route.fetch(), src = process.env.RP_HTML ? fs.readFileSync(process.env.RP_HTML, 'utf8') : await r.text();   // RP_HTML：换整页做红阶段 / 改坏对照
+      await route.fulfill({ response: r, body: src.replace(/const K = '[^']*';/, "const K = '';") }); });
+    await page.route('**/api/**', async (route) => { const q = route.request(), h = q.headers(); calls.push([q.method(), new URL(q.url()).pathname, h['x-ccboard'] ? 'tok' : '', h['x-ccboard-device'] || '']);
+      return route.continue({ headers: { ...h, 'x-ccboard': TOK } }); });     // 夹具是本机端口、要口令；页面自己带的是设备凭证（上面记下来核）
+    await page.route('**/api/remote/preview', async (route) => {           // 后注册的先匹配：这个接口不经上面那条
+      const q = route.request(), h = q.headers(); let b = {}; try { b = q.postDataJSON() || {}; } catch {}
+      asked.push({ b, tok: !!h['x-ccboard'], dev: h['x-ccboard-device'] || '' });
+      const said = typeof b.path === 'string' && SAYS[b.path];
+      if (said) { if (said[0] === 404) n404++; return route.fulfill({ status: said[0], json: said[1] }); }
+      const real = (p) => MAP[p] || p;
+      const r = await (await fetch(ORIGIN + '/api/preview', { method: 'POST', headers: { 'x-ccboard': TOK, 'content-type': 'application/json' }, body: JSON.stringify(Array.isArray(b.paths) ? { paths: b.paths.map(real) } : { path: real(b.path) }) })).json();
+      if (!r.ok) { n404++; return route.fulfill({ status: 404, json: { ok: false, reason: 'missing', error: '这个文件不在了' } }); }   // 夹具写错了才会走到这里，下面的断言会红
+      const key = (u, name) => { const k = crypto.randomUUID().replace(/-/g, ''); keys.set(k, u); return '/rp/' + k + '/' + encodeURIComponent(name); };
+      if (Array.isArray(r.items)) r.items = r.items.map((it) => ({ ...it, dir: it.dir || r.dir, url: key(it.url, it.name) }));
+      else if (r.kind === 'text' || r.kind === 'markdown') delete r.url; else r.url = key(r.url, r.name);
+      return route.fulfill({ json: r });
+    });
+    await page.route('**/rp/**', async (route) => {
+      const m = /^\/rp\/([0-9a-f]{32})\/([^/]+)$/.exec(new URL(route.request().url()).pathname), u = m && keys.get(m[1]); rpGot.push(m ? decodeURIComponent(m[2]) : route.request().url());
+      if (!u) { n404++; return route.fulfill({ status: 404, json: { error: 'not found' } }); }
+      const r = await route.fetch({ url: u }), pdf = /\.pdf$/i.test(m[2]);
+      return route.fulfill({ response: r, headers: { ...r.headers(), 'content-security-policy': CSP, ...(pdf ? { 'content-disposition': 'attachment; filename="' + decodeURIComponent(m[2]) + '"' } : {}) } });
+    });
+    await page.goto(ORIGIN + '/?k=' + TOK + '&lang=' + lang).catch(() => {});
+    const linkSel = (p) => `.card[data-sid="${FX.sids.links}"] .body [data-path="${p}"]`;
+    await page.waitForSelector(linkSel('/Users/khalil/Desktop/x y.html'), { timeout: 10000 }).catch(() => {}); await sleep(1200);
+    const clickCard = (p) => page.evaluate((sel) => { const a = document.querySelector(sel); if (a) a.click(); return !!a; }, linkSel(p));
+    const clickIn = (p, where) => page.evaluate(([sid, p, where]) => {     // 往卡片正文（card）或页面空白处（loose）临时放一条路径、点它、拿掉，同一拍里做完，不怕轮询重画
+      const host = where === 'card' ? document.querySelector('.card[data-sid="' + sid + '"] .body') : document.body; if (!host) return false;
+      const a = document.createElement('a'); a.className = 'file'; a.dataset.path = p; a.textContent = p; host.appendChild(a); a.click(); a.remove(); return true; }, [FX.sids.links, p, where]);
+    const close = async () => { if (await page.evaluate(() => document.querySelector('#preview').open)) await page.click('#preview [data-close]'); await sleep(300); };
+    const pv = () => page.evaluate(() => { const q = (s) => document.querySelector(s), v = (s) => !q(s).hidden, im = q('#pImg');
+      return { open: q('#preview').open, kind: q('#pBody').dataset.kind, title: q('#pTitle').textContent, dir: q('#pDir').textContent, openHidden: q('#pOpen').hidden, reloadHidden: q('#pReload').hidden,
+        frame: v('#pFrame'), img: v('#pImg'), text: v('#pText'), frameSrc: q('#pFrame').getAttribute('src') || '', imgSrc: im.getAttribute('src') || '', imgW: im.naturalWidth,
+        h1: (q('#pText h1, #pText h2, #pText h3') || {}).textContent || '', li: document.querySelectorAll('#pText li').length,      // md() 把 # 排成哪一级标题都算
+        tiles: [...document.querySelectorAll('#pGal .gi')].map((x) => { const i = x.querySelector('img'); return { name: (x.querySelector('.gn') || {}).textContent || '', src: i ? i.getAttribute('src') : '', w: i ? i.naturalWidth : 0 }; }),
+        head: [...document.querySelectorAll('#preview .dhead button')].filter((b) => !b.hidden).map((b) => [b.textContent.trim(), b.getAttribute('aria-label') || '', b.title || ''].join('|')).join(' ') }; });
+    const rpOk = (u) => { try { return RP.test(new URL(u, ORIGIN).pathname); } catch { return false; } };
+    const toastAfter = async (fn, want) => {               // 先清掉提示条上的字，免得认成上一次的
+      await page.evaluate(() => { document.querySelector('#toast span').textContent = ''; }); const n0 = asked.length; await fn();
+      await page.waitForFunction((w) => document.querySelector('#toast span').textContent === w, want, { timeout: 5000 }).catch(() => {});
+      return { text: await page.$eval('#toast span', (s) => s.textContent), on: await page.$eval('#toast', (t) => t.classList.contains('on')), open: await page.evaluate(() => document.querySelector('#preview').open), asked: asked.slice(n0) }; };
+    const last = () => asked[asked.length - 1] || {};
+    // ① 不在卡片上的路径：不知道是哪段对话，不发请求
+    const L0 = await toastAfter(() => clickIn('~/Desktop/rp-ui/shot.png', 'loose'), W.loose);
+    ok(L0.text === W.loose && L0.on && !L0.open && L0.asked.length === 0, tag + '不在卡片上的路径（不知道是哪段对话）→ 不发请求，提示点卡片上的', JSON.stringify(L0));
+    // ② 卡片正文里的 .html：网页进 iframe，套着 CSP 沙盒
+    await clickCard('/Users/khalil/Desktop/x y.html');
+    let fr = null; for (let i = 0; i < 60 && !fr; i++) { await sleep(100); fr = page.frames().find((f) => /\/rp\/[0-9a-f]{32}\/page\.html$/.test(f.url())) || null; }
+    const inner = fr ? await fr.waitForFunction(() => (document.querySelector('#o') || {}).textContent, null, { timeout: 5000 })
+      .then(() => fr.evaluate(() => ({ h1: document.querySelector('h1').textContent, o: document.querySelector('#o').textContent }))).catch((e) => ({ err: String(e).slice(0, 160) })) : null;
+    const P = await pv(), a1 = last();
+    ok(a1.b && a1.b.sid === FX.sids.links && a1.b.path === '/Users/khalil/Desktop/x y.html' && Object.keys(a1.b).length === 2 && !a1.tok && a1.dev === CRED, tag + '点卡片正文里的 .html → POST /api/remote/preview { sid: 这张卡, path }，带设备凭证、不带口令', JSON.stringify(a1));
+    ok(P.open && P.kind === 'page' && P.frame && rpOk(P.frameSrc) && /\/page\.html$/.test(P.frameSrc) && P.title === 'page.html' && P.openHidden && !P.reloadHidden, tag + '网页进 iframe，网址是 /rp/<32 位钥匙>/page.html；「在浏览器打开」收起、重新载入还在', JSON.stringify({ ...P, tiles: undefined }));
+    ok(inner && inner.h1 === 'remote ok' && inner.o === 'null | blocked | blocked', tag + '网页在沙盒里照样显示；它的脚本是空源，读不到 localStorage（手机存的设备凭证），也读不到总控台页面', JSON.stringify(inner));
+    if (zh) {
+      await shot(page, 'rpreview-01-page-' + sfx);
+      let focused = false; if (fr) { await fr.click('h1').catch(() => {}); focused = await fr.evaluate(() => document.hasFocus()).catch(() => false); }
+      await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('#preview').open, null, { timeout: 3000 }).catch(() => {});
+      const shut = await page.evaluate(() => ({ open: document.querySelector('#preview').open, src: document.querySelector('#pFrame').getAttribute('src') }));
+      ok(focused && !shut.open && shut.src === 'about:blank', tag + '焦点在沙盒网页里按 Esc 照样关预览（预览端口加的 Esc 脚本在沙盒里也跑），页面跟着卸载', JSON.stringify({ focused, shut }));
+    } else {
+      ok(P.head !== '' && !/[㐀-鿿]/.test(P.head), tag + '预览顶栏的按钮和提示没有漏翻的中文', P.head);
+      await close();
+    }
+    if (zh) {
+      // ③ 图：总控台自己的 <img>，从 /rp/ 取
+      await clickIn('~/Desktop/rp-ui/shot.png', 'card');
+      await page.waitForFunction(() => { const i = document.querySelector('#pImg'); return !i.hidden && i.complete && i.naturalWidth > 0; }, null, { timeout: 5000 }).catch(() => {});
+      const I = await pv(), a2 = last();
+      ok(a2.b && a2.b.sid === FX.sids.links && a2.b.path === '~/Desktop/rp-ui/shot.png' && I.open && I.kind === 'image' && I.img && !I.frame && I.imgW === 300 && rpOk(I.imgSrc) && I.openHidden,
+        tag + '图：带这张卡的 sid 问，<img> 从 /rp/ 取到真图（naturalWidth 300），「在浏览器打开」收起', JSON.stringify({ b: a2.b, kind: I.kind, img: I.img, imgW: I.imgW, imgSrc: I.imgSrc, openHidden: I.openHidden }));
+      await shot(page, 'rpreview-02-image-' + sfx); await close();
+      // ④ Markdown：内容随应答来，不另取 /rp/
+      const nRp = rpGot.length; await clickIn('~/Desktop/rp-ui/说明.md', 'card');
+      await page.waitForFunction(() => (document.querySelector('#pText h1, #pText h2, #pText h3') || {}).textContent === '远程说明', null, { timeout: 5000 }).catch(() => {});
+      const M = await pv();
+      ok(M.open && M.kind === 'markdown' && M.text && M.h1 === '远程说明' && M.li === 2 && rpGot.length === nRp && M.openHidden, tag + 'Markdown：内容随应答来、照本机排版（标题、两条列表），不另取 /rp/', JSON.stringify({ kind: M.kind, h1: M.h1, li: M.li, rp: rpGot.length - nRp }));
+      await close();
+    }
+    // ⑤ 卡片上的文件夹：同一个接口，回图集
+    await clickCard('~/Desktop/示例_封面/');
+    await page.waitForFunction(() => { const im = [...document.querySelectorAll('#pGal .gi img')]; return document.querySelector('#pBody').dataset.kind === 'gallery' && im.length === 3 && im.every((i) => i.complete && i.naturalWidth > 0); }, null, { timeout: 6000 }).catch(() => {});
+    const G = await pv(), a3 = last();
+    ok(a3.b && a3.b.sid === FX.sids.links && a3.b.path === '~/Desktop/示例_封面/' && Object.keys(a3.b).length === 2, tag + '点卡片上的文件夹 → 同一个接口带 { sid, path: 文件夹 }', JSON.stringify(a3.b));
+    ok(G.open && G.kind === 'gallery' && JSON.stringify(G.tiles.map((t) => t.name)) === '["shot1.png","shot2.png","shot10.png"]' && G.tiles.every((t) => t.w > 0 && rpOk(t.src)) && G.title === '总控台_封面新版' &&
+      G.dir.startsWith('~/Desktop/rp-ui/') && G.dir.endsWith(zh ? '共 3 个' : '3 items'), tag + '文件夹排成图集：3 张按数字排、每张都从 /rp/ 取到真图，顶栏写文件夹名、~ 开头的位置和共几个', JSON.stringify({ ...G, head: undefined }));
+    ok(G.openHidden && !G.reloadHidden, tag + '文件夹图集也不给「在访达中显示」（远程没有 /api/open），重新载入还在', JSON.stringify([G.openHidden, G.reloadHidden]));
+    await shot(page, (zh ? 'rpreview-03-folder-' : 'rpreview-05-folder-') + sfx);
+    if (zh) {
+      await page.click('#pGal [data-gi="1"]').catch(() => {});
+      await page.waitForFunction(() => { const i = document.querySelector('#pGal .lb .lstage img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 4000 }).catch(() => {});
+      const LB = await page.evaluate(() => { const i = document.querySelector('#pGal .lb .lstage img'); return i ? { src: i.getAttribute('src'), w: i.naturalWidth, cap: document.querySelector('#pGal .lb .lcap').textContent } : null; });
+      ok(LB && rpOk(LB.src) && /\/shot2\.png$/.test(LB.src) && LB.w === 300 && /2 \/ 3/.test(LB.cap), tag + '图集里点第 2 张放大：大图也是 /rp/ 的网址、取到了', JSON.stringify(LB));
+      await page.keyboard.press('Escape'); await sleep(200);
+    }
+    await close();
+    if (zh) {
+      // ⑥ 正文里的「图集」按钮：paths
+      const chipped = await page.evaluate(([sid, paths]) => { const host = document.querySelector('.card[data-sid="' + sid + '"] .body'); if (!host) return false;
+        const d = document.createElement('div'); d.innerHTML = L(md(paths.join(' '))); host.appendChild(d); const c = d.querySelector('[data-gallery]'); if (c) c.click(); d.remove(); return !!c; }, [FX.sids.links, ['~/Desktop/rp-ui/shot.png', '~/Desktop/rp-ui/shot-b.png']]);
+      await page.waitForFunction(() => { const im = [...document.querySelectorAll('#pGal .gi img')]; return document.querySelector('#pBody').dataset.kind === 'gallery' && im.length === 2 && im.every((i) => i.complete && i.naturalWidth > 0); }, null, { timeout: 6000 }).catch(() => {});
+      const C = await pv(), a4 = last();
+      ok(chipped && a4.b && a4.b.sid === FX.sids.links && JSON.stringify(a4.b.paths) === '["~/Desktop/rp-ui/shot.png","~/Desktop/rp-ui/shot-b.png"]' && !('path' in a4.b), tag + '卡片正文的「图集」按钮 → 同一个接口带 { sid, paths }', JSON.stringify({ chipped, b: a4.b }));
+      ok(C.open && C.kind === 'gallery' && C.tiles.length === 2 && C.tiles.every((t) => t.w > 0 && rpOk(t.src)) && C.title === '图集' && C.openHidden && C.reloadHidden, tag + '一批图拼成图集，每张从 /rp/ 取到；顶栏两个按钮都收起', JSON.stringify({ ...C, head: undefined }));
+      await close();
+    }
+    // ⑦ 服务说不给：只弹服务那句话（英文界面翻成英文），不开预览、不退回 /api/open
+    const D1 = await toastAfter(() => clickCard('~/Library/Application Support/cc-board'), W.notGal);
+    ok(D1.text === W.notGal && D1.on && !D1.open && D1.asked.length === 1 && D1.asked[0].b.path === '~/Library/Application Support/cc-board', tag + '服务说这个文件夹不是一组图（200 no-preview）→ 只弹服务那句话，不开预览', JSON.stringify(D1));
+    const D2 = await toastAfter(() => clickIn('~/Desktop/rp-ui/没写到.png', 'card'), W.notIn);
+    ok(D2.text === W.notIn && D2.on && !D2.open && D2.asked.length === 1, tag + '服务说不在这段对话里（404）→ 只弹服务那句话，不开预览', JSON.stringify(D2));
+    await shot(page, (zh ? 'rpreview-04-deny-' : 'rpreview-06-deny-') + sfx);
+    // ⑦b 11/22：「指到别处的链接」「点开头的文件夹」两句拒绝英文界面也翻成英文（原来漏翻，英文界面弹中文）
+    const D3 = await toastAfter(() => clickIn('~/Desktop/rp-ui/链接.png', 'card'), W.link), D4 = await toastAfter(() => clickIn('~/Desktop/rp-ui/.ssh/id.txt', 'card'), W.dot);
+    ok(D3.text === W.link && D3.on && !D3.open && D4.text === W.dot && D4.on && !D4.open, tag + '服务说是指到别处的链接 / 点开头的文件夹 → 只弹服务那句话' + (zh ? '' : '（翻成英文）') + '，不开预览', JSON.stringify([D3.text, D4.text]));
+    // ⑨ 11/22 作者 定：PDF 远程不画（沙盒 iframe 里哪个浏览器都显示不出来）。预览里写明显示不了，给一个下载链接（同一把 /rp/ 钥匙，服务按附件发），iframe 不载
+    await clickIn('~/Desktop/rp-ui/doc.pdf', 'card');
+    await page.waitForFunction(() => !!document.querySelector('#pText .rpdf a'), null, { timeout: 5000 }).catch(() => {});
+    const F = await page.evaluate(() => { const q = (s) => document.querySelector(s), a = q('#pText .rpdf a'), fr = q('#pFrame');
+      return { open: q('#preview').open, kind: q('#pBody').dataset.kind, title: q('#pTitle').textContent, text: !q('#pText').hidden, frame: !fr.hidden, frameSrc: fr.getAttribute('src') || '', wait: !q('#pWait').hidden,
+        msg: (q('#pText .rpdf p') || {}).textContent || '', href: a ? a.getAttribute('href') : '', dl: a ? a.getAttribute('download') : null, link: a ? a.textContent : '', openHidden: q('#pOpen').hidden }; }), a5 = last();
+    ok(a5.b && a5.b.sid === FX.sids.links && a5.b.path === '~/Desktop/rp-ui/doc.pdf' && F.open && F.kind === 'pdf' && F.title === 'doc.pdf' && F.text && !F.frame && !/\/rp\//.test(F.frameSrc) && !F.wait && F.openHidden,
+      tag + 'PDF：带这张卡的 sid 问；预览打开但 iframe 不载 /rp/（不硬画）、没有「读取中」、「在浏览器打开」收起', JSON.stringify({ b: a5.b, ...F }));
+    ok(F.msg === W.pdf && F.link === W.dl && rpOk(F.href) && /\/doc\.pdf$/.test(F.href) && F.dl === 'doc.pdf', tag + 'PDF：写明「' + W.pdf + '」，下面一个「' + W.dl + '」链接，指着 /rp/<钥匙>/doc.pdf、带 download', JSON.stringify({ msg: F.msg, link: F.link, href: F.href, dl: F.dl }));
+    // 看得清：说明和链接的字色对它们实际落在的底色（往上找第一个不透明的底色，半透明的字色先混进底色）的对比度。11/22 第一版深色下底是 .pbody 给 iframe 的白、字是主题的浅色，链接几乎看不见，看截图才发现
+    const CR = await page.evaluate(() => {
+      const rgb = (s) => (String(s).match(/[\d.]+/g) || []).map(Number), bgOf = (el) => { for (let e = el; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c.length === 3 || (c.length >= 4 && c[3] > 0)) return c.slice(0, 3); } return [255, 255, 255]; };
+      const mix = (fg, bg) => (fg.length >= 4 ? fg.slice(0, 3).map((v, i) => v * fg[3] + bg[i] * (1 - fg[3])) : fg), lum = (c) => c.reduce((a, v, i) => { v /= 255; v = v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; return a + v * [0.2126, 0.7152, 0.0722][i]; }, 0);
+      const ratio = (el) => { if (!el) return 0; const bg = bgOf(el), fg = mix(rgb(getComputedStyle(el).color), bg), x = lum(fg), y = lum(bg); return Math.round(((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)) * 100) / 100; };
+      return { msg: ratio(document.querySelector('#pText .rpdf p')), link: ratio(document.querySelector('#pText .rpdf a')) }; });
+    ok(CR.link >= 4.5 && CR.msg >= 3, tag + 'PDF：说明和下载链接看得清（字色对实际底色的对比度：链接 ≥ 4.5、说明 ≥ 3）', JSON.stringify(CR));
+    const [dlEv] = await Promise.all([page.waitForEvent('download', { timeout: 5000 }).catch(() => null), page.click('#pText .rpdf a').catch(() => {})]);
+    const dlName = dlEv ? dlEv.suggestedFilename() : '', dlUrl = dlEv ? new URL(dlEv.url()).pathname : '';
+    if (dlEv) await dlEv.cancel().catch(() => {});
+    ok(dlName === 'doc.pdf' && RP.test(dlUrl), tag + 'PDF：点「' + W.dl + '」真的开始下载 doc.pdf（取的是那把 /rp/ 钥匙）', JSON.stringify({ dlName, dlUrl }));
+    await shot(page, (zh ? 'rpreview-07-pdf-' : 'rpreview-08-pdf-') + sfx); await close();
+    // ⑧ 整段：页面没调过 /api/preview、/api/open；页面发的每个接口都带设备凭证、不带口令
+    const bad = calls.filter(([, p]) => p === '/api/preview' || p === '/api/open' || p === '/api/reveal'), noDev = calls.filter(([, , t, d]) => t || d !== CRED);
+    ok(calls.length > 0 && bad.length === 0 && noDev.length === 0, tag + '整段没调 /api/preview、/api/open；页面发的每个接口都带设备凭证、不带口令', JSON.stringify({ n: calls.length, bad, noDev: noDev.slice(0, 3) }));
+    const is404 = (m) => /status of 404/.test(m), other = cerrs.filter((m) => !is404(m));
+    ok(perrs.length === 0 && other.length === 0 && cerrs.filter(is404).length <= n404, tag + '页面没有报错（服务故意回的 404 最多各一行）', JSON.stringify({ perrs, other, n404, got404: cerrs.filter(is404).length }));
+    await ctx.close();
+  }
+  fs.rmSync(RPD, { recursive: true, force: true });
 }
 
 // ── 「先放着」带时间：待跟进的卡点「先放着」出三档（20 点以后没有「今晚」）+ 原来的「等它下次交付」；选 1 小时 → 服务记着（/api/state 里有 snooze），
@@ -1893,7 +2139,9 @@ try {
   if (process.env.UI_ONLY === 'strip') { await wallStripSeg(); console.log('\n（UI_ONLY=strip：只跑了「墙上降噪」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'jump') { await draftJumpSeg(); console.log('\n（UI_ONLY=jump：只跑了「草稿不丢 · ⌘K 跳到窗口」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'codemode') { await cmCheck(); console.log('\n（UI_ONLY=codemode：只跑了「Code Mode」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'update') { await updateSeg(); console.log('\n（UI_ONLY=update：只跑了「检查新版本」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'remote') { await remoteCheck(); console.log('\n（UI_ONLY=remote：只跑了「手机远程」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'rpreview') { await remotePreviewCheck(); console.log('\n（UI_ONLY=rpreview：只跑了「远程预览」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'procsync') { await procSyncCheck(); console.log('\n（UI_ONLY=procsync：只跑了「审完了 · 跨设备」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'snooze') { await snoozeCheck(); console.log('\n（UI_ONLY=snooze：只跑了「先放着带时间」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'delta') { await deltaCheck(); console.log('\n（UI_ONLY=delta：只跑了「只回变过的」这一段，不是整套）'); throw ONLY_DONE; }
@@ -3403,6 +3651,8 @@ try {
   await snoozeCheck();     // 先放着带时间（会在服务里记推迟，段末清掉）
   await procSyncCheck();  // 审完了 · 跨设备（两个浏览器上下文共用夹具服务；段末清掉服务里那一笔）
   await remoteCheck();
+  await remotePreviewCheck();   // 远程预览（C1 / C1.1）：远程模式里点路径、/rp/ 取文件、图集、拒绝只提示
+  await updateSeg();
   await diffSeg();
   await deltaCheck();      // 只回变过的（拉数据瘦身）：会真的归档一个夹具会话，所以放在最后
 } catch (e) { if (e !== ONLY_DONE) throw e; } finally { await browser.close(); }

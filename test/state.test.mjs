@@ -10,8 +10,11 @@
  *        [1d] 这一轮改了哪些文件（wrote / wroteMore）和撞车提示（collide）：另造 21 个会话（`--ui` 不放），假主目录里放几个假仓库（.git 文件夹、worktree 的 .git 文件、没有 .git 的、主目录自己的 .git）。
  *        [7r] 新开的会话一开就退了（撞上 claude 自动更新）：假 claude 按 argv.flaky 先退几次（马上退 / 0.4 秒后退），服务要看出来、重新找 claude、换名字重开一次；接回归档一样；两次都退报「一开就退了」。
  *        [3p]「审完了」跨设备（11/18）：另起一份服务（T_PORT + 250）、5 个刚交付【待审阅】的会话，两个「页面」各拿各的 v 读 /api/state 的 processed；重启读回 processed.json、文件写坏当空表。[10] 末尾两项核远程端口也带。
+ *        [8u] 检查新版本的接线（11/22）：把被测服务拷进新文件夹、真放 .bundle-version，先后起三份（T_PORT + 1150）对本机假 GitHub 数请求：有记号 1 次、updateCheck:false 0 次、没记号 0 次。
  *        完全隔离：假的主目录、自己的端口、自己的 tmux 目录，服务因此自认是试验场（不碰 Ghostty、不发系统通知）。收尾只按记下的进程号停。
  *        历任持久化、防 PID 复用，以及短暂套接字故障、真退出裁剪、启动日志恢复均走主服务。
+ *        [10] 中段远程预览（C1 / C1.1 / 11/22 修一）：证据、真身、链接、点开头、钥匙；修一加主目录和上一级的大小写 / firmlink 别名、结尾 /. /..、链接在中间、图集里指到外面的链接、发钥匙后文件夹被换、PDF 按附件发、拒绝日志不记钥匙。
+ *        这次运行的临时根在 test/tmp/run-*（11/22 起；假主目录 <根>/u/home 整条路径不带点开头的段，「主目录的上一级」那道才测得到）。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 // 用法：node test/state.test.mjs [server.mjs 的路径] [--ui]      端口用 T_PORT 改（默认 4761）
@@ -21,9 +24,12 @@ import { spawn, spawnSync } from 'node:child_process'; import crypto from 'node:
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const SERVER = path.resolve(process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : path.join(HERE, '../server.mjs')); const KEEP = process.argv.includes('--keep');
 const PORT = Number(process.env.T_PORT || 4761);
-fs.mkdirSync(path.join(HERE, '.tmp'), { recursive: true });
-const ROOT = fs.mkdtempSync(path.join(HERE, '.tmp', 'run-'));
-const FH = path.join(ROOT, 'home'); const SESS = path.join(FH, '.claude/sessions'); const CWD = path.join(FH, 'work');
+fs.mkdirSync(path.join(HERE, '.tmp'), { recursive: true }); fs.mkdirSync(path.join(HERE, 'tmp'), { recursive: true });
+// 这次运行的临时根在 test/tmp/run-*（11/22 起；原来在 test/.tmp/run-*，.gitignore 两个都忽略）。假主目录 = <根>/u/home，整条路径不带点开头的段：
+// 远程预览 [10] 的「主目录的上一级」那道这样才测得到（在 .tmp 下会先被「点开头」那道拦下），上一级 <根>/u 里另放两张图，拿掉那道它就真被列出来。
+// 仍放在仓库里（不放 /private/tmp）：[1d] 认仓库、[10] 交付正文里直接写的 /Users/<名>/… 路径都靠这个
+const ROOT = fs.mkdtempSync(path.join(HERE, 'tmp', 'run-'));
+const FH = path.join(ROOT, 'u', 'home'); const SESS = path.join(FH, '.claude/sessions'); const CWD = path.join(FH, 'work');
 const PROJ = path.join(FH, '.claude/projects', CWD.replace(/[^A-Za-z0-9]/g, '-'));
 for (const d of [SESS, PROJ, CWD]) fs.mkdirSync(d, { recursive: true });
 const TMUXDIR = fs.mkdtempSync('/tmp/ccb-tmux-');
@@ -78,10 +84,10 @@ function mk(name, status, recs, { statusAgo = 60000, claude = false, reg = null,
   // claude: 进程命令行里带 claude-fake（服务只肯停命令行里带 claude 的进程，归档测试要它真停得掉）
   let pid = 0, child = null;
   if (tmux && TMUX_BIN) {
-    spawnSync(TMUX_BIN, [...TM, 'new-session', '-d', '-s', tmux, '-x', '80', '-y', '20', '/bin/sleep', '900'], { env: TENV, stdio: 'ignore' });
+    spawnSync(TMUX_BIN, [...TM, 'new-session', '-d', '-s', tmux, '-x', '80', '-y', '20', '/bin/sleep', '1500'], { env: TENV, stdio: 'ignore' });
     pid = Number(spawnSync(TMUX_BIN, [...TM, 'list-panes', '-t', tmux, '-F', '#{pane_pid}'], { env: TENV, encoding: 'utf8' }).stdout.trim()) || 0;
   }
-  if (!pid) { child = claude ? spawn(NODE, ['-e', 'setInterval(() => {}, 1e6)', 'claude-fake'], { stdio: 'ignore' }) : spawn('/bin/sleep', ['900'], { stdio: 'ignore' }); kids.push(child.pid); pid = child.pid; tmux = null; }
+  if (!pid) { child = claude ? spawn(NODE, ['-e', 'setInterval(() => {}, 1e6)', 'claude-fake'], { stdio: 'ignore' }) : spawn('/bin/sleep', ['1500'], { stdio: 'ignore' }); kids.push(child.pid); pid = child.pid; tmux = null; }
   const sid = name.padEnd(8, '0') + '-0000-4000-8000-' + String(pid).padStart(12, '0');
   const file = path.join(PROJ, sid + '.jsonl');
   fs.writeFileSync(file, (reg ? [{ type: 'ai-title', aiTitle: 'w-' + name, sessionId: sid }, ...recs] : recs).map((r) => JSON.stringify(r)).join('\n') + '\n');
@@ -902,10 +908,10 @@ try {
     const big = H(1, '汉字'.repeat(110000)); make('dfBig', [R.human('开始'), ...pair('Edit', f, big), ...pair('Edit', f, H(2)), R.final('完成。')]);
     make('dfEdge', [R.human('旧轮'), ...pair('Edit', f, H(98)), R.final('旧轮结束。')]);
     // 无轮首的超长记录：服务最多重建最后 48 MiB，接口必须从同一段开始。
-    make('dfTail', [...pair('Edit', f, H(99))]);
-    const pad = JSON.stringify({ type: 'api-request-blob', body: 'x'.repeat((1 << 20) - 60) }) + '\n';
-    const fd = fs.openSync(S.dfTail.file, 'a'); for (let i = 0; i < 50; i++) fs.writeSync(fd, pad); fs.closeSync(fd);
-    append('dfTail', ...pair('Edit', f, H(5)), R.final('尾巴里的交付。'));
+    // 11/22：整份一次写完再登记。原来先登记一个只有 H(99) 的小文件、再追加 50 MiB，机器忙时服务在两步之间先读到小文件，
+    // 从文件头读起（turnOff 0），之后增量读，接口就把 H(99) 也算进来（几份 state.test 同时跑时 5 份红 4 份）
+    const pad = { type: 'api-request-blob', body: 'x'.repeat((1 << 20) - 60) };
+    make('dfTail', [...pair('Edit', f, H(99)), ...Array(50).fill(pad), ...pair('Edit', f, H(5)), R.final('尾巴里的交付。')]);
     const pathQ = (name, file) => '/api/diff?sid=' + encodeURIComponent(S[name]?.sid || name) + '&path=' + encodeURIComponent(file);
     const diff = (name, file = f, port = PORT) => rq(port, 'GET', pathQ(name, file), { 'x-ccboard': TOKEN });
     await until(async () => by(await get('/api/state?peek=1'), 'dfMain')?.wrote?.some(x => x.path === f));
@@ -925,6 +931,7 @@ try {
     ok((await diff('absent', f)).code === 404, '改动：不存在的会话返回找不到');
     const noDiff = await rq(PORT, 'GET', pathQ('dfMain', f)), noTurns = await rq(PORT, 'GET', '/api/turns?sid=' + S.dfMain.sid);
     ok(noDiff.code === noTurns.code && noDiff.code === 403, '改动：未带口令与对话接口一样被拒绝');
+    await until(async () => by(await get('/api/state?peek=1'), 'dfVirt')?.wrote?.some(x => x.path === f));   // 11/22：先等服务扫到这份记录（原来不等，几份 state.test 同时跑、机器忙时偶尔红在这一行）
     ok((await diff('dfVirt')).body?.items?.length === 1, '改动：虚拟编辑有对应结果时照样显示');
     ok((await diff('dfPeer')).body?.items?.length === 2, '改动：一轮中途的窗口消息不清边界');
     append('dfPeer', R.peer('worker-a', '下一轮'), ...pair('Edit', f, H(6)), R.final('下一轮完成。'));
@@ -932,6 +939,7 @@ try {
     const pd = (await diff('dfPeer')).body?.items || [];
     ok(pd.length === 1 && pd[0].hunks?.[0]?.oldStart === 6, '改动：交付后别的窗口开新轮，只保留新一笔');
     const bd = await diff('dfBig'); ok(bd.code === 200 && bd.body?.truncated && Buffer.byteLength(bd.text) <= 512 * 1024, '改动：超过六百 KB 的补丁截断，整个应答不超过五百一十二 KB');
+    await until(async () => by(await get('/api/state?peek=1'), 'dfTail')?.wrote?.some(x => x.path === f));   // 11/22：同上，这份记录有 50 MiB，服务读得慢
     ok((await diff('dfTail')).body?.items?.length === 1 && (await diff('dfTail')).body.items[0].hunks[0].oldStart === 5, '改动：尾巴没有轮首也只读清单重建范围，不回到文件头');
     // 人的话跨过一 MiB 块边界；按字节而非字符计算，前一轮就在同一块中。
     append('dfEdge', { type: 'file-history-snapshot', text: '汉'.repeat(350000) }, R.human('新轮' + '字'.repeat(360000)), ...pair('Edit', f, H(10)), R.final('跨块完成。'));
@@ -2765,6 +2773,69 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
   for (const f of [FB_TAP, FB_TAP2]) { try { fs.unlinkSync(f); } catch {} }
   cB = await restartB({ ...cfgB, accounts: accB, defaultAccount: 'good' }, 'server8c4.out');   // 还原成 [8b] 结尾的样子，后面几段照旧
 
+  console.log('\n[8u] 检查新版本的接线（11/22 1b 修复轮）：代码文件夹里真放一个 .bundle-version、updateCheck 开着 → 假 GitHub 收到 1 次；updateCheck:false → 0 次；没有 .bundle-version → 0 次');
+  {
+    // 三份服务先后起在同一个端口（T_PORT + 1150，预览 + 1160：留在每一路 2000 个端口之内，见 mutants.mjs 的 SLOT）；假 GitHub 按网址的第一段（/a、/b、/c）分开数。不设 CCBOARD_UPDATE_CURRENT：版本号只从文件读
+    const UPORT = PORT + 1150, UROOT = path.join(ROOT, 'upd'), hits = { a: 0, b: 0, c: 0 }, other = [];
+    fs.mkdirSync(path.join(TMUXDIR, 'u'), { recursive: true });
+    const ugh = http.createServer((req, res) => {
+      const m = /^\/([abc])\/releases\/latest$/.exec(req.url);
+      if (m) { hits[m[1]]++; res.writeHead(302, { location: 'https://github.com/o/r/releases/tag/v0.3.8' }); return res.end(); }
+      other.push(req.url); res.writeHead(404); res.end('Not Found');
+    });
+    await new Promise((r) => ugh.listen(0, '127.0.0.1', r));
+    const UGB = 'http://127.0.0.1:' + ugh.address().port;
+    // server.mjs 按它自己所在的文件夹读 .bundle-version：把被测的那份（改坏版时是改坏的）和它层层 import 的 .mjs、ui.html 拷进一个新文件夹，不往工程目录里放这个文件
+    const ucode = (tag, stamp) => {
+      const d = path.join(UROOT, 'code-' + tag), from = path.dirname(SERVER); fs.mkdirSync(d, { recursive: true });
+      fs.copyFileSync(SERVER, path.join(d, 'server.mjs'));
+      for (const todo = ['server.mjs']; todo.length;) {
+        for (const m of fs.readFileSync(path.join(d, todo.pop()), 'utf8').matchAll(/from '\.\/([\w.-]+\.mjs)'/g)) if (!fs.existsSync(path.join(d, m[1]))) { fs.copyFileSync(path.join(from, m[1]), path.join(d, m[1])); todo.push(m[1]); }
+      }
+      fs.copyFileSync(path.join(from, 'ui.html'), path.join(d, 'ui.html'));
+      if (stamp) fs.writeFileSync(path.join(d, '.bundle-version'), stamp + '\n');
+      return path.join(d, 'server.mjs');
+    };
+    const uStart = async (tag, server, cfg) => {      // 起来了回 { srv, tok, out }；端口先被别人占着、10 秒没起来回 null
+      const H = path.join(UROOT, 'home-' + tag), D = path.join(UROOT, 'data-' + tag), O = path.join(UROOT, 'server-' + tag + '.out');
+      for (const d of [path.join(H, '.claude/sessions'), path.join(H, '.claude/projects'), D]) fs.mkdirSync(d, { recursive: true });
+      if (cfg) fs.writeFileSync(path.join(D, 'config.json'), JSON.stringify(cfg));
+      for (const p of [UPORT, UPORT + 10]) { try { await fetch('http://127.0.0.1:' + p + '/health', { signal: AbortSignal.timeout(1500) }); return null; } catch {} }
+      const e = { ...env, HOME: H, CCBOARD_DATA: D, CCBOARD_PORT: String(UPORT), CCBOARD_PREVIEW_PORT: String(UPORT + 10), CCBOARD_TMUX_SOCKET: path.join(TMUXDIR, 'u', 'ccboard.sock'), CCBOARD_UPDATE_BASE: UGB + '/' + tag, CCBOARD_UPDATE_DELAY_MS: '300' };
+      delete e.CCBOARD_UPDATE_CURRENT;
+      const o = fs.openSync(O, 'a'), srv = spawn(NODE, [server], { env: e, stdio: ['ignore', o, o] }); kids.push(srv.pid);
+      for (let i = 0; i < 50; i++) { await sleep(200); try { const tok = fs.readFileSync(path.join(D, '.token'), 'utf8').trim(); const h = await (await fetch('http://127.0.0.1:' + UPORT + '/health')).json(); if (h.ok && h.pid === srv.pid) return { srv, tok, out: O }; } catch {} }
+      return null;
+    };
+    const uStop = async (s) => { if (!(s && s.srv.pid > 1)) return; try { process.kill(s.srv.pid, 'SIGTERM'); } catch {} for (let i = 0; i < 25; i++) { await sleep(200); try { await fetch('http://127.0.0.1:' + UPORT + '/health'); } catch { break; } } };
+    const uCheck = async (s) => { try { return await (await fetch('http://127.0.0.1:' + UPORT + '/api/update/check', { method: 'POST', headers: { 'x-ccboard': s.tok, 'content-type': 'application/json' }, body: '{}' })).json(); } catch (e) { return { err: String(e) }; } };
+    const uLog = (s) => fs.readFileSync(s.out, 'utf8').split('\n').filter((l) => /^update /.test(l));
+    const sA = await uStart('a', ucode('a', '0.3.8 (1)'));
+    ok(!!sA, '[8u] 另起的服务（端口 ' + UPORT + '）起来了（没起来时这一段后面全跳过；先看端口 ' + UPORT + ' / ' + (UPORT + 10) + ' 是不是被别人占着）');
+    if (sA) {
+      for (let i = 0; i < 25 && hits.a < 1; i++) await sleep(200);
+      await sleep(1500);                                // 起来后只查一次：多等一会儿，不该有第二次
+      const lg = uLog(sA);
+      ok(hits.a === 1 && other.length === 0 && lg.some((l) => /^update \S+ on：本机 0\.3\.8 \(1\)，autoUpdate=true$/.test(l)), '有 .bundle-version、updateCheck 不写（= 开）：起来后查一次（假 GitHub 收到 1 次 /releases/latest；最新就是本机这一版，不下）', JSON.stringify({ hits, other, lg }));
+      await uStop(sA);
+      const sB = await uStart('b', ucode('b', '0.3.7 (1)'), { updateCheck: false });
+      if (sB) {
+        await sleep(1500); const ck = await uCheck(sB); await sleep(300);
+        const lgB = uLog(sB);
+        ok(hits.b === 0 && ck.ok === false && lgB.some((l) => /^update \S+ off（updateCheck=false）$/.test(l)), 'config 写 updateCheck:false（有 .bundle-version）：起来后、点「检查更新」都不连（假 GitHub 收到 0 次；/api/update/check 说没开；日志 off（updateCheck=false））', JSON.stringify({ hits, ck, lgB }));
+        await uStop(sB);
+      } else ok(false, '[8u] updateCheck:false 那份服务没起来');
+      const sC = await uStart('c', ucode('c', null));
+      if (sC) {
+        await sleep(1500); const ck = await uCheck(sC); await sleep(300);
+        const lgC = uLog(sC);
+        ok(hits.c === 0 && ck.ok === false && lgC.some((l) => /^update \S+ off（不是公开安装包）$/.test(l)), '没有 .bundle-version（build.sh 装的）：起来后、点「检查更新」都不连（假 GitHub 收到 0 次；/api/update/check 说没开；日志 off（不是公开安装包））', JSON.stringify({ hits, ck, lgC }));
+        await uStop(sC);
+      } else ok(false, '[8u] 没有 .bundle-version 那份服务没起来');
+    }
+    ugh.close();
+  }
+
   console.log('\n[9] 不改脑子（P0-2）：这一整趟里总控台起的每个 Claude 会话，参数只有模型、强度、--resume 和任务原文；假主目录里的 CLAUDE.md / AGENTS.md / settings / .claude.json 一个没动');
   // 白名单，不是黑名单：--append-system-prompt、--system-prompt、--disallowedTools、--settings、--mcp-config、--agents……任何没列在这里的旗子都算违约
   const FLAG_OK = new Set(['--model', '--effort', '--resume']);
@@ -2825,7 +2896,7 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     const errOf = (x) => x.code + ' ' + ((x.body && (x.body.why || x.body.error)) || '');
     const logOf = (r) => { try { return fs.readFileSync(r.lg, 'utf8'); } catch { return ''; } };
 
-    let r1 = startR('r1', R1P, { remote: { on: true, hosts: [TS] } });
+    let r1 = startR('r1', R1P, { remote: { on: true, hosts: [TS] } }, { CCBOARD_RP_TTL_MS: '8000' });
     const up1 = await upR(R1P), tok1 = tokOf(r1.d);
     let x = await rq(R1P, 'GET', '/api/state?peek=1', { 'x-ccboard': tok1 });
     ok(up1 && x.code === 200 && x.body && x.body.remote && x.body.remote.hosts.join() === TS && x.body.remote.devices === 0 && x.body.remote.port === R1R && !('down' in x.body.remote) && /^remote \S+ on：多认 1 个名字 ccb-r1\.tail1a2b\.ts\.net$/m.test(logOf(r1)) && new RegExp('^remote \\S+ listen 127\\.0\\.0\\.1:' + R1R + '（', 'm').test(logOf(r1)), 'remote 开着：本机的 /api/state 多一个 remote（名单、已配对 0 台、远程端口 = 端口+1），启动日志 remote on + 远程端口听上了', JSON.stringify([up1, x.code, x.body && x.body.remote]));
@@ -2913,6 +2984,181 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
       const rs2 = (await rget(R1R, '/api/state', CRED)).body || {};
       ok(JSON.stringify(rs2.processed) === '{}', 'Mac 撤销（clear）两张：手机下一次读 processed 就是 {}', JSON.stringify(rs2.processed));
     }
+    // ── 远程预览（C1，11/21）：只给这个会话交付正文里写到的、或这一轮改过的文件；先 realpath 再核；钥匙网址绑设备 + 登录名、会过期 ──
+    const RD = path.join(FH, 'Projects', 'rpv'), RO = path.join(FH, 'Elsewhere');   // 链接指去的地方放在假主目录里、路径不带点：放在 ROOT（test/.tmp）下会先被「点开头」那道拦下，链接那道就没测到（改坏版 rp-link-allowed 抓不到）
+    fs.mkdirSync(path.join(RD, 'gal'), { recursive: true }); fs.mkdirSync(path.join(RD, '.secret'), { recursive: true }); fs.mkdirSync(RO, { recursive: true });
+    const PNG = '\x89PNG-fixture-';
+    for (const n of ['shot1.png', 'shot2.png', 'my shot.png', 'private.png', 'user.png', 'wrote.png', 'gal/a.png', 'gal/b.png', 'other.png']) fs.writeFileSync(path.join(RD, n), PNG + n);
+    fs.writeFileSync(path.join(RD, 'page.html'), '<html><body><p>RP_PAGE</p><script>1</script></body></html>');
+    fs.writeFileSync(path.join(RD, 'notes.md'), '# RP_NOTES\n正文');
+    fs.writeFileSync(path.join(RD, 'report.docx'), 'docx');
+    fs.writeFileSync(path.join(RD, '.secret', 'key.txt'), 'RP_SECRET');
+    fs.writeFileSync(path.join(RO, 'outside.png'), PNG + 'outside');
+    fs.symlinkSync(path.join(RD, 'private.png'), path.join(RD, 'evil.png'));     // 没写到的链接，指到没写到的文件
+    fs.symlinkSync(path.join(RO, 'outside.png'), path.join(RD, 'link.png'));     // 写到了的链接，指到别处
+    // C1.1 文件夹图集：gal 是写到的文件夹（5 张图 + 1 个文本 + 点开头的 + 子文件夹 + 两个链接：一个指回 gal 里、一个指到别处，远程都不列）；其余每个文件夹只让一道闸拦下
+    for (const n of ['gal/c.png', 'gal/d.png', 'gal/e.png', 'gal/.hid.png', 'gal/inner/deep.png', 'onlyfile/x1.png', 'onlyfile/x2.png', '.shots/s1.png', '.shots/s2.png', 'few/one.png']) { fs.mkdirSync(path.dirname(path.join(RD, n)), { recursive: true }); fs.writeFileSync(path.join(RD, n), PNG + n); }
+    for (const n of ['gal/n.txt', 'few/t1.txt', 'few/t2.txt', 'few/t3.txt']) fs.writeFileSync(path.join(RD, n), 'RP_DIR_TEXT');
+    fs.symlinkSync(path.join(RD, 'gal', 'a.png'), path.join(RD, 'gal', 'l-in.png')); fs.symlinkSync(path.join(RO, 'outside.png'), path.join(RD, 'gal', 'l-out.png'));
+    fs.mkdirSync(path.join(RO, 'pics'), { recursive: true }); for (const n of ['p1.png', 'p2.png']) fs.writeFileSync(path.join(RO, 'pics', n), PNG + 'pics-' + n); fs.symlinkSync(path.join(RO, 'pics'), path.join(RD, 'galink'));
+    for (const n of ['h1.png', 'h2.png']) fs.writeFileSync(path.join(FH, n), PNG + 'home-' + n);
+    fs.mkdirSync(path.join(RD, 'sub'), { recursive: true }); fs.writeFileSync(path.join(RD, 'sub', 'real.png'), PNG + 'real'); fs.symlinkSync(path.join(RD, 'sub'), path.join(ROOT, 'rp-alias'));   // 经指向文件夹的链接要同一个文件：真身比真身
+    // 11/22 修（1b 验收）的夹具：链接指回写到的东西（twin.png → shot1.png、galtwin → gal）；gal 里一个指到外面文件夹的链接 outdir（交付里也写到了 gal/outdir/）；
+    // pics3 是「发钥匙以后 gal 被换成链接」时 gal/a.png 落到的地方；主目录的上一级放两张图、主目录本身多两张图（够格当图集：认不出别名、拿掉「上一级」那道，就真被列出来）；一份 PDF
+    fs.symlinkSync(path.join(RD, 'shot1.png'), path.join(RD, 'twin.png')); fs.symlinkSync(path.join(RD, 'gal'), path.join(RD, 'galtwin'));
+    fs.mkdirSync(path.join(RO, 'pics2'), { recursive: true }); for (const n of ['q1.png', 'q2.png']) fs.writeFileSync(path.join(RO, 'pics2', n), PNG + 'pics2-' + n); fs.symlinkSync(path.join(RO, 'pics2'), path.join(RD, 'gal', 'outdir'));
+    fs.mkdirSync(path.join(RO, 'pics3'), { recursive: true }); fs.writeFileSync(path.join(RO, 'pics3', 'a.png'), PNG + 'pics3-a');
+    const FHP = path.dirname(FH); for (const n of ['up1.png', 'up2.png']) fs.writeFileSync(path.join(FHP, n), PNG + 'up-' + n);
+    for (const n of ['h3.png', 'h4.png']) fs.writeFileSync(path.join(FH, n), PNG + 'home-' + n);
+    fs.writeFileSync(path.join(RD, 'doc.pdf'), '%PDF-1.4\n% RP_PDF\n');
+    const SVD = '/System/Volumes/Data', FIRM_OK = fs.existsSync(SVD + FH);   // macOS 的 firmlink 别名；这台机器上没有这条路径时，别名那几条跳过并写在断言里
+    const rpAt = (n) => path.join(RD, n), rpTxt = ['做好了，截图在 ' + rpAt('shot1.png') + ' 和 `' + rpAt('my shot.png') + '`。', '网页 [打开](' + rpAt('page.html') + ')，笔记 ' + rpAt('notes.md') + '，文档 ' + rpAt('report.docx'),
+      '图集 ' + rpAt('gal') + '/，另一张 ' + rpAt('shot2.png') + '，链接 ' + rpAt('link.png') + '，密钥 ' + rpAt('.secret/key.txt') + '，已删 ' + rpAt('gone.png') + '，子目录 ' + rpAt('sub/real.png'),
+      '只写了一张 ' + rpAt('onlyfile/x1.png') + '，链接文件夹 ' + rpAt('galink') + '/，点开头的 ' + rpAt('.shots') + '/，主目录 ' + FH + '/，顶层 `/private/tmp/`，图太少 ' + rpAt('few') + '/',
+      '别的写法：[主目录大写](' + FH.toUpperCase() + '/)、[上一级](' + FHP + '/)、[上一级大写](' + FHP.toUpperCase() + '/)' + (FIRM_OK ? '、[主目录 firmlink](' + SVD + FH + '/)、[上一级 firmlink](' + SVD + FHP + '/)、[顶层 firmlink](' + SVD + '/private/tmp/)' : '') +
+      '，链接 ' + rpAt('twin.png') + ' 和 ' + rpAt('galtwin') + '/，图集里指到外面的 ' + rpAt('gal/outdir') + '/，PDF ' + rpAt('doc.pdf')].join('\n\n');
+    mk('rpv', 'idle', [R.human('把截图给我看，' + rpAt('user.png') + ' 也给我'), { type: 'assistant', message: { id: 'm' + ++mid, model: 'claude-x', content: [{ type: 'tool_use', id: 'tu' + mid, name: 'Write', input: { file_path: rpAt('wrote.png') } }], stop_reason: 'tool_use' }, timestamp: ts() }, R.result(), R.final(rpTxt + '\n\n【待审阅】看图')]);
+    mk('rpw', 'idle', [R.human('另一个窗口'), R.final('这边的图：' + rpAt('other.png') + '\n\n【待审阅】看图')]);
+    const rvS = S.rpv.sid, rwS = S.rpw.sid;
+    await until(async () => { const b = (await rq(R1P, 'GET', '/api/state?peek=1', { 'x-ccboard': tok1 })).body || {}; return [rvS, rwS].every((s) => (b.sessions || []).some((x) => x.sid === s && x.done)); }, 8000);
+    const rpp = (body, cred = CRED, extra = {}) => rq(R1R, 'POST', '/api/remote/preview', RH({ 'x-ccboard-device': cred, origin: ORI, ...extra }), body);
+    const rpg = (u, extra = {}, port = R1R) => rq(port, 'GET', u, RH(extra));
+    const img = await rpp({ sid: rvS, path: rpAt('shot1.png') }), imgG = await rpg(img.body.url || '/rp/none');
+    ok(img.code === 200 && img.body.ok && img.body.kind === 'image' && /^\/rp\/[0-9a-f]{32}\/shot1\.png$/.test(img.body.url || '') && imgG.code === 200 && imgG.headers['content-type'] === 'image/png' && imgG.text.endsWith('shot1.png') && /^sandbox allow-scripts/.test(imgG.headers['content-security-policy'] || '') && imgG.headers['x-content-type-options'] === 'nosniff' && imgG.headers['cache-control'] === 'no-store',
+      '远程预览：交付正文里写到的图 → 一个 /rp/<32 位钥匙>/<文件名> 网址；远程端口上 GET 它拿到这个文件（image/png、nosniff、no-store、CSP 沙盒）', errOf(img) + ' ' + imgG.code + ' ' + JSON.stringify(imgG.headers['content-security-policy']));
+    const sp = await rpp({ sid: rvS, path: rpAt('my shot.png') }), pg = await rpp({ sid: rvS, path: rpAt('page.html') }), pgG = await rpg(pg.body.url || '/rp/none'), csp = pgG.headers['content-security-policy'] || '';
+    ok(sp.code === 200 && sp.body.url && pg.code === 200 && pg.body.kind === 'page' && pgG.code === 200 && pgG.text.includes('RP_PAGE') && /^sandbox allow-scripts allow-popups allow-forms; frame-ancestors 'self'$/.test(csp) && !csp.includes('allow-same-origin'),
+      '远程预览：反引号里带空格的路径、[文字](路径) 写的网页都认；网页套 CSP 沙盒、不给 allow-same-origin（和总控台界面同源，不沙盒就能读走设备凭证）', errOf(sp) + ' ' + errOf(pg) + ' ' + csp);
+    const md = await rpp({ sid: rvS, path: rpAt('notes.md') }), wr = await rpp({ sid: rvS, path: rpAt('wrote.png') });
+    ok(md.code === 200 && md.body.kind === 'markdown' && md.body.text.includes('RP_NOTES') && !md.body.url && wr.code === 200 && wr.body.url, '远程预览：Markdown 内容直接放进应答（不发网址）；这一轮 Write 过、正文没写到的文件也算出现过', errOf(md) + ' ' + errOf(wr));
+    const rpDeny = [
+      ['他本人那句话里写的路径（远程能 /api/send，自己打一句就能自证）', { sid: rvS, path: rpAt('user.png') }, 404, 'not-in-conversation'],
+      ['对话里没出现过的文件', { sid: rvS, path: rpAt('private.png') }, 404, 'not-in-conversation'],
+      ['穿越：gal/../private.png', { sid: rvS, path: rpAt('gal') + '/../private.png' }, 404, 'not-in-conversation'],
+      ['穿越：写到的图后面接 ../../ 到别处', { sid: rvS, path: rpAt('shot1.png') + '/../../../../../../etc/hosts' }, 404, 'not-in-conversation'],
+      ['穿越：编码过的 %2e%2e', { sid: rvS, path: rpAt('%2e%2e') + '/rpv/private.png' }, 404, 'not-in-conversation'],
+      ['穿越：/etc/hosts', { sid: rvS, path: '/etc/hosts' }, 404, 'not-in-conversation'],
+      ['相对路径', { sid: rvS, path: 'shot1.png' }, 404, 'not-in-conversation'],
+      ['没写到的链接，指到没写到的文件', { sid: rvS, path: rpAt('evil.png') }, 404, 'not-in-conversation'],
+      ['写到了的链接，但它指到别处', { sid: rvS, path: rpAt('link.png') }, 404, 'not-in-conversation'],
+      ['写到了，但在点开头的文件夹里（.secret）', { sid: rvS, path: rpAt('.secret/key.txt') }, 404, 'not-in-conversation'],
+      ['别的会话写到的文件、拿这个会话的 sid 要', { sid: rvS, path: rpAt('other.png') }, 404, 'not-in-conversation'],
+      ['这个会话写到的文件、拿别的会话的 sid 要', { sid: rwS, path: rpAt('shot1.png') }, 404, 'not-in-conversation'],
+      ['没有的 sid', { sid: 'nope', path: rpAt('shot1.png') }, 404, 'missing'],
+      ['写到了，但已经删了', { sid: rvS, path: rpAt('gone.png') }, 404, 'missing'],
+      ['类型不在白名单（docx）', { sid: rvS, path: rpAt('report.docx') }, 200, 'no-preview'],
+    ];
+    const rpLeak = [];
+    for (const [why, b, c, rs] of rpDeny) { const y = await rpp(b); if (!(y.code === c && y.body && y.body.ok === false && y.body.reason === rs && !y.body.url && !y.body.text)) rpLeak.push(why + '：' + errOf(y) + ' ' + (y.body && y.body.reason)); }
+    ok(rpLeak.length === 0, '远程预览拦下的 ' + rpDeny.length + ' 种（他本人写的、没出现过、三种穿越、/etc/hosts、相对路径、两种链接、点开头的文件夹、别的会话的 sid 两个方向、没有的 sid、已删、docx）：没有网址、没有内容', JSON.stringify(rpLeak));
+    // ── C1.1 文件夹图集（11/21 作者 本人要现在做）：文件夹本身要在交付里写到（按真身）；只列第一层的图 / 视频、不列链接、门槛同本机；主目录、它的上层、顶层不列 ──
+    const gd = await rpp({ sid: rvS, path: rpAt('gal') + '/' }), gdJ = JSON.stringify(gd.body || {}), gdG = gd.body && gd.body.items ? await Promise.all(gd.body.items.map((it) => rpg(it.url))) : [];
+    ok(gd.code === 200 && gd.body.kind === 'gallery' && gd.body.name === 'gal' && gd.body.total === 5 && gd.body.truncated === false && gd.body.items.map((i) => i.name).join() === 'a.png,b.png,c.png,d.png,e.png' && gd.body.items.every((i) => i.kind === 'image' && /^\/rp\/[0-9a-f]{32}\//.test(i.url))
+      && gdG.length === 5 && gdG.every((y, i) => y.code === 200 && y.text === PNG + 'gal/' + gd.body.items[i].name),
+      '远程文件夹图集：交付里写到的文件夹 → 第一层的 5 张图，按文件名排，每张一把钥匙、拿得到原图', gdJ.slice(0, 300));
+    ok(!/n\.txt|deep|hid|l-in|l-out|outside|outdir|pics2|q1|q2|RP_DIR_TEXT/.test(gdJ), '远程文件夹图集不列：文本、点开头的、子文件夹里的、指回文件夹里的链接、指到别处的链接、指到外面文件夹的链接 outdir 和它里面的图（名字都不出现在应答里）', gdJ.slice(0, 300));
+    const rpDir = [
+      ['文件夹里只写到一张图、没写到文件夹本身', { sid: rvS, path: rpAt('onlyfile') }, 404, 'not-in-conversation'],
+      ['写到的文件夹的上一级', { sid: rvS, path: RD }, 404, 'not-in-conversation'],
+      ['写到了，但文件夹本身是指到别处的链接', { sid: rvS, path: rpAt('galink') + '/' }, 404, 'not-in-conversation'],
+      ['写到了，但是点开头的文件夹', { sid: rvS, path: rpAt('.shots') }, 404, 'not-in-conversation'],
+      ['这个会话写到的文件夹、拿别的会话的 sid 要', { sid: rwS, path: rpAt('gal') }, 404, 'not-in-conversation'],
+      ['主目录', { sid: rvS, path: FH }, 200, 'no-preview', '主目录这一层的文件夹远程不列'],
+      ['顶层 /private/tmp（/tmp 的真身，3 段；写 /tmp 会先被「本身是链接」拦下，顶层这道就没测到）', { sid: rvS, path: '/private/tmp' }, 200, 'no-preview', '主目录这一层的文件夹远程不列'],
+      ['图太少（1 张图 3 个文本）', { sid: rvS, path: rpAt('few') }, 200, 'no-preview', '这个文件夹里不是一组图或视频，远程看不了'],
+    ];
+    const rpDirLeak = [];
+    for (const [why, b, c, rs, msg] of rpDir) { const y = await rpp(b); if (!(y.code === c && y.body && y.body.ok === false && y.body.reason === rs && !y.body.items && !y.body.url && (!msg || y.body.error === msg))) rpDirLeak.push(why + '：' + errOf(y) + ' ' + (y.body && y.body.reason) + ' ' + (y.body && y.body.error)); }
+    ok(rpDirLeak.length === 0, '远程文件夹拦下的 ' + rpDir.length + ' 种（只写到里面一张、上一级、链接文件夹、点开头、别的会话、主目录、/private/tmp、图太少；主目录的上一级和别的写法在下面两条）：没有列表、没有网址', JSON.stringify(rpDirLeak));
+    // ── 11/22 修（1b 验收）：主目录和它的上层按 dev+ino 认，不按字面；一个路径只解析一次，先规整再判断链接，判断和发的是同一份真身 ──
+    const SHALLOW = '主目录这一层的文件夹远程不列', LINKMSG = '这是指到别处的链接，远程不给看', NOTIN = '这个文件不在这段对话里，远程不给看';
+    const rpCase = async (list) => { const bad = []; for (const [why, p, c, rs, msg] of list) { const y = await rpp({ sid: rvS, path: p }); if (!(y.code === c && y.body && y.body.ok === false && y.body.reason === rs && !y.body.items && !y.body.url && !y.body.text && (!msg || y.body.error === msg))) bad.push(why + '：' + errOf(y) + ' ' + (y.body && y.body.reason) + (y.body && y.body.items ? ' items=' + y.body.items.map((i) => i.name).join(',') : '')); } return bad; };
+    const aHome = await rpCase([['大小写不同的写法', FH.toUpperCase() + '/', 200, 'no-preview', SHALLOW], ...(FIRM_OK ? [['firmlink 别名', SVD + FH + '/', 200, 'no-preview', SHALLOW]] : [])]);
+    ok(aHome.length === 0, '远程文件夹：主目录换个写法（' + (FIRM_OK ? '大小写不同、/System/Volumes/Data 别名' : '大小写不同；这台机器没有 /System/Volumes/Data，别名没测') + '）照样认出是主目录、不列（主目录里有 4 张图，认不出就真列出来）', JSON.stringify(aHome));
+    const aUp = await rpCase([['原写法', FHP, 200, 'no-preview', SHALLOW], ['大小写不同', FHP.toUpperCase() + '/', 200, 'no-preview', SHALLOW], ...(FIRM_OK ? [['firmlink 别名', SVD + FHP + '/', 200, 'no-preview', SHALLOW]] : [])]);
+    ok(aUp.length === 0, '远程文件夹：主目录的上一级（' + (FIRM_OK ? '原写法、大小写不同、firmlink 别名' : '原写法、大小写不同') + '）不列：假主目录的路径不带点，这道真测得到，上一级里有两张图', JSON.stringify(aUp));
+    const aTop = FIRM_OK ? await rpCase([['/System/Volumes/Data/private/tmp/', SVD + '/private/tmp/', 200, 'no-preview', SHALLOW]]) : [];
+    ok(aTop.length === 0, '远程文件夹：顶层 /private/tmp 的 firmlink 别名（/System/Volumes/Data/private/tmp/）照样是顶层、不列' + (FIRM_OK ? '' : '（这台机器没有这条路径，没测）'), JSON.stringify(aTop));
+    const aImg = [await rpp({ sid: rvS, path: rpAt('shot1.png').toUpperCase() }), ...(FIRM_OK ? [await rpp({ sid: rvS, path: SVD + rpAt('shot1.png') })] : [])], aImgG = await Promise.all(aImg.map((y) => rpg((y.body && y.body.url) || '/rp/none')));
+    ok(aImg.every((y) => y.code === 200 && /^\/rp\/[0-9a-f]{32}\/shot1\.png$/.test(y.body.url || '')) && aImgG.every((y) => y.code === 200 && y.text === PNG + 'shot1.png'), '远程预览：写到的图换个写法要（大小写不同' + (FIRM_OK ? '、firmlink 别名' : '') + '）收成同一个真身，照样给、网址里是真身的文件名', aImg.map(errOf).join(' | '));
+    const bLink = await rpCase([
+      ['link.png/.（写到的链接，结尾 /.）', rpAt('link.png') + '/.', 404, 'not-in-conversation', LINKMSG],
+      ['galink/.（写到的链接文件夹，结尾 /.）', rpAt('galink') + '/.', 404, 'not-in-conversation', LINKMSG],
+      ['galink/p1.png/..（链接在中间，结尾 /..）', rpAt('galink') + '/p1.png/..', 404, 'not-in-conversation', LINKMSG],
+      ['galink/./（链接在中间，结尾 /./）', rpAt('galink') + '/./', 404, 'not-in-conversation', LINKMSG],
+    ]);
+    ok(bLink.length === 0, '远程预览：写到的链接后面接 /.、/./、/.. 绕不过「本身是链接」那道（先按字面规整再判断）', JSON.stringify(bLink));
+    const bTarget = await rpCase([['链接指去的图', path.join(RO, 'outside.png'), 404, 'not-in-conversation', NOTIN], ['链接指去的文件夹', path.join(RO, 'pics') + '/', 404, 'not-in-conversation', NOTIN]]);
+    ok(bTarget.length === 0, '远程预览：交付里只写了链接，直接要链接指去的图 / 文件夹不给（链接指去的地方不算写到）', JSON.stringify(bTarget));
+    const bTwin = await rpCase([['twin.png（指回写到的 shot1.png）', rpAt('twin.png'), 404, 'not-in-conversation', LINKMSG], ['galtwin/.（指回写到的 gal，结尾 /.）', rpAt('galtwin') + '/.', 404, 'not-in-conversation', LINKMSG]]);
+    ok(bTwin.length === 0, '远程预览：链接指回写到的东西，照样按链接拒、说「是链接」（要的这一级本身不能是链接）', JSON.stringify(bTwin));
+    const bOut = await rpCase([
+      ['gal/outdir/', rpAt('gal/outdir') + '/', 404, 'not-in-conversation', LINKMSG], ['gal/outdir/.', rpAt('gal/outdir') + '/.', 404, 'not-in-conversation', LINKMSG],
+      ['gal/outdir/q1.png', rpAt('gal/outdir/q1.png'), 404, 'not-in-conversation', NOTIN], ['gal/outdir/q1.png/..', rpAt('gal/outdir/q1.png') + '/..', 404, 'not-in-conversation', LINKMSG],
+    ]);
+    ok(bOut.length === 0, '远程预览：写到的图集里有一个指到外面文件夹的链接（交付里也写到了它）：它本身、/.、里面的图、里面的图后接 /.. 都拿不到外面的文件夹和图', JSON.stringify(bOut));
+    const bDot = [await rpp({ sid: rvS, path: rpAt('gal') + '/.' }), await rpp({ sid: rvS, path: rpAt('gal') + '/inner/..' })];
+    ok(bDot.every((y) => y.code === 200 && y.body.kind === 'gallery' && y.body.name === 'gal' && y.body.items.map((i) => i.name).join() === 'a.png,b.png,c.png,d.png,e.png'), '远程文件夹：写到的文件夹后面接 /. 或 /子文件夹/.. 照样是它自己的图集（规整以后是同一个）', bDot.map(errOf).join(' | '));
+    const gdE = (gd.body && gd.body.items || []).find((i) => i.name === 'e.png');
+    fs.unlinkSync(rpAt('gal/e.png')); fs.symlinkSync(path.join(RO, 'outside.png'), rpAt('gal/e.png'));
+    const gdEG = await rpg(gdE ? gdE.url : '/rp/none');
+    fs.unlinkSync(rpAt('gal/e.png')); fs.writeFileSync(rpAt('gal/e.png'), PNG + 'gal/e.png');
+    ok(gdE && gdEG.code === 404 && !gdEG.text.includes('outside'), '远程文件夹图集发了钥匙以后，里面一张被换成指到别处的链接：GET 再核真身 → 404', gdEG.code + ' ' + gdEG.text.slice(0, 60));
+    // 发钥匙以后，图集文件夹本身被换成指到别处的链接（别处正好也有一张 a.png）：GET 按发钥匙时核过的那个文件（dev+ino）对，不按路径再解析一遍就发
+    const gd2 = await rpp({ sid: rvS, path: rpAt('gal') + '/' }), gaU = ((gd2.body && gd2.body.items || []).find((i) => i.name === 'a.png') || {}).url || '/rp/none', gaBefore = await rpg(gaU);
+    fs.renameSync(rpAt('gal'), rpAt('gal-moved')); fs.symlinkSync(path.join(RO, 'pics3'), rpAt('gal'));
+    const gaAfter = await rpg(gaU);
+    fs.unlinkSync(rpAt('gal')); fs.renameSync(rpAt('gal-moved'), rpAt('gal'));
+    ok(gaBefore.code === 200 && gaBefore.text === PNG + 'gal/a.png' && gaAfter.code === 404 && !gaAfter.text.includes('pics3'), '远程文件夹图集发了钥匙以后，文件夹本身被换成指到别处的链接（那边也有 a.png）：GET 核打开的是不是当时那个文件 → 404', gaBefore.code + ' → ' + gaAfter.code + ' ' + gaAfter.text.slice(0, 60));
+    // PDF（11/22 作者 定）：远程不画，界面给下载链接。网址照样是 /rp/ 钥匙、同一套核对，服务按附件发（content-disposition: attachment），也套沙盒
+    const pdf = await rpp({ sid: rvS, path: rpAt('doc.pdf') }), pdfG = await rpg((pdf.body && pdf.body.url) || '/rp/none'), pdfX = await rpg((pdf.body && pdf.body.url) || '/rp/none', { 'tailscale-user-login': 'someone@example.org' });
+    ok(pdf.code === 200 && pdf.body.kind === 'pdf' && /^\/rp\/[0-9a-f]{32}\/doc\.pdf$/.test(pdf.body.url || '') && pdfG.code === 200 && pdfG.headers['content-type'] === 'application/pdf' && pdfG.text.includes('RP_PDF')
+      && pdfG.headers['content-disposition'] === 'attachment; filename="doc.pdf"; filename*=UTF-8\'\'doc.pdf' && /^sandbox allow-scripts allow-popups allow-forms; frame-ancestors 'self'$/.test(pdfG.headers['content-security-policy'] || '') && pdfX.code === 404 && !pdfX.text.includes('RP_PDF'),
+      '远程预览 PDF：回 kind pdf 和一把 /rp/ 钥匙；GET 它按附件发（content-disposition: attachment; filename）、套 CSP 沙盒；登录名换了人照样 404（和别的文件同一套核对）', errOf(pdf) + ' ' + pdfG.code + ' ' + JSON.stringify([pdfG.headers['content-disposition'], pdfG.headers['content-security-policy']]) + ' ' + pdfX.code);
+    const glog = logOf(r1);
+    ok(new RegExp('^remote \\S+ rpreview ' + idA + ' rpv00000 ok folder 5$', 'm').test(glog) && new RegExp('^remote \\S+ rpreview ' + idA + ' rpv00000 deny folder-shallow$', 'm').test(glog) && new RegExp('^remote \\S+ rpreview ' + idA + ' rpv00000 deny folder-not-gallery$', 'm').test(glog),
+      '远程文件夹图集留痕：给了几张（ok folder 5）、为什么不给（folder-shallow / folder-not-gallery），不记文件名', glog.split('\n').filter((l) => / folder/.test(l)).slice(0, 4).join(' / '));
+    const al = await rpp({ sid: rvS, path: path.join(ROOT, 'rp-alias', 'real.png') });
+    ok(al.code === 200 && al.body.url, '远程预览比的是真身：经指向文件夹的链接要对话里写到的那个文件，照样给（不按字面比）', errOf(al));
+    const ow = await rpp({ sid: rwS, path: rpAt('other.png') });
+    ok(ow.code === 200 && ow.body.url, '远程预览：别的会话自己写到的文件，拿它自己的 sid 照样给（证据按会话分）', errOf(ow));
+    const rpAuth = [await rpp({ sid: rvS, path: rpAt('shot1.png') }, ''), await rpp({ sid: rvS, path: rpAt('shot1.png') }, '0123456789abcdef.' + secA), await rpp({ sid: rvS, path: rpAt('shot1.png') }, CRED, { 'tailscale-user-login': 'someone@example.org' }),
+      await lpost(R1P, tok1, '/api/remote/preview', { sid: rvS, path: rpAt('shot1.png') }), await rq(R1R, 'POST', '/api/preview', RH({ 'x-ccboard-device': CRED, origin: ORI }), { path: rpAt('shot1.png') })];
+    ok(rpAuth[0].code === 401 && rpAuth[0].body.why === 'no device' && rpAuth[1].code === 401 && rpAuth[1].body.why === 'unknown device' && rpAuth[2].code === 401 && rpAuth[2].body.why === 'other login' && rpAuth[3].code === 403 && !rpAuth[3].body.url && rpAuth[4].code === 403 && rpAuth[4].body.error === 'remote: not allowed',
+      '远程预览走现有的远程闸：没配对（没凭证）401、不认识的设备 401、登录名换了人 401；本机端口不给这个接口；远程照旧不给本机的 /api/preview', rpAuth.map(errOf).join(' | '));
+    const kid = (img.body.url || '/rp/' + '0'.repeat(32) + '/x').split('/')[2], rpG = [
+      ['登录名换了人', await rpg(img.body.url, { 'tailscale-user-login': 'someone@example.org' }), 404],
+      ['钥匙对、文件名改了', await rpg('/rp/' + kid + '/shot2.png'), 404],
+      ['编出来的钥匙', await rpg('/rp/' + 'a'.repeat(32) + '/shot1.png'), 404],
+      ['钥匙后面多一段', await rpg(img.body.url + '/x'), 404],
+      ['发到 4747（本机端口不认钥匙）', await rpg(img.body.url, {}, R1P), 403],
+      ['Host 不在名单', await rq(R1R, 'GET', img.body.url, { host: 'other.tail1a2b.ts.net', 'tailscale-user-login': LG }), 403],
+      ['没有登录头', await rq(R1R, 'GET', img.body.url, { host: TS }), 403],
+    ];
+    const rpGLeak = rpG.filter(([, y, c]) => !(y.code === c && !y.text.includes(PNG))).map(([w, y]) => w + ' ' + y.code);
+    ok(rpGLeak.length === 0 && (await rpg(img.body.url)).code === 200, '远程预览的钥匙网址：登录名换人、改文件名、编的钥匙、多一段、本机端口、Host 不对、没登录头 → 都拿不到文件；对的那个照样拿得到', JSON.stringify(rpGLeak));
+    const again = await rpp({ sid: rvS, path: rpAt('shot1.png') });
+    fs.unlinkSync(rpAt('shot2.png')); fs.symlinkSync(path.join(RO, 'outside.png'), rpAt('shot2.png'));
+    const s2 = await rpp({ sid: rvS, path: rpAt('shot2.png') });
+    ok(again.body.url === img.body.url && s2.code === 404 && s2.body.reason === 'not-in-conversation', '同一台再要同一个文件：网址不变（续期）；写到的图被换成指到别处的链接 → 不给', errOf(again) + ' ' + errOf(s2));
+    fs.unlinkSync(rpAt('shot2.png')); fs.writeFileSync(rpAt('shot2.png'), PNG + 'shot2.png');
+    const s2u = (await rpp({ sid: rvS, path: rpAt('shot2.png') })).body.url || '/rp/none';
+    fs.unlinkSync(rpAt('shot2.png')); fs.symlinkSync(path.join(RO, 'outside.png'), rpAt('shot2.png'));
+    const s2g = await rpg(s2u);
+    ok(s2g.code === 404 && !s2g.text.includes('outside'), '发了钥匙以后文件被换成指到别处的链接：GET 再核真身，对不上 → 404', s2g.code + ' ' + s2g.text.slice(0, 60));
+    fs.unlinkSync(rpAt('shot2.png')); fs.writeFileSync(rpAt('shot2.png'), PNG + 'shot2.png');
+    const gl = await rpp({ sid: rvS, paths: [rpAt('shot1.png'), rpAt('shot2.png'), rpAt('shot1.png'), rpAt('private.png'), rpAt('gone.png'), rpAt('notes.md'), rpAt('gal/a.png'), rpAt('user.png')] });
+    const glG = gl.body.items ? await Promise.all(gl.body.items.map((it) => rpg(it.url))) : [];
+    ok(gl.code === 200 && gl.body.kind === 'gallery' && gl.body.items.length === 2 && gl.body.items.map((i) => i.name).join() === 'shot1.png,shot2.png' && gl.body.skipped === 5 && glG.every((y) => y.code === 200),
+      '远程图集（paths）：每张单独核，只留写到的图（去重）；没出现过的、已删的、不是图的、文件夹里没写到的、他本人写的都跳过（skipped 5）', JSON.stringify(gl.body).slice(0, 300));
+    const gl0 = await rpp({ sid: rvS, paths: [rpAt('private.png')] }), gl1 = await rpp({ sid: rvS, paths: 'x' });
+    ok(gl0.code === 404 && gl0.body.reason === 'no-preview' && gl1.code === 400, '远程图集一张都不给 → 404；paths 不是列表 → 400', errOf(gl0) + ' ' + errOf(gl1));
+    const rlog = logOf(r1);
+    ok(new RegExp('^remote \\S+ rpreview ' + idA + ' rpv00000 ok image shot1\\.png$', 'm').test(rlog) && new RegExp('^remote \\S+ rpreview ' + idA + ' rpv00000 deny not-in-conversation$', 'm').test(rlog) && new RegExp('^remote \\S+ act ' + idA + ' khalil@example\\.com POST /api/remote/preview rpv00000$', 'm').test(rlog) && !rlog.includes('RP_NOTES') && !rlog.includes(kid),
+      '远程预览留痕（brief §3.5）：每次要文件记一行 act 和 rpreview（给了什么 / 为什么不给），不记内容、不记钥匙', rlog.split('\n').filter((l) => /rpreview|deny rp-key/.test(l)).slice(0, 4).join(' / '));
+    const ex = await rpp({ sid: rvS, path: rpAt('shot2.png') }); await sleep(8400);
+    const exG = await rpg(ex.body.url || '/rp/none');
+    ok(ex.body.url && exG.code === 404 && /^remote \S+ deny rp-key expired GET \/rp\/$/m.test(logOf(r1)), '钥匙网址过期（这里调成 8 秒）→ 404，日志 deny rp-key expired', exG.code + '');
     await rq(R1R, 'POST', '/api/ack', RH({ 'x-ccboard-device': CRED, origin: ORI }), { sid: 'a\nremote x' }); await sleep(200);
     ok(!/^remote(?! \S+ )/m.test(logOf(r1)) && new RegExp('^remote \\S+ act ' + idA + ' khalil@example\\.com POST /api/ack a$', 'm').test(logOf(r1)), 'act 行的 sid 只取字母数字横杠（复审 S3）：正文里带换行伪造不出以 remote 开头的日志行', JSON.stringify(logOf(r1).split('\n').filter((l) => /^remote(?! \S+ )| act .*ack a$/.test(l))));
     x = await rq(R1P, 'GET', '/api/remote/devices', { 'x-ccboard': tok1 });
@@ -2931,8 +3177,11 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     ok(e5.code === 403 && e5.body.error === 'expired' && e6.code === 403 && e6.body.error === 'no code', '过期（这里调成 3 秒）→ 拒（expired），之后这个码就不认了（no code）', errOf(e5) + ' | ' + errOf(e6));
     x = await lpost(R1P, tok1, '/api/remote/revoke', { id: idA }, { origin: 'http://127.0.0.1:' + (R1P + 1000) });
     const inflight = hold(R1R, '/api/processed', RH({ 'x-ccboard-device': CRED, origin: ORI }), {}); await sleep(300);   // iPhone 的请求已经过了凭证检查、在等正文
+    const rvKey = (await rpp({ sid: rvS, path: rpAt('shot1.png') })).body.url || '/rp/none', rvBefore = (await rpg(rvKey)).code;   // 撤销前拿一个新钥匙，撤销后马上再用
     const rv = await lpost(R1P, tok1, '/api/remote/revoke', { id: idA }), ra = await rget(R1R, '/api/state', CRED), rb = await rget(R1R, '/api/state', CRED_B);
     const fl = await inflight.finish();
+    const rvAfter = await rpg(rvKey);
+    ok(rvBefore === 200 && rvAfter.code === 404 && !rvAfter.text.includes(PNG), '撤销设备：它要过的远程预览网址马上作废（钥匙绑着设备，GET 时核设备还在）', rvBefore + ' → ' + rvAfter.code);
     ok(fl.code === 401 && fl.body.error === 'device' && fl.body.why === 'unknown device' && new RegExp('^remote \\S+ deny revoked-in-flight ' + idA + ' POST /api/processed$', 'm').test(logOf(r1)), '撤销时正在等正文的请求（审查 M1）：正文到了也不办 → 401 unknown device，日志 deny revoked-in-flight', errOf(fl));
     ok(x.code === 403 && rv.body && rv.body.ok && ra.code === 401 && ra.body.why === 'unknown device' && rb.code === 200, '撤销：别的源来撤 → 403；本机撤掉 iPhone → 它下一次请求就 401 unknown device，iPad 不受影响', [errOf(x), errOf(rv), errOf(ra), errOf(rb)].join(' | '));
     const p7 = await lpost(R1P, tok1, '/api/remote/pair', {}), c7 = await claim(R1R, codeOf(p7), {}, 'iPad'), CRED_C = String((c7.body && c7.body.device) || ''), [idC = 'none', secC = 'none'] = CRED_C.split('.');
@@ -2955,6 +3204,19 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     const rs = [await rget(R1R, '/api/state', CRED_B), await rget(R1R, '/api/state', CRED), await claim(R1R, code6), await rget(R1R, '/api/state', CRED_C)];
     ok(up1b && rs[0].code === 200 && rs[1].code === 401 && rs[2].code === 403 && rs[2].body.error === 'no code' && rs[3].code === 401, '服务重启：iPad 照样能用（设备表在盘上）、撤销的 iPhone 照样拒、写盘失败后补写的那次撤销重启后也照样拒、重启前出的配对码作废（只在内存里）', rs.map(errOf).join(' | '));
 
+    // 钥匙不进日志（11/22 修，1b 验收）：拒绝日志里的请求路径可能带 /rp/<钥匙>/。r1 刚重起、还没记过这几种拒绝（同一种一分钟最多一行），
+    // 五种各发一次：远程端口 Host 不对、远程端口 POST /rp/、/x/../rp/ 没有登录头、%xx 写的钥匙 + 别的 Origin、本机端口带代理头
+    const FK = crypto.randomBytes(16).toString('hex'), FKE = [...FK].map((c) => '%' + c.charCodeAt(0).toString(16)).join(''), k0 = logOf(r1).length;
+    await rq(R1R, 'GET', '/rp/' + FK + '/x.png', { host: 'other.tail1a2b.ts.net', 'tailscale-user-login': LG });
+    await rq(R1R, 'POST', '/rp/' + FK + '/x.png', RH({ 'x-ccboard-device': CRED_B, origin: ORI }), {});
+    await rq(R1R, 'GET', '/x/../rp/' + FK + '/x.png', { host: TS });
+    await rq(R1R, 'GET', '/rp/' + FKE + '/x.png', RH({ origin: 'https://evil.example' }));
+    await rq(R1P, 'GET', '/rp/' + FK + '/x.png', { host: '127.0.0.1:' + R1P, 'x-forwarded-for': '203.0.113.2' });
+    await sleep(300);
+    const klog = logOf(r1).slice(k0), kl = klog.split('\n').filter((l) => /^remote \S+ deny /.test(l) && l.includes('x.png'));
+    ok(kl.length === 5 && kl.every((l) => l.includes('/rp/<key>/x.png')) && /deny bad host GET \/rp\/<key>\/x\.png$/m.test(klog) && /deny not-allowed POST \/rp\/<key>\/x\.png$/m.test(klog) && /deny no tailscale login GET \/x\/\.\.\/rp\/<key>\/x\.png$/m.test(klog)
+      && /deny bad origin GET \/rp\/<key>\/x\.png$/m.test(klog) && /deny bad host local-port GET \/rp\/<key>\/x\.png$/m.test(klog) && !klog.includes(FK.slice(0, 16)) && !klog.toLowerCase().includes(FKE.slice(0, 30)),
+      '远程日志不记钥匙：带钥匙的 5 种拒绝（Host 不对、POST /rp/、/x/../rp/ 没有登录头、%xx 写的钥匙、本机端口带代理头）各记一行，路径里的钥匙都换成 <key>', JSON.stringify(kl));
     const dtxt2 = rdf();
     const r2 = startR('r2', R2P, undefined, { CCBOARD_READONLY: '1' }, r1.d); const up2 = await upR(R2P);
     await sleep(300); const q = [await rget(R2R, '/api/state', CRED_B), await claim(R2R, 'C'.repeat(43)), await lpost(R2P, tok1, '/api/remote/pair', {}), await lpost(R2P, tok1, '/api/remote/revoke', { id: (CRED_B.split('.')[0]) })];

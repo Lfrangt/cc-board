@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 node:http / fs / path / crypto；不依赖 server.mjs 的任何状态
- * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), registerMany(files), port() }；kindOf(ext)（能预览的类型：page / pdf / image / video / audio / text / markdown；register 对「多半是图 / 视频的文件夹」另回 gallery）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）
+ * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), registerMany(files), port() }；kindOf(ext)（能预览的类型：page / pdf / image / video / audio / text / markdown；register 对「多半是图 / 视频的文件夹」另回 gallery）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）；mimeOf(ext)、readText(真身, 大小[, 已打开的 fd])、serveFile(req, res, 文件（可带已打开、核过的 fd）, 额外的头)、TEXT_MAX：远程预览（server.mjs 的 /rp/ 和 /api/remote/preview）用同一套类型表、文本上限和发文件的头
  * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register() 或 registerMany() 拿网址和类型，ui.html 按类型显示：网页、PDF 用 iframe，图和音视频用自己的元素，文本由 register() 直接读出内容，gallery（文件夹 / 一批图）排成格子墙。
  *        预览页跑在另一个端口（另一个源），所以页面里的脚本读不到总控台的口令、localStorage 和 /api；
  *        网址里的随机编号就是钥匙：一个编号只开一个文件夹，只发白名单里的文件类型，不进点开头的文件夹，不顺着符号链接出去。
@@ -56,6 +56,65 @@ function withHook(html) {
 
 const inside = (root, p) => p === root || p.startsWith(root + path.sep);
 
+// 手机远程（C1，11/21）也用这几样：远程端口发对话里出现过的单个文件时，类型表、文本上限、发法（Range、HTML 加 Esc 那段）和本机一样
+export const mimeOf = (ext) => MIME[String(ext).toLowerCase()] || null;
+export { TEXT_MAX };
+export function readText(real, size, fd0) {      // 文本类最多读 TEXT_MAX 给界面；读不了回 null。fd0：调用方已经打开、核过的 fd（远程预览），从它读、不关
+  const buf = Buffer.alloc(Math.min(size, TEXT_MAX)); let fd = fd0;
+  try { if (fd === undefined) fd = fs.openSync(real, 'r'); fs.readSync(fd, buf, 0, buf.length, 0); } catch { return null; } finally { if (fd0 === undefined && fd !== undefined) fs.closeSync(fd); }
+  return { text: buf.toString('utf8'), truncated: size > TEXT_MAX };
+}
+// f = { real, type, size, fd? }；extra 是另加的响应头（远程加 CSP 沙盒）。
+// f.fd（远程预览，11/22）：调用方已经打开、核过是同一个文件的 fd，从它读、发完关掉，不再按 f.real 打开；没有 fd 时和以前一样按路径打开（本机预览）
+export function serveFile(req, res, f, extra = {}) {
+  const own = f.fd !== undefined, done = () => { if (own) try { fs.closeSync(f.fd); } catch {} };
+  const head = {
+    'content-type': f.type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',            // 页面去外网取东西时不把带编号的网址带出去
+    'accept-ranges': 'bytes', ...extra,
+  };
+  if (f.type.startsWith('text/html')) {          // 网页整份发（不按段），末尾带上 Esc 的那一小段
+    let body; try { body = Buffer.from(withHook(fs.readFileSync(own ? f.fd : f.real, 'utf8')), 'utf8'); } catch { done(); res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); return res.end('404'); }
+    done();
+    delete head['accept-ranges']; head['content-length'] = body.length;
+    res.writeHead(200, head); return res.end(req.method === 'HEAD' ? undefined : body);
+  }
+  // 音视频要按段取（WebKit 的 <video> / <audio> 先要 bytes=0-1，不回 206 就不播）
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  let start = 0, end = f.size - 1, code = 200;
+  if (m && (m[1] || m[2])) {
+    if (m[1]) { start = +m[1]; if (m[2]) end = Math.min(+m[2], end); } else { start = Math.max(0, f.size - +m[2]); }
+    if (start > end || start >= f.size) { done(); res.writeHead(416, { 'content-range': `bytes */${f.size}` }); return res.end(); }
+    code = 206; head['content-range'] = `bytes ${start}-${end}/${f.size}`;
+  }
+  head['content-length'] = f.size ? end - start + 1 : 0;
+  res.writeHead(code, head);
+  if (req.method === 'HEAD' || !f.size) { done(); return res.end(); }
+  const rs = fs.createReadStream(f.real, own ? { fd: f.fd, start, end } : { start, end });   // 给了 fd 时读它、读完自己关（autoClose）
+  if (own) res.on('close', () => rs.destroy());
+  rs.on('error', () => res.destroy()).pipe(res);
+}
+
+// 一个文件夹里能排成图集的图和视频（本机预览的 gallery() 和手机远程的文件夹图集共用，C1.1）。只看第一层；点开头的不列；
+// 达标线：至少 GALLERY_MIN 个、占文件的 GALLERY_SHARE 以上；按数字排，最多 GALLERY_MAX 个。
+// direct：只认文件夹里真放着的文件（真身就是 文件夹/名字，链接一律不列）；不给时和本机一样，链接指到文件夹里面的照列
+export function listGallery(dir, { direct = false } = {}) {
+  let names; try { names = fs.readdirSync(dir); } catch { return { error: 'missing' }; }
+  let files = 0; const media = [];
+  for (const name of names) {
+    if (name.startsWith('.')) continue;
+    let real, st; try { real = fs.realpathSync(path.join(dir, name)); st = fs.statSync(real); } catch { continue; }
+    if (!st.isFile()) continue;
+    files++;
+    const kind = kindOf(path.extname(real).slice(1));
+    if (isMedia(kind) && (direct ? real === path.join(dir, name) : inside(dir, real))) media.push({ name, kind, real });
+  }
+  if (media.length < GALLERY_MIN || media.length < files * GALLERY_SHARE) return { error: 'no-preview' };
+  media.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));   // 01、02、…、10：按数字排，不是按字母排
+  const shown = media.slice(0, GALLERY_MAX);
+  return { total: media.length, truncated: media.length > shown.length, media: shown };
+}
+
 export function startPreview({ port, home, log = () => {} }) {
   const byId = new Map();                         // 编号 → { root, entry, shallow }
   const byFile = new Map();                       // 文件真身 → 编号（同一个文件再点，网址不变）
@@ -77,21 +136,10 @@ export function startPreview({ port, home, log = () => {} }) {
   function gallery(dir) {
     if (!bound) return { ok: false, error: 'not-ready' };
     if (isShallow(dir)) return { ok: false, error: 'no-preview' };
-    let names; try { names = fs.readdirSync(dir); } catch { return { ok: false, error: 'missing' }; }
-    let files = 0; const media = [];
-    for (const name of names) {
-      if (name.startsWith('.')) continue;
-      let real, st; try { real = fs.realpathSync(path.join(dir, name)); st = fs.statSync(real); } catch { continue; }
-      if (!st.isFile()) continue;
-      files++;
-      const kind = kindOf(path.extname(real).slice(1));
-      if (isMedia(kind) && inside(dir, real)) media.push({ name, kind });
-    }
-    if (media.length < GALLERY_MIN || media.length < files * GALLERY_SHARE) return { ok: false, error: 'no-preview' };
-    media.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));   // 01、02、…、10：按数字排，不是按字母排
-    const id = claimDir(dir), shown = media.slice(0, GALLERY_MAX);
-    return { ok: true, kind: 'gallery', name: path.basename(dir), dir, total: media.length, truncated: media.length > shown.length,
-      items: shown.map((m) => ({ name: m.name, kind: m.kind, url: mediaUrl(id, m.name) })) };
+    const g = listGallery(dir); if (g.error) return { ok: false, error: g.error };
+    const id = claimDir(dir);
+    return { ok: true, kind: 'gallery', name: path.basename(dir), dir, total: g.total, truncated: g.truncated,
+      items: g.media.map((m) => ({ name: m.name, kind: m.kind, url: mediaUrl(id, m.name) })) };
   }
 
   // 一批文件 → 图集（一条交付里写了好几个图片路径）。不在了的、不是图 / 视频的、点开头的跳过，同一个文件只放一次；
@@ -128,9 +176,8 @@ export function startPreview({ port, home, log = () => {} }) {
     const it = byId.get(id);
     const r = { ok: true, kind, url: `http://127.0.0.1:${bound}/${id}/${encodeURIComponent(it.entry)}`, name: it.entry, dir: it.root };
     if (kind === 'text' || kind === 'markdown') {
-      const buf = Buffer.alloc(Math.min(st.size, TEXT_MAX)); let fd;
-      try { fd = fs.openSync(real, 'r'); fs.readSync(fd, buf, 0, buf.length, 0); } catch { return { ok: false, error: 'missing' }; } finally { if (fd !== undefined) fs.closeSync(fd); }
-      r.text = buf.toString('utf8'); r.truncated = st.size > TEXT_MAX;
+      const t = readText(real, st.size); if (!t) return { ok: false, error: 'missing' };
+      r.text = t.text; r.truncated = t.truncated;
     }
     return r;
   }
@@ -158,28 +205,7 @@ export function startPreview({ port, home, log = () => {} }) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return nope(405);
     const f = resolve(new URL(req.url, 'http://127.0.0.1').pathname);
     if (!f) return nope(404);
-    const head = {
-      'content-type': f.type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
-      'referrer-policy': 'no-referrer',            // 页面去外网取东西时不把带编号的网址带出去
-      'accept-ranges': 'bytes',
-    };
-    if (f.type.startsWith('text/html')) {          // 网页整份发（不按段），末尾带上 Esc 的那一小段
-      let body; try { body = Buffer.from(withHook(fs.readFileSync(f.real, 'utf8')), 'utf8'); } catch { return nope(404); }
-      delete head['accept-ranges']; head['content-length'] = body.length;
-      res.writeHead(200, head); return res.end(req.method === 'HEAD' ? undefined : body);
-    }
-    // 音视频要按段取（WebKit 的 <video> / <audio> 先要 bytes=0-1，不回 206 就不播）
-    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
-    let start = 0, end = f.size - 1, code = 200;
-    if (m && (m[1] || m[2])) {
-      if (m[1]) { start = +m[1]; if (m[2]) end = Math.min(+m[2], end); } else { start = Math.max(0, f.size - +m[2]); }
-      if (start > end || start >= f.size) { res.writeHead(416, { 'content-range': `bytes */${f.size}` }); return res.end(); }
-      code = 206; head['content-range'] = `bytes ${start}-${end}/${f.size}`;
-    }
-    head['content-length'] = f.size ? end - start + 1 : 0;
-    res.writeHead(code, head);
-    if (req.method === 'HEAD' || !f.size) return res.end();
-    fs.createReadStream(f.real, { start, end }).on('error', () => res.destroy()).pipe(res);
+    serveFile(req, res, f);
   });
 
   // 端口被占（比如两份服务同时开着）就让系统随便给一个，预览照样能用

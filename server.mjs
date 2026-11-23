@@ -33,6 +33,8 @@
  *        「这一轮改了哪些文件」和撞车提示：apply() / applyCodex() 把改文件的工具（Edit / Write / MultiEdit / NotebookEdit、Codex 的 apply_patch 补丁头）交给 noteWrite 记下；
  *        出状态时 markWrites() 给每个会话挂 wrote / wroteMore（这一轮写过的文件，新的一轮开始才清）和 collide（30 分钟内墙上另一个会话也往同一个 git 仓库里写过；仓库 = 最近一层有 .git 的上级文件夹，只用 existsSync，不起 git）。
  *        seat-history.json 保留点名岗位的进程时代；归属跨拍裁剪，启动按日志核验后恢复。
+ *        手机远程的预览（/api/remote/preview、/rp/<钥匙>/）：只给这个会话交付里写到的文件；一个路径只解析一次（rpResolve：先按字面规整、再取真身，大小写和 firmlink 别名收成一种写法），
+ *        主目录和它的上层按 dev+ino 认；钥匙绑真身和 dev+ino，GET 时按 O_NOFOLLOW 打开、核同一个文件再从这个 fd 发；PDF 按附件发；拒绝日志里的钥匙换成 <key>。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 // 只读 ~/.claude/sessions（会话登记）和 ~/.claude/projects（对话记录），不读终端画面（弹着选择框的会话除外）。
@@ -51,9 +53,10 @@ import { noteTool, classify, pinnable, useRules } from './projects.mjs';
 import { judgeArgs, judgeInput, parseJudge, failReason, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
 import { routeNew } from './route.mjs';                                         // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数
 import { parseAccounts, parseFallback, pickDefault, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
-import { startPreview } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
+import { startPreview, kindOf, mimeOf, readText, serveFile, listGallery } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 import { buildOrg } from './org.mjs';
-import { parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
+import { pathsIn, RP_TTL, RP_KEEP, rpKeyOk, hiddenPath, parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
+import { parseUpdateConf, createUpdater } from './update.mjs';               // 公开安装包检查新版本、自动下载（只连 github.com，config 的 updateCheck / autoUpdate）
 import { qrSvg } from './qr.mjs';                                               // 配对链接画成二维码（零依赖）
 import { parseAutoConfig, autoArgs, autoInput, parseAuto, hardStop, autoMessage, isAutoPrompt, autoBlock, quotaHold, KW_TEXT, isKeepWarm, parseKeepWarm, keepWarmDue, kwPaneGate } from './autopilot.mjs';   // 自动续跑：哪些窗口能替他把灰字建议发出去、先问小模型                                         // 架构视图：哪个窗口归哪个窗口管（规则全在那里，这里只备料）
 
@@ -185,7 +188,7 @@ function parseOrg(o) {                   // 写错了就抛出去，和别的键
 }
 let CONFIG_OK = false;                   // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
@@ -201,12 +204,13 @@ const CONFIG = (() => {
     // 默认号到顶才退回哪个号（11/22 Khalil：「我之后新建的任务开到主号」）：写错只关这一项，不连累整份（同 remote / apns）
     const fbr = parseFallback(c.accountFallback, accounts, defaultAccount);
     if (fbr.error) console.log(`config ${CONFIG_FILE}：accountFallback 不用（${fbr.error}），默认号到顶也不退`);
+    const update = parseUpdateConf(c);                 // updateCheck / autoUpdate 不是布尔就抛：整份不用，和 autoTrust 这些键一样
     const org = parseOrg(c.org);
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -217,6 +221,16 @@ function loadToken() {
   return t;
 }
 const TOKEN = loadToken();
+
+// ───────────── 检查新版本（11/22 Khalil：「已经装了的用户不会自动更新……有新 release 就在界面上提示，点一下就能下 dmg」「默认就是最新版本自动下载」）─────────────
+// 只有公开 dmg 装的才有 app/.bundle-version（外壳换代码时写的「0.3.7 (12)」）；build.sh 装的（作者本机、一行安装脚本）没有，就不查、不连网。
+// 试验场默认不连：给了 CCBOARD_UPDATE_BASE（测试的假服务器）才查，CCBOARD_UPDATE_CURRENT 顶替版本号。只读服务不查（要写 update.json）。
+const UPDATE_CUR = (SANDBOX ? process.env.CCBOARD_UPDATE_CURRENT : '') || (() => { try { return fs.readFileSync(path.join(DIR, '.bundle-version'), 'utf8').trim(); } catch { return ''; } })();
+const UPDATE_BASE = SANDBOX ? process.env.CCBOARD_UPDATE_BASE || '' : undefined;
+const updater = UPDATE_CUR && CONFIG.update.check && !READONLY && UPDATE_BASE !== ''
+  ? createUpdater({ current: UPDATE_CUR, dir: DATA, conf: CONFIG.update, ...(UPDATE_BASE ? { base: UPDATE_BASE } : {}), log: (m) => console.log(`${m.replace(/^update /, 'update ' + new Date().toISOString() + ' ')}`) })
+  : null;
+console.log(`update ${new Date().toISOString()} ${updater ? `on：本机 ${UPDATE_CUR}，autoUpdate=${CONFIG.update.auto}` : `off（${!UPDATE_CUR ? '不是公开安装包' : !CONFIG.update.check ? 'updateCheck=false' : READONLY ? '只读' : '试验场'}）`}`);
 
 // ───────────── 手机远程（11/17 Khalil 14:13：「先在沙盒里把 server.mjs 的 Host 检查、配对、远程权限收窄做出来」）─────────────
 // 只走 Tailscale：remote 开着时服务另听 127.0.0.1:<端口+1>（线上 4748），tailscale serve 把 https://<机器>.ts.net 转到那里；4747 照旧只认本机。
@@ -254,7 +268,9 @@ function remoteLog(m, key) {
   if (key) { const t = remoteSaid.get(key) || 0; if (Date.now() - t < 60000) return; remoteSaid.set(key, Date.now()); }
   console.log(`remote ${new Date().toISOString()} ${m}`);          // 这里永远不写配对码、凭证、配对链接
 }
-const pathOf = (req) => String(req.url || '').split(/[?#]/)[0].slice(0, 80);
+// 日志里的请求路径。远程预览的钥匙（/rp/<32 位十六进制>/…）不进日志（11/22 修）：连着 16 位以上的十六进制（含 %xx 写的）一律换成 <key>，
+// 不按 /rp/ 开头认：/x/../rp/<钥匙> 这类写法 URL 规整后照样走 /rp/ 路由
+const pathOf = (req) => String(req.url || '').split(/[?#]/)[0].replace(/(?:[0-9a-f]|%(?:3[0-9]|[46][1-6])){16,}/gi, '<key>').slice(0, 80);
 
 // ───────────── APNs：通知合批之后才进来，网络和密钥只留在服务层 ─────────────
 const APNS = CONFIG.apns;
@@ -1884,6 +1900,109 @@ function localPath(raw) {
 }
 function findSession(sid) { return sessions.find((s) => s.sid === sid); }
 
+// ───────────── 远程预览（C1，11/21，remote-full-brief §3.2）─────────────
+// 手机传 { sid, path }：服务先 realpath，再核这个真身出现在这个会话的交付正文、或「这一轮改的文件」里；不在就 404。
+// 他本人说的话不算证据（远程能 /api/send，自己打一句路径就能自证）。手机自己编的路径、../、链接指到外面，真身都对不上。
+// 11/22 修（1b 验收）：一个路径只解析一次（rpResolve），之后每道判断、发出去的都是这同一份真身，中间不再按原来的写法解析第二次。
+// 真身收成一种写法：大小写不同的写法（/Users/Khalil）、firmlink 别名（/System/Volumes/Data/Users/khalil）都收成同一个；「是不是主目录 / 它的上层」按 dev+ino 比，不按字面
+const FIRM = '/System/Volumes/Data';               // macOS 的数据卷：/Users、/private、/Volumes 这些在它下面另有一份同一个东西的写法（firmlink）
+const idOf = (p) => { try { const s = fs.statSync(p, { bigint: true }); return s.dev + ':' + s.ino; } catch { return ''; } };
+function rpCanon(p) {                              // 真身：realpathSync.native 收掉链接和大小写；firmlink 别名它收不掉，去掉前缀后是同一个东西（dev+ino）就用去掉前缀的那个。不在就抛错
+  const r = fs.realpathSync.native(p);
+  if (!r.startsWith(FIRM + '/')) return r;
+  const id = idOf(r);
+  try { const t = fs.realpathSync.native(r.slice(FIRM.length)); if (id && idOf(t) === id) return t; } catch {}
+  return r;
+}
+const HOME_REAL = (() => { try { return rpCanon(HOME); } catch { return HOME; } })();
+const rpHomeIds = () => { const ids = []; for (let a = HOME_REAL; ; a = path.dirname(a)) { ids.push(idOf(a)); if (a === path.dirname(a)) return ids; } };   // [主目录, 上一级, …, /] 的 dev+ino，每次现查
+// 一个完整路径 → 只解析这一次。先按字面规整（path.resolve：结尾的 /.、/..、重复的 / 都收掉），「它本身是不是链接」看的是规整后的这一级；
+// 再取真身。link：这一级本身是链接（lstat 到的和真身不是同一个东西）。取不到真身回 { n }
+function rpResolve(p) {
+  const n = path.resolve(p); let ls, real, st;
+  try { ls = fs.lstatSync(n, { bigint: true }); real = rpCanon(n); st = fs.statSync(real, { bigint: true }); } catch { return { n }; }
+  return { n, real, st, id: st.dev + ':' + st.ino, link: ls.isSymbolicLink() || ls.dev !== st.dev || ls.ino !== st.ino };
+}
+const RP_MS = (SANDBOX && Number(process.env.CCBOARD_RP_TTL_MS)) || RP_TTL;   // 钥匙多久作废；试验场可调短，线上不认
+const rpKeys = new Map();                          // 钥匙 → { dev, login, real, name, fid（发钥匙时核过的 dev:ino）, exp }
+const rpByFile = new Map();                        // 设备号 + 真身 → 钥匙（同一台再点同一个文件，网址不变、续期）
+function rpEvidence(sid) {
+  const tr = tracks.get(sid) || codexTracks.get(sid);
+  const file = (tr && tr.file) || (Object.hasOwn(archive.items, sid) && archive.items[sid].file);
+  if (!file || !fs.existsSync(file) || (file.includes('/.codex/') && !CONFIG.codex)) return null;
+  const raws = [];
+  for (const t of file.includes('/.codex/') ? readCodexTurns(file, 40) : readTurns(file, 40)) for (const r of t.results || []) raws.push(...pathsIn(r.text));
+  const cur = sessions.find((x) => x.sid === sid);
+  if (tr && tr.st && tr.st.wrote && cur) { const cwd = String(cur.cwd || '').replace(/^~(?=$|\/)/, HOME); for (const w of tr.st.wrote.keys()) { const a = absOf(w, cwd); if (a) raws.push(a); } }
+  const abs = new Set(), real = new Set(), linked = new Set();
+  for (const r of raws) { const { p } = localPath(r); if (!p) continue; const x = rpResolve(p); abs.add(x.n); if (x.real) (x.link ? linked : real).add(x.real); }   // 写到的是链接：它指去的地方不算写到（11/22 修：原来把链接的真身放进了证据，直接要它指去的那个就给了）
+  return { abs, real, linked };
+}
+// 一个路径 → 能不能给。先核「对话里出现过」再说别的，不让手机拿「不在 / 不是文件」探出本机有哪些文件
+function rpFile(raw, ev) {
+  const { p } = localPath(raw); if (!p) return { why: 'bad-path' };
+  const x = rpResolve(p);
+  if (!x.real) return { why: ev.abs.has(x.n) ? 'missing' : 'not-in-conversation' };
+  if (x.link) return { why: ev.real.has(x.real) || ev.linked.has(x.real) ? 'link' : 'not-in-conversation' };   // 要的这一级本身是链接（指到别处）不给，和本机预览「链接指到文件夹外面 404」同一条；上层文件夹是链接（/tmp）照常。只对写到过的说「是链接」
+  if (!ev.real.has(x.real)) return { why: 'not-in-conversation' };
+  const { real, st, id } = x;
+  if (hiddenPath(real, HOME_REAL)) return { why: 'hidden' };
+  if (!st.isFile()) return st.isDirectory() ? { why: 'folder', real, id } : { why: 'no-preview' };   // 文件夹带上真身和 dev:ino：单个路径点的是文件夹时走 rpGallery（C1.1）
+  const kind = kindOf(path.extname(real).slice(1));
+  return kind ? { real, id, size: Number(st.size), kind, name: path.basename(real), dir: path.dirname(real) } : { why: 'no-preview' };
+}
+// 文件夹 → 图集（C1.1，11/21 Khalil 本人要的）。文件夹本身要在交付里写到过（rpFile 已经核过：真身在证据里、本身不是链接、主目录以下没有点开头的段）；
+// 只写到文件夹里某个文件不算写到这个文件夹。主目录、它的上层、/tmp 这种顶层不列。只列第一层、真放在里面的图和视频（链接一律不列），
+// 达标线、排法、上限和本机图集一样（listGallery）；应答只带列出来的媒体文件名，文件夹里别的文件名不露
+// 威胁模型见 CLAUDE.md「手机远程」的「远程预览」：防的是远程那一头；本机同一个用户在列完和逐张 lstat 之间换文件夹的竞态在信任边界里面，
+// 这一车不修，留作已知会红的用例 test/known-red/preview-gallery-race.mjs（修法方向和「只调顺序不算修好」写在它的文件头）
+function rpGallery(dir, id) {
+  const home = rpHomeIds();
+  if (id === home[0]) return { why: 'shallow' };                      // 主目录本身（按 dev+ino 比：/Users/Khalil、firmlink 别名都认得出，11/22 修）
+  if (home.slice(1).includes(id)) return { why: 'shallow' };          // 主目录的上层
+  const top = dir === FIRM ? '/' : dir.startsWith(FIRM + '/') ? dir.slice(FIRM.length) : dir;   // 数据卷下没有短写法的，按去掉前缀算层数（/System/Volumes/Data/mnt 也是顶层）
+  if (top.split(path.sep).length <= (/^\/(private|Volumes)\//.test(top) ? 3 : 2)) return { why: 'shallow' };   // 顶层（/tmp 的真身是 /private/tmp，外接盘根是 /Volumes/<盘>）
+  const g = listGallery(dir, { direct: true });
+  if (g.error) return { why: g.error === 'missing' ? 'missing' : 'not-gallery' };
+  if (idOf(dir) !== id) return { why: 'missing' };                    // 列的时候文件夹被换掉了：不给
+  const media = [];
+  for (const m of g.media) { let s; try { s = fs.lstatSync(m.real, { bigint: true }); } catch { continue; } if (s.isFile()) media.push({ ...m, id: s.dev + ':' + s.ino }); }   // 每张带上它的 dev:ino，钥匙绑这个
+  return { ...g, media };
+}
+function rpKey(dev, login, f) {
+  const k = dev.id + '\0' + f.real; let id = rpByFile.get(k);
+  if (id && rpKeys.has(id)) rpKeys.delete(id); else id = crypto.randomBytes(16).toString('hex');
+  rpKeys.set(id, { dev, login, real: f.real, name: f.name, fid: f.id, exp: Date.now() + RP_MS }); rpByFile.set(k, id);
+  while (rpKeys.size > RP_KEEP) { const [old, it] = rpKeys.entries().next().value; rpKeys.delete(old); rpByFile.delete(it.dev.id + '\0' + it.real); }
+  return '/rp/' + id + '/' + encodeURIComponent(f.name);
+}
+// 发之前按那一份真身打开，核打开的就是当时核过的那个文件（dev+ino），发的就是这个打开的 fd：核和发之间不再按路径解析第二次（11/22 修）。
+// O_NOFOLLOW：最后一级被换成链接就打不开；O_NONBLOCK：被换成管道也不会卡住整个服务。对不上回 null
+function rpOpen(real, fid) {
+  let fd; try { fd = fs.openSync(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); } catch { return null; }
+  let st = null; try { st = fs.fstatSync(fd, { bigint: true }); } catch {}
+  if (!st || !st.isFile() || st.dev + ':' + st.ino !== fid) { fs.closeSync(fd); return null; }
+  return { fd, size: Number(st.size) };
+}
+const rpName = (s) => String(s).replace(/[\x00-\x1f\x7f\s]/g, '_').slice(0, 80);   // 日志里只记文件名，换行伪造不出日志行
+// PDF 按附件发（11/22 Khalil 定：远程不画 PDF，界面给一个下载链接）。文件名两份：ASCII 那份把别的字换成 _，filename* 那份 RFC 5987 编码
+const rpAttach = (name) => 'attachment; filename="' + String(name).replace(/[^\x20-\x7e]|["\\]/g, '_') + '"; filename*=UTF-8\'\'' + encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+const RP_CSP = "sandbox allow-scripts allow-popups allow-forms; frame-ancestors 'self'";
+// 远程端口上发钥匙对应的那一个文件。一律套 CSP 沙盒（不给 allow-same-origin）：远程端口和总控台界面同源，不沙盒的话预览页能读走 localStorage 里的设备凭证。
+// PDF 原来不套沙盒（沙盒里浏览器的 PDF 阅读器不显示），11/22 起远程不画 PDF、按附件发，就一起套上
+function rpServe(req, res, u, rem) {
+  const nope = () => reply(res, 404, { error: 'not found' });
+  const m = /^\/rp\/([0-9a-f]{32})\/([^/]+)$/.exec(u.pathname); if (!m) return nope();
+  const it = rpKeys.get(m[1]);
+  if (!rpKeyOk(it, devices, rem.login, Date.now())) { if (it && it.exp <= Date.now()) rpKeys.delete(m[1]); { const why = it ? (it.exp <= Date.now() ? 'expired' : it.login !== rem.login ? 'other-login' : 'device-gone') : 'unknown'; remoteLog(`deny rp-key ${why} GET /rp/`, 'rp:' + why); } return nope(); }
+  let name; try { name = decodeURIComponent(m[2]); } catch { return nope(); }
+  const type = mimeOf(path.extname(it.real).slice(1));
+  if (name !== it.name || !type) return nope();
+  const o = rpOpen(it.real, it.fid); if (!o) return nope();          // 发钥匙以后文件被换成链接、换了一个文件、上层文件夹被换掉：不发
+  devSeen.set(it.dev.id, Date.now());
+  serveFile(req, res, { real: it.real, fd: o.fd, type, size: o.size }, { 'content-security-policy': RP_CSP, ...(type === 'application/pdf' ? { 'content-disposition': rpAttach(it.name) } : {}) });
+}
+
 async function waitDelivered(sid, text, since, files = []) {
   const key = text.replace(/\s+/g, ' ').trim().slice(0, 24);
   const names = files.map((f) => path.basename(f));
@@ -3249,6 +3368,7 @@ const handle = async (req, res, via) => {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" });
         return res.end(PAIR_HTML);
       }
+      if ((req.method === 'GET' || req.method === 'HEAD') && u.pathname.startsWith('/rp/')) return rpServe(req, res, u, rem);   // 远程预览的文件：网址里的钥匙就是凭证（媒体、iframe 带不了设备头）
       if (!(req.method === 'POST' && u.pathname === '/api/remote/claim')) {
         if (!allowed(req.method, u.pathname)) { remoteLog(`deny not-allowed ${req.method} ${pathOf(req)}`, 'a'); return reply(res, 403, { error: 'remote: not allowed' }); }   // 限流键固定：路径由对方定，不能每个新路径记一行
         const c = checkDevice(devices, req.headers['x-ccboard-device'], rem.login);
@@ -3274,6 +3394,7 @@ const handle = async (req, res, via) => {
       const out = { now: Date.now(), sessions: sessions.map((x) => withAuto(withSuggest(x))), others: otherCount, ghostty: ghosttyOk, pending: pending.filter((x) => !live.has(x.name)).map((x) => ({ ...x, project: classify(null, { prompt: x.prompt, cwd: x.cwd, home: HOME, pin: pinOf(x.name) }) })), home: HOME, notices, providers: providers(),
         archived: Object.values(archive.items).filter((x) => x.state !== 'restoring').length, lost, crash: crashView(), stallMs: STALL_MS, sandbox: SANDBOX, limits: LIMITS };
       out.sessions = out.sessions.map(withSnooze);                                                       // 先放着带时间：推迟中（没到点、没被叫醒）的会话多一个 snooze
+      const uv = updater && !rem ? updater.view() : null; if (uv) out.update = uv;                                 // 有新版时界面顶栏出「安装 / 下载 X.Y.Z」；没有就不给这个键（老读法字段一个不变，同 remote）；只回变过的读法里没了给 null
       out.processed = processedView(out.sessions);                                                       // 「审完了」跨设备：本机端口、远程端口都给（见 processedView）
       if (REMOTE.on && !rem) out.remote = { hosts: REMOTE.hosts, devices: devices.size, port: REMOTE_PORT, ...(remoteDown ? { down: remoteDown } : {}) };      // 本机界面据此显示「手机」按钮；关着时没有这个键，和以前一样
       out.org = orgSafe(); noteRoles(out.org);                                                             // 架构视图：谁归谁管（只读，peek 不 peek 一样）
@@ -3468,6 +3589,21 @@ const handle = async (req, res, via) => {
       }
       return reply(res, 200, r.ok && rt.tier ? { ...r, route: { tier: rt.tier, model: rt.model, effort: rt.effort, why: rt.why } } : r);   // 声明了档位才带 route：调用方看得到最后用了什么
     }
+    if (u.pathname === '/api/update/open') {        // 顶栏「安装 X.Y.Z」：打开下好、核过 sha256 的 dmg（不在远程白名单里，手机点不了）
+      if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
+      const st = updater && updater.state(), v = updater && updater.view();
+      if (!v || !v.ready || !st.file || !fs.existsSync(st.file)) return reply(res, 200, { ok: false, error: '新版还没下好', page: v ? v.page : null });
+      if (SANDBOX) { console.log(`update ${new Date().toISOString()} dry:open ${st.file}`); return reply(res, 200, { ok: true, dry: true }); }
+      const r = await run('/usr/bin/open', [st.file]);
+      console.log(`update ${new Date().toISOString()} open ${st.fileVer} ${r.ok ? 'ok' : r.err}`);
+      return reply(res, 200, { ok: r.ok, error: r.err });
+    }
+    if (u.pathname === '/api/update/check') {       // 「检查更新」：马上查一次（不等一天）；测试也走它
+      if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
+      if (!updater) return reply(res, 200, { ok: false, error: '这台没开检查更新' });
+      await updater.tick(true);
+      return reply(res, 200, { ok: true, update: updater.view(), error: updater.state().error });
+    }
     if (u.pathname === '/api/open') {               // 正文里的本机路径被点了（11/12 Khalil：「把资料直接把链接给我，我可以直接点进去」）
       if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
       const { p, error } = localPath(body.path); if (error) return reply(res, 200, { ok: false, error });
@@ -3489,6 +3625,44 @@ const handle = async (req, res, via) => {
       const r = preview.register(p);
       if (r.ok) console.log(r.kind === 'gallery' ? `preview ${new Date().toISOString()} gallery ${r.dir} ${r.items.length}/${r.total}` : `preview ${new Date().toISOString()} ${r.kind} ${r.dir}/${r.name}`);
       return reply(res, 200, r.ok ? r : { ok: false, reason: r.error, error: r.error === 'missing' ? '这个文件不在了：' + p : r.error === 'not-ready' ? '预览还没准备好，过一秒再点' : '这个文件不能在这里预览' });   // reason 不是 not-ready 时界面改走 /api/open（no-preview：文件夹、Word 这类；missing：由 /api/open 报同一句错）
+    }
+    if (u.pathname === '/api/remote/preview') {     // 手机远程的预览（C1）：只给这个会话对话里出现过的文件，见 rpEvidence / rpFile
+      if (!rem || !rem.dev) return reply(res, 403, { ok: false, error: '只给手机远程用' });
+      const sid = typeof body.sid === 'string' ? body.sid : '', sid8 = (/^[\w-]{1,8}/.exec(sid) || [''])[0];
+      const ev = sid ? rpEvidence(sid) : null;
+      const no = (why, code, reason, error) => { remoteLog(`rpreview ${rem.dev.id} ${sid8 || '-'} deny ${why}`); return reply(res, code, { ok: false, reason, error }); };
+      if (!ev) return no('no-session', 404, 'missing', '没有这段对话记录');
+      if (body.paths !== undefined) {
+        if (!Array.isArray(body.paths)) return no('bad-paths', 400, 'bad', '不是路径列表');
+        const seen = new Set(), items = []; let skipped = 0;
+        for (const raw of body.paths.slice(0, 400)) {
+          const f = rpFile(raw, ev);
+          if (f.why || (f.kind !== 'image' && f.kind !== 'video')) { skipped++; continue; }
+          if (seen.has(f.real)) continue; seen.add(f.real);
+          if (items.length < 200) items.push({ name: f.name, kind: f.kind, dir: f.dir, url: rpKey(rem.dev, rem.login, f) });
+        }
+        if (!items.length) return no('gallery-empty', 404, 'no-preview', '这些图不在这段对话里，或者打不开了');
+        remoteLog(`rpreview ${rem.dev.id} ${sid8} ok gallery ${items.length}`);
+        return reply(res, 200, { ok: true, kind: 'gallery', total: seen.size, truncated: seen.size > items.length, skipped, items });
+      }
+      const f = rpFile(body.path, ev);
+      if (f.why === 'folder') {
+        const g = rpGallery(f.real, f.id);
+        if (g.why === 'missing') return no('folder-missing', 404, 'missing', '这个文件夹不在了');
+        if (g.why) return no('folder-' + g.why, 200, 'no-preview', g.why === 'shallow' ? '主目录这一层的文件夹远程不列' : '这个文件夹里不是一组图或视频，远程看不了');
+        const items = g.media.map((m) => ({ name: m.name, kind: m.kind, dir: f.real, url: rpKey(rem.dev, rem.login, { real: m.real, name: m.name, id: m.id }) }));
+        remoteLog(`rpreview ${rem.dev.id} ${sid8} ok folder ${items.length}`);
+        return reply(res, 200, { ok: true, kind: 'gallery', name: path.basename(f.real), dir: f.real, total: g.total, truncated: g.truncated, items });
+      }
+      if (f.why === 'no-preview') return no(f.why, 200, 'no-preview', '这种文件远程预览不了');
+      if (f.why === 'missing') return no(f.why, 404, 'missing', '这个文件不在了');
+      if (f.why === 'link' || f.why === 'hidden') return no(f.why, 404, 'not-in-conversation', f.why === 'link' ? '这是指到别处的链接，远程不给看' : '点开头的文件夹（.ssh、.git 这类）远程不给看');
+      if (f.why) return no(f.why, 404, 'not-in-conversation', '这个文件不在这段对话里，远程不给看');
+      const r = { ok: true, kind: f.kind, name: f.name, dir: f.dir };
+      if (f.kind === 'text' || f.kind === 'markdown') { const o = rpOpen(f.real, f.id), t = o && readText(f.real, o.size, o.fd); if (o) fs.closeSync(o.fd); if (!t) return no('missing', 404, 'missing', '这个文件不在了'); r.text = t.text; r.truncated = t.truncated; }   // 从核过的那个 fd 读（11/22）
+      else r.url = rpKey(rem.dev, rem.login, f);
+      remoteLog(`rpreview ${rem.dev.id} ${sid8} ok ${f.kind} ${rpName(f.name)}`);
+      return reply(res, 200, r);
     }
     if (u.pathname === '/api/reveal') {             // 只在访达里选中，不直接打开（路径是模型写的，不能当命令跑）
       let p = String(body.path || '').trim().replace(/^~(?=$|\/)/, HOME);
@@ -3546,5 +3720,6 @@ server.listen(PORT, '127.0.0.1', () => {
   if (!READONLY) try { fs.writeFileSync(SERVER_FILE, JSON.stringify({ pid: process.pid, port: PORT, at: Date.now() }) + '\n'); } catch (e) { console.log(`datadir ${new Date().toISOString()} 记不了 ${SERVER_FILE}：${e.message}`); }
   if (CONFIG.codex) findCodex();
   refreshAccounts(); setInterval(refreshAccounts, 30000);
+  if (updater) { setTimeout(() => updater.tick(), (SANDBOX && Number(process.env.CCBOARD_UPDATE_DELAY_MS)) || 60000).unref(); setInterval(() => updater.tick(), 3600000).unref(); }   // 起来一分钟后查一次，之后每小时看一眼（一天只真连一次）
   fastLoop(); slowLoop(); suggestLoop(); limitsLoop(); scrubTmuxEnv();
 });

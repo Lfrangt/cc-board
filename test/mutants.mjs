@@ -5,11 +5,16 @@
  *        diff-* 验证逐笔补丁的轮首、扫描终点、工具筛选、安全门和应答上限。
  *        改坏版仍带着试验场保护（不碰 Ghostty、不发通知）。要替换的原文在 server.mjs 里找不到或不唯一时直接报错，免得悄悄没改成。
  *        架构历任那一批的 9 个改坏版（历任、裁剪、启动恢复），完整套件逐个运行。
+ *        rp-* 15 个守远程预览（C1）：证据只认交付和改过的文件、真身比真身、链接 / 点开头 / 别的会话 / 钥匙核对 / CSP / 过期。
+ *        rp-dir-* 5 个守远程文件夹图集（C1.1）：主目录和上层、/private 与 /Volumes 的顶层、不列链接、证据不认上一级、留痕。
+ *        11/22 修一（rp-fix）加 7 个：rp-dir-home-parent（只拿掉「主目录的上层」）、rp-canon-case / rp-canon-firm（真身不收大小写 / firmlink 别名）、
+ *        rp-link-target-evidence（链接指去的地方也算写到）、rp-no-normalize（不先规整）、rp-log-key（日志不遮钥匙）、rp-pdf-inline（PDF 不按附件发）。
+ *        同时跑的几路各用自己的端口段（M_PORT + 第几路 × 2000）和自己的临时目录（test/.tmp/mutants-XXXXXX），互不撞、互不删。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
-// 用法：node test/mutants.mjs        （全部改坏版，一次跑 4 个，约 7 分钟）；node test/mutants.mjs 名字,名字 只跑这几个
+// 用法：node test/mutants.mjs        （全部改坏版，一次跑 M_JOBS 个、默认 4 个，每个是一整份 state.test）；node test/mutants.mjs 名字,名字 只跑这几个；端口占 M_PORT 到 M_PORT + M_JOBS × 2000
 import fs from 'node:fs'; import path from 'node:path'; import { spawn } from 'node:child_process';
-const HERE = path.dirname(new URL(import.meta.url).pathname); const TMP = path.join(HERE, '.tmp', 'mutants'); fs.mkdirSync(TMP, { recursive: true });
+const HERE = path.dirname(new URL(import.meta.url).pathname);
 const SRC = Object.fromEntries(['server.mjs', 'preview.mjs', 'autopilot.mjs', 'remote.mjs'].map((f) => [f, fs.readFileSync(path.join(HERE, '..', f), 'utf8')]));
 const src = SRC['server.mjs'];
 const MUTANTS = {
@@ -131,7 +136,7 @@ const MUTANTS = {
   'codex-new-off':       ["  if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };\n  const provider", "  const provider"],
   'codex-listed-off':    ["...(CONFIG.codex ? { codex:", "...(true ? { codex:"],
   'codex-pane-pending':  ["    if (agents[pane.name] && !CONFIG.codex) continue;", ""],
-  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return def;"],
+  'config-ignored':      ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛", "    return def;"],
   'limits-codex-ungated': ['codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null', 'codex: codexLimits(CODEX_HOME, now)'],
   'limits-not-in-state': ['sandbox: SANDBOX, limits: LIMITS };', 'sandbox: SANDBOX };'],
   'account-not-wrapped': ['    args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));', '    args.push(...(opt.codeMode === true ? withCodeMode(cl) : cl));'],   // 11/17 Code Mode：这一行多了套 /usr/bin/env 那一层，原文跟着改
@@ -163,8 +168,8 @@ const MUTANTS = {
   'suggest-plain-screen': ["['capture-pane', '-p', '-e', '-t', s.tmux]", "['capture-pane', '-p', '-t', s.tmux]"],
   'suggest-stale-kept':  ["  for (const k of [...suggests.keys()]) if (!names.has(k)) suggests.delete(k);", ""],
   // 自动收工（autoTidy）：每一道守卫、每一条线、两个开关，各有一个改坏版
-  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns() };"],
-  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, remote: parseRemote(c.remote), apns: parseApns(c.apns) };"],
+  'auto-default-on':     ["  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };", "  const def = { autoTrust: false, codex: false, autoTidy: true, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };"],
+  'auto-config-ignored': ["    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛", "    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: false, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛"],
   // 'auto-ignores-focus' 11/17 car5 换成 tidy-archives-watching（他看着时小模型照问，只把「收」推后）
   'auto-acts-in-readonly': ["      if (READONLY) { const k = s.sid + '@' + s.resultAt;", "      if (false) { const k = s.sid + '@' + s.resultAt;"],
   'auto-stale-mark':     ["if (need === 'review' && p && p.at === String(s.resultAt) &&", "if (need === 'review' && p && true &&"],
@@ -178,7 +183,7 @@ const MUTANTS = {
   'auto-clear-ignored':  ["if (okSid(sid) && processed.delete(sid)) ch = true;", "if (okSid(sid) && false) ch = true;"],
   'auto-no-prune':       ["  if (Date.now() - PROC_T0 > 10000) { let pg = 0; for (const k of processed.keys()) if (!live.has(k)) { processed.delete(k); pg++; } if (pg) saveProcessed(); }", ""],
   // 新窗口的档位（route.mjs 接进 /api/new）：档位表本身的改坏对照在 route.test.mjs --mutants，这里只改坏服务的接线
-  'route-not-wired':     ["{ provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, files: body.files,", "{ provider: body.provider, model: body.model, effort: body.effort, account: body.account, files: body.files,"],
+  'route-not-wired':     ["{ provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, fromUi: !!req.headers.origin, files: body.files,", "{ provider: body.provider, model: body.model, effort: body.effort, account: body.account, fromUi: !!req.headers.origin, files: body.files,"],
   'bad-tier-opens-window': ["      if (!rt.ok) return reply(res, 200, rt);\n", ""],
   'route-not-in-reply':  ["return reply(res, 200, r.ok && rt.tier ? { ...r, route: { tier: rt.tier, model: rt.model, effort: rt.effort, why: rt.why } } : r);", "return reply(res, 200, r);"],
   'route-not-logged':    ["if (rt.tier) console.log(`route ${new Date().toISOString()}", "if (false) console.log(`route ${new Date().toISOString()}"],
@@ -188,8 +193,8 @@ const MUTANTS = {
   'preview-any-type':    ["const type = MIME[path.extname(real).slice(1).toLowerCase()];", "const type = MIME[path.extname(real).slice(1).toLowerCase()] || 'application/octet-stream';", 'preview.mjs'],
   'preview-deep-home':   ["const isShallow = (root) => inside(root, home) ||", "const isShallow = (root) => false ||", 'preview.mjs'],
   // 图集：文件夹里列哪些文件、什么样的文件夹才算图集、一批文件怎么合
-  'gallery-symlink-out': ["if (isMedia(kind) && inside(dir, real)) media.push", "if (isMedia(kind)) media.push", 'preview.mjs'],
-  'gallery-dotfiles':    ["      if (name.startsWith('.')) continue;\n", "", 'preview.mjs'],
+  'gallery-symlink-out': [": inside(dir, real))) media.push", ": true)) media.push", 'preview.mjs'],
+  'gallery-dotfiles':    ["    if (name.startsWith('.')) continue;\n", "", 'preview.mjs'],
   'gallery-no-min':      ["const GALLERY_MIN = 2, GALLERY_SHARE = 0.6;", "const GALLERY_MIN = 1, GALLERY_SHARE = 0.6;", 'preview.mjs'],
   'gallery-no-share':    ["const GALLERY_MIN = 2, GALLERY_SHARE = 0.6;", "const GALLERY_MIN = 2, GALLERY_SHARE = 0;", 'preview.mjs'],
   'gallery-no-cap':      ["const GALLERY_MAX = 200;", "const GALLERY_MAX = 100000;", 'preview.mjs'],
@@ -203,7 +208,7 @@ const MUTANTS = {
   'preview-any-entry':   ["export const kindOf = (ext) => KIND_OF[String(ext).toLowerCase()] || null;", "export const kindOf = (ext) => KIND_OF[String(ext).toLowerCase()] || 'text';", 'preview.mjs'],
   'preview-dir-entry':   ["const kind = st.isFile() ? kindOf(", "const kind = true ? kindOf(", 'preview.mjs'],
   'preview-case-ext':    ["KIND_OF[String(ext).toLowerCase()]", "KIND_OF[String(ext)]", 'preview.mjs'],
-  'preview-text-uncut':  ["r.truncated = st.size > TEXT_MAX;", "r.truncated = false;", 'preview.mjs'],
+  'preview-text-uncut':  ["truncated: size > TEXT_MAX };", "truncated: false };", "preview.mjs"],
   'preview-new-url':     ["let id = byFile.get(real);", "let id = null;", 'preview.mjs'],
   'preview-referrer':    ["'referrer-policy': 'no-referrer',", "", 'preview.mjs'],
   'preview-no-esc-hook': ["  return i < 0 ? html + ESC_HOOK : html.slice(0, i) + ESC_HOOK + html.slice(i);", "  return html;", 'preview.mjs'],
@@ -429,9 +434,44 @@ const MUTANTS = {
   'launch-no-respawn':     ["  if (r.gone && cl) { args[args.length - cl.length]", "  if (false) { args[args.length - cl.length]"],
   'launch-gone-says-socket': ["const GONE_MSG = '会话一开就退了（claude 可能正在更新），重开一次也没起来，过一会儿再试';", "const GONE_MSG = 'tmux 没开出会话（套接字目录 ' + TMUX_DIR + ' 还在吗？）';"],
   'launch-cached-claude':  ["  await sleep(RESPAWN_MS); claudeBin = null;", "  await sleep(RESPAWN_MS);"],
+  // 远程预览（C1，11/21）：每道闸一个。原文都在 server.mjs 里正好一处（11/22 修一 rp-fix 换了写法的跟着换原文，见 test/CLAUDE.md）
+  'rp-user-text-counted':  ["readTurns(file, 40)) for (const r of t.results || []) raws.push(...pathsIn(r.text));", "readTurns(file, 40)) { raws.push(...pathsIn(t.prompt)); for (const r of t.results || []) raws.push(...pathsIn(r.text)); }"],
+  'rp-no-evidence':        ["  if (!ev.real.has(x.real)) return { why: 'not-in-conversation' };\n", "\n"],
+  'rp-lexical-evidence':   ["  if (!ev.real.has(x.real)) return { why: 'not-in-conversation' };\n", "  if (!ev.abs.has(x.n) && !ev.real.has(x.n)) return { why: 'not-in-conversation' };\n"],
+  'rp-link-allowed':       ["  if (x.link) return { why: ev.real.has(x.real) || ev.linked.has(x.real) ? 'link' : 'not-in-conversation' };", ""],
+  'rp-hidden-skipped':     ["  if (hiddenPath(real, HOME_REAL)) return { why: 'hidden' };", ""],
+  'rp-probe-order':        ["if (!x.real) return { why: ev.abs.has(x.n) ? 'missing' : 'not-in-conversation' };", "if (!x.real) return { why: 'missing' };"],
+  'rp-any-session':        ["      const ev = sid ? rpEvidence(sid) : null;", "      const ev = sid ? [...tracks.keys()].map(rpEvidence).filter(Boolean).reduce((a, b) => ({ abs: new Set([...a.abs, ...b.abs]), real: new Set([...a.real, ...b.real]), linked: new Set([...a.linked, ...b.linked]) }), { abs: new Set(), real: new Set(), linked: new Set() }) : null;"],
+  'rp-wrote-ignored':      ["  if (tr && tr.st && tr.st.wrote && cur) {", "  if (false) {"],
+  'rp-gallery-unchecked':  ["          const f = rpFile(raw, ev);", "          const f = (() => { try { const real = fs.realpathSync(String(raw)); return { real, kind: kindOf(path.extname(real).slice(1)), name: path.basename(real), dir: path.dirname(real) }; } catch { return { why: 'missing' }; } })();"],
+  'rp-key-unchecked':      ["  if (!rpKeyOk(it, devices, rem.login, Date.now())) {", "  if (!it) {"],
+  'rp-name-unchecked':     ["  if (name !== it.name || !type) return nope();", "  if (!type) return nope();"],
+  'rp-real-unchecked':     ["if (!st || !st.isFile() || st.dev + ':' + st.ino !== fid)", "if (!st || !st.isFile())"],
+  'rp-csp-same-origin':    ["\"sandbox allow-scripts allow-popups allow-forms; frame-ancestors 'self'\"", "\"sandbox allow-scripts allow-same-origin allow-popups allow-forms; frame-ancestors 'self'\""],
+  'rp-csp-no-sandbox':     ["\"sandbox allow-scripts allow-popups allow-forms; frame-ancestors 'self'\"", "\"frame-ancestors 'self'\""],
+  'rp-ttl-ignored':        ["const RP_MS = (SANDBOX && Number(process.env.CCBOARD_RP_TTL_MS)) || RP_TTL;", "const RP_MS = RP_TTL;"],
+  // C1.1 文件夹图集（11/21）
+  'rp-dir-home':           ["  if (id === home[0]) return { why: 'shallow' };", "", 'server.mjs'],
+  'rp-dir-private-top':    ["(/^\\/(private|Volumes)\\//.test(top) ? 3 : 2)", "2", 'server.mjs'],
+  'rp-dir-links':          ["listGallery(dir, { direct: true })", "listGallery(dir)", 'server.mjs'],
+  'rp-dir-parent-evidence':["if (x.real) (x.link ? linked : real).add(x.real); }", "if (x.real) { (x.link ? linked : real).add(x.real); real.add(path.dirname(x.real)); } }", 'server.mjs'],
+  'rp-dir-no-log':         ["remoteLog(`rpreview ${rem.dev.id} ${sid8} ok folder ${items.length}`);", "", 'server.mjs'],
+  // 11/22 修一（rp-fix，1b 验收的五处）：每道新的闸一个，各由 state.test [10] 里守它的那条抓
+  'rp-dir-home-parent':    ["  if (home.slice(1).includes(id)) return { why: 'shallow' };", "", 'server.mjs'],                              // 只拿掉「主目录的上层」那一句（rp-dir-home 只拿掉主目录本身）
+  'rp-canon-case':         ["  const r = fs.realpathSync.native(p);", "  const r = fs.realpathSync(p);", 'server.mjs'],                                // 真身不收大小写：写到的图换大小写要就对不上
+  'rp-canon-firm':         ["  if (!r.startsWith(FIRM + '/')) return r;", "  return r;", 'server.mjs'],                                             // firmlink 别名不收成短写法
+  'rp-link-target-evidence': ["if (x.real) (x.link ? linked : real).add(x.real); }", "if (x.real) real.add(x.real); }", 'server.mjs'],         // 写到的链接，把它指去的地方也算写到（修之前的样子）
+  'rp-no-normalize':       ["  const n = path.resolve(p); let ls, real, st;", "  const n = p; let ls, real, st;", 'server.mjs'],                   // 不先按字面规整：结尾 /. 绕过「本身是链接」
+  'rp-log-key':            [".replace(/(?:[0-9a-f]|%(?:3[0-9]|[46][1-6])){16,}/gi, '<key>')", "", 'server.mjs'],                                // 日志路径不遮钥匙
+  'rp-pdf-inline':         ["...(type === 'application/pdf' ? { 'content-disposition': rpAttach(it.name) } : {})", "...{}", 'server.mjs'],         // PDF 不按附件发
   'launch-gone-midexit':   ["|server exited unexpectedly|no current target/;", "/;"],   // [7r] 关到一半（11/19）：has-session 回这两句也算一开就退
+  // 11/22 检查新版本的接线（[8u]）：不看 config 的 updateCheck（update.mjs 的 tick 自己也看 conf.check，所以 [8u] 另核日志和 /api/update/check）；不看有没有 .bundle-version
+  'update-check-gate-dropped': ["const updater = UPDATE_CUR && CONFIG.update.check && !READONLY", "const updater = UPDATE_CUR && !READONLY"],
+  'update-stamp-gate-dropped': ["const updater = UPDATE_CUR && CONFIG.update.check", "const updater = CONFIG.update.check"],
 };
 for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
+// 这一次运行自己的临时目录（11/22 修：原来几份同时跑共用 test/.tmp/mutants，先跑完的一份把别人的改坏版删了）。原文核对过了才建，核不过不留空目录
+fs.mkdirSync(path.join(HERE, '.tmp'), { recursive: true }); const TMP = fs.mkdtempSync(path.join(HERE, '.tmp', 'mutants-'));
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边
 fs.copyFileSync(path.join(HERE, '../suggest.mjs'), path.join(TMP, 'suggest.mjs'));     // 同理 import './suggest.mjs'
 fs.copyFileSync(path.join(HERE, '../limits.mjs'), path.join(TMP, 'limits.mjs'));       // 同理 import './limits.mjs'
@@ -443,16 +483,21 @@ fs.copyFileSync(path.join(HERE, '../org.mjs'), path.join(TMP, 'org.mjs'));      
 fs.copyFileSync(path.join(HERE, '../autopilot.mjs'), path.join(TMP, 'autopilot.mjs')); // 同理 import './autopilot.mjs'
 fs.copyFileSync(path.join(HERE, '../remote.mjs'), path.join(TMP, 'remote.mjs'));       // 同理 import './remote.mjs'（手机远程）
 fs.copyFileSync(path.join(HERE, '../qr.mjs'), path.join(TMP, 'qr.mjs'));
+fs.copyFileSync(path.join(HERE, '../update.mjs'), path.join(TMP, 'update.mjs'));     // import './update.mjs'
 fs.copyFileSync(path.join(HERE, '../ui.html'), path.join(TMP, 'ui.html'));           // 远程打开 / 要读它（没有它时远程首页 500，[10] 后面整段跟着红，改坏版就分不出是被哪一条抓到的）               // 同理 import './qr.mjs'
-const run = ([name, [a, b, f = 'server.mjs']], i) => new Promise((resolve) => {
+// 端口按「第几路」（slot）分，不按改坏版的序号分（11/22 修）：state.test 一份用 T_PORT 到 T_PORT+1900（[10] 第 6 份服务 +900 的预览端口），
+// 原来 T_PORT = M_PORT + 序号，相邻两份只差 1，[4d] 的 +100…+102、[10] 的 +400…+950 会撞上隔壁那份。现在第 k 路固定用 M_PORT + k × SLOT，同时最多 4 路，
+// 占的范围是 M_PORT 到 M_PORT + 4 × 2000（不随改坏版个数涨）
+const SLOT = 2000;
+const run = ([name, [a, b, f = 'server.mjs']], slot) => new Promise((resolve) => {
   let file = path.join(TMP, name + '.mjs');
   if (f === 'server.mjs') fs.writeFileSync(file, src.replace(a, b));
   else {                                             // 改坏的是 server.mjs 引用的文件：单独一个文件夹，原样的 server.mjs 旁边放改坏的那份
     const d = path.join(TMP, name); fs.mkdirSync(d, { recursive: true }); file = path.join(d, 'server.mjs'); fs.writeFileSync(file, src);
-    for (const g of ['projects.mjs', 'suggest.mjs', 'limits.mjs', 'accounts.mjs', 'route.mjs', 'preview.mjs', 'judge.mjs', 'org.mjs', 'autopilot.mjs', 'remote.mjs', 'qr.mjs', 'ui.html']) fs.copyFileSync(path.join(TMP, g), path.join(d, g));
+    for (const g of ['projects.mjs', 'suggest.mjs', 'limits.mjs', 'accounts.mjs', 'route.mjs', 'preview.mjs', 'judge.mjs', 'org.mjs', 'autopilot.mjs', 'remote.mjs', 'qr.mjs', 'update.mjs', 'ui.html']) fs.copyFileSync(path.join(TMP, g), path.join(d, g));
     fs.writeFileSync(path.join(d, f), SRC[f].replace(a, b));
   }
-  let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(Number(process.env.M_PORT || 4770) + i) } });
+  let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(Number(process.env.M_PORT || 4770) + slot * SLOT) } });
   p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
   p.on('close', (code) => resolve({ name, code, red: out.split('\n').filter((l) => l.startsWith('  FAIL')), hung: /UND_ERR_HEADERS_TIMEOUT/.test(out), ran: /结果：\d+ 过/.test(out), tail: out.trim().split('\n').slice(-2).join(' / ') }));
 });
@@ -461,7 +506,7 @@ const run = ([name, [a, b, f = 'server.mjs']], i) => new Promise((resolve) => {
 const only = process.argv[2] ? new Set(process.argv[2].split(',')) : null;     // node test/mutants.mjs a,b 只跑这几个
 const todo = Object.entries(MUTANTS).map((e, i) => [e, i]).filter(([[n]]) => !only || only.has(n)); const res = [];
 const JOBS = Math.min(4, Math.max(1, Math.floor(Number(process.env.M_JOBS)) || 4));
-await Promise.all(Array.from({ length: JOBS }, (_, k) => k).map(async () => { while (todo.length) { const [e, i] = todo.shift(); res.push(await run(e, i)); } }));
+await Promise.all(Array.from({ length: JOBS }, (_, k) => k).map(async (slot) => { while (todo.length) { const [e] = todo.shift(); res.push(await run(e, slot)); } }));   // 第 slot 路一直用同一段端口
 let bad = 0;
 for (const r of res) { if (!r.red.length && !r.hung) bad++;
   // 服务不再应答（测试等回应超时崩掉，没有「结果」行）：改坏版把服务卡死了，算变红，和 org.test 的「死循环超时也算变红」一样。

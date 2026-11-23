@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 ../remote.mjs（或命令行给的另一份，比如改坏版）。不起服务、不碰 tmux、不联网。
  * [OUTPUT]: 逐项打印 ok / FAIL，最后一行「结果：N 过，M 没过」，退出码 0 = 全过。带 --mutants 时改跑反向对照：造若干个改坏的 remote.mjs，每个都必须让本测试变红
  * [POS]: test/ 的「手机远程」规则测试（remote.mjs 的三道拦）。测：config 的 remote 什么算开、写错一律关且不抛；Host / 登录头 / Origin 怎么认；
- *        远程能碰的接口恰好那 10 个；设备凭证、配对码、设备表；APNs 配置、令牌、锁屏类别、ES256 验签、失效判定与空闲放行。
+ *        远程能碰的接口恰好那 11 个（11/21 加远程预览）；设备凭证、配对码、设备表；APNs 配置、令牌、锁屏类别、ES256 验签、失效判定与空闲放行。
  *        接进 server.mjs 之后的端到端断言在 state.test.mjs 的 [10]，接线的改坏版在 mutants.mjs 的 remote-*。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -33,6 +33,14 @@ if (process.argv.includes('--mutants')) {
     'post-no-origin-ok':    ["  if (method !== 'GET' && h.origin === undefined) return { deny: 'no origin' };", ""],
     'bad-host-skipped':     ["    if (!TS_HOST.test(x)) return off('remote.hosts 里有不是 *.ts.net 的名字：' + String(h).slice(0, 80));", "    if (!TS_HOST.test(x)) continue;"],
     'any-domain':           ["(?:\\\\.${LABEL})*\\\\.ts\\\\.net(?::\\\\d{1,5})?$`", "(?:\\\\.${LABEL})*(?::\\\\d{1,5})?$`"],
+    'rp-api-missing':       ["'POST /api/remote/push', 'POST /api/remote/preview']", "'POST /api/remote/push']"],
+    'rp-key-no-expiry':     ["!!it && it.exp > now && devs", "!!it && devs"],
+    'rp-key-any-device':    [" && devs.get(it.dev.id) === it.dev && it.login", " && devs.has(it.dev.id) && it.login"],
+    'rp-key-any-login':     [" && it.login === login;", ";"],
+    'rp-hidden-off':        ["split('/').some((s) => s.startsWith('.')); };", "split('/').some((s) => s === '.'); };"],
+    'rp-hidden-whole-path': ["(h && r.startsWith(h + '/') ? r.slice(h.length + 1) : r)", "r"],
+    'rp-hidden-prefix':     ["r.startsWith(h + '/')", "r.startsWith(h)"],
+    'rp-paths-no-code':     ["else if (CODE_PATH.test(c)) add(c.trim());", ""],
     'on-truthy':            ["  if (v.on !== true) return off('remote.on 不是 true');", "  if (!v.on) return off('remote.on 不是 true');"],
     'allow-prefix':         ["export const allowed = (method, pathname) => REMOTE_API.has(method + ' ' + pathname);", "export const allowed = (method, pathname) => pathname.startsWith('/api/');"],
     'allow-delete':         ["'POST /api/ack',", "'POST /api/ack', 'POST /api/delete',"],
@@ -128,9 +136,9 @@ ok(g({ host: H, 'tailscale-user-login': LOGIN }, ON, 'POST').deny === 'no origin
 for (const o of ['http://' + H, 'https://evil.com', 'https://other.tail1a2b.ts.net', 'null', 'https://' + H + ':8443', 'https://' + H + '/']) ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: o }, ON, 'POST').deny === 'bad origin', 'Origin 是 ' + o + ' → 拒');
 ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: 'https://evil.com' }).deny === 'bad origin', 'GET 带着别人的 Origin 也拒');
 
-console.log('\n第二道：远程能碰的接口恰好 10 个，按「方法 + 路径」整串查');
-const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push'];
-ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 10, '原有九条加设备推送登记：放行，恰好这 10 个', [...R.REMOTE_API].join(','));
+console.log('\n第二道：远程能碰的接口恰好 11 个，按「方法 + 路径」整串查');
+const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push', 'POST /api/remote/preview'];
+ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 11, '原有九条加设备推送登记、远程预览：放行，恰好这 11 个', [...R.REMOTE_API].join(','));
 const NO = ['POST /api/delete', 'POST /api/open', 'POST /api/reveal', 'POST /api/focus', 'POST /api/attach', 'POST /api/pick', 'POST /api/crash', 'POST /api/auto', 'POST /api/upload', 'POST /api/preview', 'POST /api/unarchive', 'POST /api/cancel',
   'POST /api/remote/pair', 'POST /api/remote/revoke', 'GET /api/remote/devices', 'POST /api/remote/claim', 'GET /health', 'GET /api/send', 'POST /api/state', 'GET /api/state/', 'GET /API/STATE', 'GET /api/state%20', 'GET /api/constructor', 'GET constructor', 'HEAD /api/state', 'OPTIONS /api/send'];
 const leak = NO.filter((x) => R.allowed(...x.split(' ')));
@@ -240,6 +248,19 @@ ok(JSON.stringify(head) === JSON.stringify({ alg: 'ES256', kid: AP.keyId }), 'JW
 ok(JSON.stringify(claims) === JSON.stringify({ iss: AP.teamId, iat: 1700000000 }), 'JWT 载荷只有 iss 和给定秒时间 iat');
 ok(valid && sigLen === 64 && /^[\w-]+\.[\w-]+\.[\w-]+$/.test(jwt), 'JWT 用独立公钥验签：P-256 / ieee-p1363 / base64url');
 for (const [status, reason, verdict] of [[200, '', 'ok'], [410, 'Unregistered', 'drop'], [400, 'BadDeviceToken', 'drop'], [400, 'DeviceTokenNotForTopic', 'drop'], [400, 'BadTopic', 'err'], [403, 'InvalidProviderToken', 'err'], [429, 'TooManyRequests', 'err'], [500, 'InternalServerError', 'err'], [0, '', 'err']]) ok(call('apnsVerdict', status, reason) === verdict, 'APNs 应答：' + status + '/' + reason + ' → ' + verdict);
+
+console.log('\n远程预览（C1）：从交付正文里抽路径、点开头的段、钥匙');
+const PI = R.pathsIn('截图在 ~/Projects/x/a.png，和 `/Users/Shared/k/b c.png`；网页 [看](</Users/Shared/k/d e.html>) 或 [md](~/n.md)；链接 file:///Users/Shared/k/%E4%B8%AD.png 和 [f](file:///tmp/f.mp4)。\n结尾 /Users/Shared/k/end.txt. 不算：https://x.com/Users/Shared/k/no.png、相对 a/b.png、`ls ~/x`');
+const PIW = ['~/Projects/x/a.png', '/Users/Shared/k/b c.png', '/Users/Shared/k/d e.html', '~/n.md', '/Users/Shared/k/中.png', '/tmp/f.mp4', '/Users/Shared/k/end.txt'];
+ok(PIW.every((p) => PI.includes(p)) && PI.length === PIW.length, 'pathsIn 照界面 inline() 的规矩：直接写的、反引号里带空格的、[文字](<…>)、[文字](~/…)、file://（解码）都认；结尾英文标点还给正文；网址里的、相对路径、反引号里的命令不认', JSON.stringify(PI));
+ok(R.pathsIn('~/a.png ~/b.png ~/c.png', 2).length === 2 && R.pathsIn(null).length === 0, 'pathsIn 有上限、空的不抛');
+ok(!R.hiddenPath('/Users/Shared/k/Projects/a.png', '/Users/Shared/k') && R.hiddenPath('/Users/Shared/k/.ssh/id', '/Users/Shared/k') && R.hiddenPath('/Users/Shared/k/p/.git/x', '/Users/Shared/k') && R.hiddenPath('/Users/Shared/k/.env', '/Users/Shared/k'), 'hiddenPath：主目录以下有点开头的段（.ssh、.git、.env）就算');
+ok(!R.hiddenPath('/r/.tmp/home/p/a.png', '/r/.tmp/home') && R.hiddenPath('/r/.tmp/homeX/a.png', '/r/.tmp/home') && R.hiddenPath('/private/tmp/.cache/a', '/r/.tmp/home') && R.hiddenPath('/x/.y/z'), 'hiddenPath：主目录自己的上级不算（测试的假主目录在 .tmp 下）；只是前缀像主目录的、主目录外面的照整条看');
+ok(!R.hiddenPath('/r/.tmp/home', '/r/.tmp/home') && !R.hiddenPath('/r/.tmp/home', '/r/.tmp/home/') && R.hiddenPath('/r/.tmp', '/r/.tmp/home'), 'hiddenPath：主目录本身不算点开头（C1.1 远程要主目录时由「上层不列」回话）；主目录的上层照整条看');
+const dv = { id: 'd1' }, rpDevs = new Map([['d1', dv]]), key = { dev: dv, login: 'a@b', exp: 2000 };
+ok(R.rpKeyOk(key, rpDevs, 'a@b', 1999) && !R.rpKeyOk(key, rpDevs, 'a@b', 2000) && !R.rpKeyOk(key, rpDevs, 'c@d', 1000) && !R.rpKeyOk(key, new Map(), 'a@b', 1000) && !R.rpKeyOk(key, new Map([['d1', { id: 'd1' }]]), 'a@b', 1000) && !R.rpKeyOk(undefined, rpDevs, 'a@b', 1000),
+  'rpKeyOk：没过期、设备还是领钥匙的那一台（撤销后重新配对的同号对象也不算）、登录名一样才认；没有这把钥匙不认');
+ok(R.RP_TTL === 1800000 && R.RP_KEEP === 512, '钥匙 30 分钟过期，最多记 512 把');
 
 console.log(`\n结果：${pass} 过，${fail} 没过`);
 process.exit(fail || !pass ? 1 : 0);
