@@ -19,6 +19,7 @@
  *        归档的会话由 purgeSessionTmp 清它在 /tmp/claude-<uid> 下的临时目录：删掉的当场清，留着的归档满 3 天清。
  *        suggestLoop 每 2.5 秒读一遍空闲 tmux 会话的屏幕（capture-pane -e，只读），交给 suggest.mjs 取灰字建议和「下一步 1/2/3」，挂在 /api/state 的 suggest 字段上；它们不进对话记录。
  *        limitsLoop 每 30 秒让 limits.mjs 汇总一遍各订阅的周额度（Codex 读它的记录，只在 codex 打开时；Claude 读状态栏取数脚本存在 <数据目录>/limits 的文件），挂在 /api/state 的 limits 字段上，顶栏右上角显示；Claude 条目带上 config.json accounts 里登记的名字（name），和新任务的账号下拉同名。
+ *        limits 里还有 gemini：Gemini API 预付余额的估算（<数据目录>/limits/gemini-balance.json 人读的锚点 − config.json geminiLedgers 账本里锚点之后的花费），没有锚点就是 null。
  *        /api/new 先过 route.mjs：开窗口的一方（比如总指挥窗口）声明档位 heavy / standard / light，服务翻成 --model / --effort 再交给 newSession，写错的档位拦下、不开窗口；不声明档位就沿用 settings.json 的默认（界面「新任务 → 默认」走这条）。声明了档位的，应答带 route，日志记一行 route。
  *        每个 Claude 会话记着它最近一条真回复的 model 和 effort（对话记录里每条 assistant 消息自带，跟着 /model、/effort 走），卡片右上角的模型胶囊显示它；Codex 会话用开窗口时给的值。
  *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex、autoTidy、tidyJudge 四个开关默认关。
@@ -48,7 +49,7 @@ import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseSuggest, promptEmpty } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
-import { codexLimits, claudeLimits, purgeTaps, TAP_PREFIX } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件）
+import { codexLimits, claudeLimits, geminiLimits, purgeTaps, TAP_PREFIX } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件），和 Gemini API 余额的估算
 import { noteTool, classify, pinnable, useRules } from './projects.mjs';
 import { judgeArgs, judgeInput, parseJudge, failReason, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
 import { routeNew } from './route.mjs';                                         // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数
@@ -186,9 +187,40 @@ function parseOrg(o) {                   // 写错了就抛出去，和别的键
   }
   return out;
 }
-let CONFIG_OK = false;                   // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
+// Gemini 当 Claude Code 的模型（11/23，Khalil：「我们在 Claude Code 里用 Gemini 的模型……应该在模型列表里可以选」）。外壳还是 Claude Code：
+// config.json 的 gemini 写 claude-gemini 外壳脚本的绝对路径，模型下拉里就多出下面这几个；选了哪个，就用
+// `GEMINI_MODEL=<它> bash claude-gemini …` 起窗口（脚本自己起转接层、换环境变量、exec claude --model <它>）。不是第三个「交给谁」，别的行为（项目分组、
+// 回话、归档）都不变。模型名是写死的白名单：进命令行的只有这几个字，不会是别人传来的任意字符串。
+const GEMINI_MODELS = ['gemini-4-neon', 'gemini-4-carbon', 'gemini-4-hydrogen'];
+const isGemini = (m) => typeof m === 'string' && GEMINI_MODELS.includes(m);
+// gemini 键：脚本路径（绝对路径或 ~/ 开头）。写错只关这一项、日志一行；不写 = 关
+function parseGemini(v) {
+  if (v == null || v === false || v === '') return '';
+  try {
+    if (typeof v !== 'string') throw new Error('要是脚本的路径字符串');
+    const p = v.startsWith('~/') ? path.join(HOME, v.slice(2)) : v;
+    if (!path.isAbsolute(p) || /[\0\r\n]/.test(p)) throw new Error('要是绝对路径（或 ~/ 开头）');
+    if (!fs.existsSync(p)) console.log(`config ${CONFIG_FILE}：gemini 指的脚本现在不在（${p}），脚本到位以前 Gemini 模型不出现`);
+    return p;
+  } catch (e) { console.log(`config ${CONFIG_FILE}：gemini 不用（${e.message}），Gemini 模型不出现`); return ''; }
+}
+// geminiLedgers 键（11/23，Khalil：「把 Google 的 API 还剩多少钱也放进去」）：记 Gemini 花费的账本路径（.tsv / .jsonl，绝对路径或 ~/ 开头），
+// limits.mjs 拿锚点余额减掉它们记的钱。不是数组只关这一项、日志一行；数组里写错的那一条单独丢掉；不写 = 没有账本（有锚点也只显示锚点读数）
+const GEMINI_LEDGERS_MAX = 8;
+function parseGeminiLedgers(v) {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) { console.log(`config ${CONFIG_FILE}：geminiLedgers 不用（要是路径数组），余额只减不到花费`); return []; }
+  const list = []; let bad = 0;
+  for (const x of v) {
+    const p = typeof x === 'string' ? (x.startsWith('~/') ? path.join(HOME, x.slice(2)) : x) : '';
+    if (list.length < GEMINI_LEDGERS_MAX && p && path.isAbsolute(p) && !/[\0\r\n]/.test(p) && /\.(tsv|jsonl)$/i.test(p)) list.push(path.normalize(p)); else bad++;
+  }
+  if (bad) console.log(`config ${CONFIG_FILE}：geminiLedgers 丢掉 ${bad} 条（要 .tsv / .jsonl 的绝对路径或 ~/ 开头，最多 ${GEMINI_LEDGERS_MAX} 条）`);
+  return list;
+}
+let CONFIG_OK = false;                  // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
@@ -201,6 +233,8 @@ const CONFIG = (() => {
     // 判官（judge、自动续跑的小模型）用哪个号（总管 11/20 23:1x 定朋友号）：只认登记过的 id，规矩同 defaultAccount；不写就跟 defaultAccount，两个都没有才是钥匙串当前登录的号
     if ('judgeAccount' in c && !accounts.some((a) => a.id === c.judgeAccount)) throw new Error('judgeAccount 要是 accounts 里登记过的 id');
     const judgeAccount = c.judgeAccount || '';
+    const gemini = parseGemini(c.gemini);              // 写错只关这一项（同 remote / apns），不连累整份
+    const geminiLedgers = parseGeminiLedgers(c.geminiLedgers);   // 同上
     // 默认号到顶才退回哪个号（11/22 Khalil：「我之后新建的任务开到主号」）：写错只关这一项，不连累整份（同 remote / apns）
     const fbr = parseFallback(c.accountFallback, accounts, defaultAccount);
     if (fbr.error) console.log(`config ${CONFIG_FILE}：accountFallback 不用（${fbr.error}），默认号到顶也不退`);
@@ -209,8 +243,8 @@ const CONFIG = (() => {
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -1217,7 +1251,9 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { ret
 // 它自己在最后写了一行【待跟进】/【待审阅】/【进展】（旧写法【在跑】）就以它为准（tag = true），那一行从正文里拿掉；没写就按正文猜：
 // 问你、请你定 / 选 / 回一句 → 待跟进；写明「不需要你…」或这一轮是别的窗口开的头（by = 'peer'）→ 无需处理；其余 → 待审阅。
 // skip = 正文开头那一段已经整段当成 head 显示了，界面从这里往后显示，同一句话不出现两遍。
-const DG_TAG = /^\s*(?:\*\*)?(?:【(待跟进|待审阅|在跑|进展)】|\[(needs you|review|fyi)\])(?:\*\*)?\s*[:：]?\s*(.+?)\s*$/i;
+// 英文的 [Needs you] / [Review] / [FYI]（公开仓库 PR #8）只认代码块外的最后一个非空行：正文中间一行 [FYI] 会抢走结尾问你的话（卡片变灰，问题容易漏看），
+// 代码块里举例写的不算，`[Review](网址)` 这种链接也不算（后面紧跟「(」）。中文的照旧从下往上找。
+const DG_TAG = /^\s*(?:\*\*)?(?:【(待跟进|待审阅|在跑|进展)】|\[(needs you|review|fyi)\](?!\())(?:\*\*)?\s*[:：]?\s*(.+?)\s*$/i;
 const DG_STATUS = { 待跟进: 'reply', 待审阅: 'review', 在跑: 'bg', 进展: 'fyi', 'needs you': 'reply', review: 'review', fyi: 'fyi' };
 const DG_TRIO = /^\s*(?:[-*]\s*)?(?:\*\*)?(做了什么|怎么做的|一个新词)(?:\*\*)?\s*[:：]/;
 const DG_LEAD = /^(结论|一句话|总结|TL;?DR|简单说|先说结论)\s*[:：]\s*/i;
@@ -1232,10 +1268,11 @@ const dgSentences = (p) => (p.match(/[^。！？!?]+[。！？!?]?/g) || []).map
 const dgClip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 function digest(src, by) {
   const all = String(src || '').replace(/\r/g, '').split('\n');
-  let tag = null, ti = -1;
+  let tag = null, ti = -1, last = -1, fenced = false;
+  all.forEach((l, i) => { if (/^\s*```/.test(l)) fenced = !fenced; else if (!fenced && l.trim()) last = i; });   // 代码块外的最后一个非空行
   for (let i = all.length - 1; i >= 0; i--) {
     const m = all[i].match(DG_TAG);
-    if (m) { tag = { need: DG_STATUS[m[1] ?? m[2].toLowerCase()], t: dgPlain(m[3]) }; ti = i; break; }
+    if (m && (m[1] || i === last)) { tag ={ need: DG_STATUS[m[1] ?? m[2].toLowerCase()], t: dgPlain(m[3]) }; ti = i; break; }
   }
   const lines = ti < 0 ? all : all.filter((_, i) => i !== ti); const text = lines.join('\n').trimEnd();
   const blocks = []; let buf = null, fence = false;
@@ -1322,7 +1359,7 @@ function watchGone(out, seen) {
     const cid = goneCrash.get(sid);
     if (!p.mid && !cid) { if (now - since > CRASH_WIN + 2000) { lastLive.delete(sid); goneSince.delete(sid); } continue; }   // 闲着的：等过了「一起退出」的窗口还是单个，就不记
     const account = readTap(sid)?.account;
-    archive.items[sid] = { sid, provider: p.provider, ...(typeof account === 'string' && account.trim() ? { account } : {}), title: p.title, cwd: p.cwd, file: p.file, prompt: p.prompt, resultAt: p.resultAt,
+    archive.items[sid] = { sid, provider: p.provider, ...(typeof account === 'string' && account.trim() ? { account } : {}), title: p.title, cwd: p.cwd, file: p.file, prompt: p.prompt, resultAt: p.resultAt, ...(isGemini(p.model) ? { gemini: p.model } : {}),
       archivedAt: now, state: 'archived', lost: true, lostAt: since, project: p.project, role: p.role || null, lastAt: p.lastAt || 0, ...(cid ? { crash: cid, idle: !p.mid } : {}) };
     dirty = true; lastLive.delete(sid); goneSince.delete(sid);
     if (cid) {                                                         // 记成 lost 以后就不再挂在 goneCrash 上：它被接回、又上墙时不该把自己从这一起里拿掉（不然横幅的总数越接越小）
@@ -1333,7 +1370,7 @@ function watchGone(out, seen) {
   }
   for (const s of out) {
     const tr = tracks.get(s.sid) || codexTracks.get(s.sid);
-    lastLive.set(s.sid, { title: s.title, cwd: s.cwd, provider: s.provider || 'claude', file: (tr && tr.file) || s.file || null, prompt: s.prompt, resultAt: s.resultAt, project: s.project,
+    lastLive.set(s.sid, { title: s.title, cwd: s.cwd, provider: s.provider || 'claude', model: isGemini(s.model) ? s.model : null, file: (tr && tr.file) || s.file || null, prompt: s.prompt, resultAt: s.resultAt, project: s.project,
       mid: s.status === 'busy' || s.status === 'waiting', role: roleOf.get(s.sid) || null, lastAt: Math.max(Date.parse(s.lastAt || '') || 0, s.statusAt || 0), tmux: s.tmux || null, sock: s.tmux ? sockFor(s.tmux) : null });
   }
   for (const [sid, t] of leaving) if (now - t > 120000) leaving.delete(sid);
@@ -2210,7 +2247,7 @@ function archiveSession(sid, force, auto) {      // auto = 自动收工的理由
   const tr = tracks.get(sid) || codexTracks.get(sid), st = tr ? tr.st : newState(), v = tidyVerdict(s, st);
   const why = auto ? auto + '，' + v.why : v.why;
   const account = readTap(sid)?.account;
-  archive.items[sid] = { sid, provider: s.provider || 'claude', ...(typeof account === 'string' && account.trim() ? { account } : {}), title: s.title, cwd: s.cwd, file: tr ? tr.file : null, prompt: s.prompt, resultAt: s.resultAt,
+  archive.items[sid] = { sid, provider: s.provider || 'claude', ...(typeof account === 'string' && account.trim() ? { account } : {}), title: s.title, cwd: s.cwd, file: tr ? tr.file : null, prompt: s.prompt, resultAt: s.resultAt, ...(isGemini(s.model) ? { gemini: s.model } : {}),
     archivedAt: Date.now(), state: 'archiving', stopAt: Date.now() + GRACE, note: tidyNote(s, st), why, ...(auto ? { auto: true } : {}), ...(v.keep ? {} : { drop: true }) };
   processed.delete(sid);
   saveArchive(); scheduleStop(sid); scanSessions();
@@ -2424,9 +2461,12 @@ async function unarchive(sid) {
   if (it.state === 'restoring') return { ok: true, resumed: true, name: it.tmux };
   const dir = it.cwd && fs.existsSync(it.cwd) ? it.cwd : HOME;   // 已经停了：在后台把这段对话重新接上
   if (it.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };
+  // 它当初是 Gemini 模型开的：接回也走 claude-gemini，不悄悄换成 Claude 的模型（占 Max 额度、模型也变了）；脚本没开 / 不在就不接，说清原因
+  const gemM = it.provider !== 'codex' && isGemini(it.gemini) ? it.gemini : null;
+  if (gemM && !geminiOn()) return { ok: false, error: '这个会话是用 Gemini 模型开的，config.json 的 gemini 没开或脚本不在，接回会变成 Claude 的模型，所以没接' };
   // 接回沿用原来的账号，否则会落到钥匙串当前登录的账号。
   let acct = null, accountSource = '';
-  if (it.provider !== 'codex') {
+  if (it.provider !== 'codex' && !gemM) {
     for (const [id, source] of [[it.account, 'archive'], [readTap(sid)?.account, 'tap']]) {
       if (typeof id !== 'string') continue;
       const found = acctList.find((a) => a.id === id);
@@ -2440,21 +2480,22 @@ async function unarchive(sid) {
   }
   let name = newName();
   it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now();   // 先同步占住：排队接和他手点同一个、双击，都只会接一次（下面几个 await 期间别人看到的已经是 restoring）
-  const cm = it.provider !== 'codex' && await lastReplMode(it.file || locate(sid, it.cwd), sid);   // 所有接回（单张卡、一起退出后的排队接回）都从这里过：上次是 Code Mode 的，接回来还是
+  const cm = it.provider !== 'codex' && !gemM && await lastReplMode(it.file || locate(sid, it.cwd), sid);   // 所有接回（单张卡、一起退出后的排队接回）都从这里过：上次是 Code Mode 的，接回来还是
   const cl = it.provider === 'codex' ? null : [await findClaude(), '--resume', sid];   // Codex 不找 claude（第一次找可能等到 15 秒，接回的看护是 12 秒）
-  const cmd = it.provider === 'codex' ? [codexBin || 'codex', 'resume', sid] : wrapLaunch(acct, cm ? withCodeMode(cl) : cl);
+  let cmd = it.provider === 'codex' ? [codexBin || 'codex', 'resume', sid] : gemM ? geminiArgv(gemM, cl[0], ['--resume', sid]) : wrapLaunch(acct, cm ? withCodeMode(cl) : cl);
   let r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);   // 接回来的也是自己一台 tmux
   if (r.gone && cl) {                               // 一开就退了：和 newSession 一样重开一次。先占上新名字、重新计 12 秒（重开前那几秒别人再点接回，拿到的是要开的那个）
     const was = name; name = newName(); if (archive.items[sid] === it) { it.tmux = name; it.restoreAt = Date.now(); }
-    cmd[cmd.length - cl.length] = await refindClaude(was);
+    if (gemM) cmd = geminiArgv(gemM, await refindClaude(was), ['--resume', sid]); else cmd[cmd.length - cl.length] = await refindClaude(was);
     r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);
   }
-  if (!r.ok) { if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r.gone ? { ok: false, error: cl ? GONE_MSG : '会话一开就退了' } : r; }
+  if (!r.ok) { if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r.gone ? { ok: false, error: gemM ? GONE_GEM_MSG : cl ? GONE_MSG : '会话一开就退了' } : r; }
   if (it.provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: it.prompt || '', sid, rollout: it.file }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // 11/15：恢复出来的窗口也要过信任框（主目录的信任不存）和可能有的首次向导，以前只有 newSession 点
   launches.set(name, { at: Date.now(), prompt: '恢复「' + it.title + '」', cwd: dir });
   if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id} ${accountSource} resume`);
   if (cm) console.log(`codemode ${new Date().toISOString()} ${name} resume ${sid.slice(0, 8)} on`);
+  if (gemM) console.log(`gemini ${new Date().toISOString()} ${name} resume ${sid.slice(0, 8)} ${gemM}`);
   it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now(); saveArchive();
   await refreshPanes();
   return { ok: true, resumed: true, name };
@@ -2548,6 +2589,15 @@ async function findClaude() {
   claudeBin = p || 'claude';
   return claudeBin;
 }
+// 脚本在、config 里也开着，Gemini 模型才出现在下拉里、才能开
+const geminiOn = () => !!CONFIG.gemini && fs.existsSync(CONFIG.gemini);
+// 起一个 Gemini 窗口的命令行（argv，不过 shell）：env 设模型和 PATH，再 bash 跑外壳脚本，rest 是交给 claude 的其余参数（提示词、--resume <sid>）。
+// PATH 加上 claude 所在的文件夹：脚本最后 exec "$(command -v claude)"，tmux 里的 PATH 不一定有它（总控台是从 App 起的，服务的 PATH 很短）
+function geminiArgv(model, claude, rest) {
+  const bin = path.isAbsolute(claude) ? path.dirname(claude) + ':' : '';
+  return ['/usr/bin/env', 'GEMINI_MODEL=' + model, 'PATH=' + bin + (process.env.PATH || '/usr/bin:/bin'), '/bin/bash', CONFIG.gemini, ...rest];
+}
+const GONE_GEM_MSG = 'Gemini 会话一开就退了（claude 可能正在更新，或 claude-gemini 没起来：看 claude-gemini 转接层的日志），重开一次也没起来，过一会儿再试';
 // 新开的会话一开就退了：多半是 claude 那一刻正被自动更新换掉（不止一次撞上过）。等 RESPAWN_MS 让更新写完，
 // 丢掉缓存的路径重新找（缓存是服务起来后第一次找到的，更新那一秒找到的可能是空的、退回成光秃秃的 claude），调用方再换个新名字开一次。
 // 不用原来的名字：那台 tmux 的看护在它退出后会 rm -f 那个套接字路径，同名新服务器的套接字可能被它删掉
@@ -2776,8 +2826,9 @@ function providers() {
   try { const j = JSON.parse(fs.readFileSync(path.join(HOME, '.claude/settings.json'), 'utf8')); cm = j.model || null; ce = j.effortLevel || null; } catch {}
   try { const t = fs.readFileSync(path.join(CODEX_HOME, 'config.toml'), 'utf8');
     xm = (t.match(/^model\s*=\s*"([^"]+)"/m) || [])[1] || null; xe = (t.match(/^model_reasoning_effort\s*=\s*"([^"]+)"/m) || [])[1] || null; } catch {}
+  const gem = geminiOn() ? GEMINI_MODELS : [];   // Gemini 模型放在 Claude Code 的模型列表里；geminiModels 告诉界面哪几个是 Gemini（分一组、不接强度、不接账号）
   return {
-    claude: { label: 'Claude Code', ok: true, models: ['fable', 'opus', 'sonnet', 'haiku'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultModel: cm, defaultEffort: ce,
+    claude: { label: 'Claude Code', ok: true, models: ['fable', 'opus', 'sonnet', 'haiku', ...gem], ...(gem.length ? { geminiModels: gem } : {}), efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultModel: cm, defaultEffort: ce,
       accounts: acctList, login: acctList.length ? loginNow : null, defaultAccount: CONFIG.defaultAccount || null },
     ...(CONFIG.codex ? { codex: { label: 'Codex', ok: !!codexBin, models: xm ? [xm] : [], efforts: ['low', 'medium', 'high', 'xhigh'], defaultModel: xm, defaultEffort: xe } } : {}),
   };
@@ -3186,8 +3237,16 @@ async function newSession(prompt, cwd, opt = {}) {
   if (opt.codeMode === true && provider !== 'claude') return { ok: false, error: 'Code Mode 只有 Claude Code 有' };   // 报错不忽略：悄悄不开，调用方会以为开了（和写错档位同一个理由）
   const model = String(opt.model || '').trim(), effort = String(opt.effort || '').trim();
   if ((model && !SAFE_ARG.test(model)) || (effort && !SAFE_ARG.test(effort))) return { ok: false, error: '模型或强度的写法不对' };
+  const gem = provider === 'claude' && isGemini(model);   // 选了 Gemini 模型：外壳还是 Claude Code，经 claude-gemini 脚本起。下面三样不接：报错不忽略（悄悄丢掉，调用方会以为生效了）
+  if (gem) {
+    if (!CONFIG.gemini) return { ok: false, error: 'Gemini 没有打开（config.json 的 gemini）' };
+    if (!fs.existsSync(CONFIG.gemini)) return { ok: false, error: '找不到 claude-gemini 脚本：' + CONFIG.gemini };
+    if (effort) return { ok: false, error: 'Gemini 模型没有强度这一项（用档位开窗口时档位会带强度，Gemini 别带档位）' };
+    if (opt.account) return { ok: false, error: 'Gemini 模型不用 Claude 的账号' };
+    if (opt.codeMode === true) return { ok: false, error: 'Code Mode 只有 Claude 的模型有' };
+  }
   let acct = null;                                    // 选了账号：只认 config 里登记过、钥匙串里有 token 的
-  let want = opt.account || (provider === 'claude' ? CONFIG.defaultAccount : '');   // 没选：config 有 defaultAccount 就用它（照样要钥匙串里有 token），没有才是钥匙串当前登录的号
+  let want = opt.account || (provider === 'claude' && !gem ? CONFIG.defaultAccount : '');   // 没选：config 有 defaultAccount 就用它（照样要钥匙串里有 token），没有才是钥匙串当前登录的号
   // 他从界面（含手机远程）新建、没明说账号的（「默认」、⌘T）：默认号这周或这 5 小时的读数到了 accountFallback.at 才退回 accountFallback.to（11/22）。
   // 只认带 Origin 的界面请求（opt.fromUi）：接口不带 account 的照旧开默认号（总管 4c：「保持现状」）；明说了账号的一律照明说的。
   // 退回的号钥匙串里没 token、或它自己也到了 toMax：照旧开默认号，不因为退不了就不开
@@ -3213,12 +3272,16 @@ async function newSession(prompt, cwd, opt = {}) {
   const shown = text;                                 // 卡片上显示的那一份，不带下面附的那段
   const pin = opt.project ? pinnable(opt.project.key, opt.project.name) : null;   // 在哪一列的列头开的；核不过就当右上角开的
   if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;   // 明确指定了别的文件夹（界面上已经没有这一格，接口还认）就不附
-  let name = newName(), cl = null;
+  let name = newName(), cl = null, gemMk = null;
   const args = ['-x', '160', '-y', '48', '-c', dir];                // openSession 在它自己那台 tmux 上 new-session -d -s <名字> 加上这些
+  const base = args.length;
   if (provider === 'codex') {
     if (!codexBin) return { ok: false, error: '这台机器上没找到 codex 命令' };
     args.push(codexBin); if (model) args.push('-m', model); if (effort) args.push('-c', 'model_reasoning_effort="' + effort + '"');
     if (text) args.push(text);
+  } else if (gem) {
+    gemMk = (claude) => geminiArgv(model, claude, text ? [text] : []);   // 没有账号包装、没有 Code Mode：脚本自己设环境，不让 Claude 的登录混进来
+    args.push(...gemMk(await findClaude()));
   } else {
     cl = [await findClaude()]; if (model) cl.push('--model', model); if (effort) cl.push('--effort', effort);
     if (text) cl.push(text);
@@ -3226,16 +3289,18 @@ async function newSession(prompt, cwd, opt = {}) {
   }
   let r = await openSession(name, args);             // 每个窗口一台 tmux（P0-0）
   if (r.gone && cl) { args[args.length - cl.length] = await refindClaude(name); name = newName(); r = await openSession(name, args); }   // 一开就退了：重开一次。claude 那段总在 argv 最后（选号的 zsh、Code Mode 的 env 都包在它外面），只换它的路径
-  if (!r.ok) return r.gone ? { ok: false, error: cl ? GONE_MSG : '会话一开就退了' } : r;
+  if (r.gone && gemMk) { args.length = base; args.push(...gemMk(await refindClaude(name))); name = newName(); r = await openSession(name, args); }   // Gemini 窗口同样重开一次
+  if (!r.ok) return r.gone ? { ok: false, error: gem ? GONE_GEM_MSG : cl ? GONE_MSG : '会话一开就退了' } : r;
   launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });
   if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id}${opt.account ? '' : ' default'}${fell ? ` fallback ${fell.from} ${fell.key} ${fell.used}%` : ''}`);
   if (fell) noteOnce(fell.from + '|' + fell.key + '|' + fell.resetsAt, `默认号 ${fell.from} ${fell.key === 'week' ? '周' : '5 小时'}额度 ${fell.used}%（到了 ${CONFIG.accountFallback.at}%），新任务从 ${name} 起开在 ${fell.id}；${hmOf(fell.resetsAt)} 重置后回到 ${fell.from}`);
   const codeMode = provider === 'claude' && opt.codeMode === true;
   if (codeMode) console.log(`codemode ${new Date().toISOString()} ${name} new on`);
+  if (gem) console.log(`gemini ${new Date().toISOString()} ${name} new ${model}`);
   if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
   if (provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: shown, sid: null, rollout: null, model, effort }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // config 里打开就替他点，开在哪个文件夹都一样；不等它，卡片先出来
-  return { ok: true, name, project: pin, account: acct ? acct.id : null, codeMode, ...(fell ? { fallback: { from: fell.from, key: fell.key, used: fell.used } } : {}) };
+  return { ok: true, name, project: pin, account: acct ? acct.id : null, codeMode, ...(gem ? { gemini: model } : {}), ...(fell ? { fallback: { from: fell.from, key: fell.key, used: fell.used } } : {}) };
 }
 // 退回时让总管知道（总管 khalil-4c 11/22 要的）：config 的 accountFallback.note 写了文件就追加一行。同一件事（同一个号、同一个额度窗口）只写一次（只记在内存：服务重启后可能再写一次）。
 // 试验服务只往它自己的数据目录里写：拿真 config 拷贝起的试验服务不能往总管的 fyi.md 写假记录（11/22 审查）
@@ -3284,9 +3349,11 @@ async function suggestLoop() {
 // 各订阅的周额度。Codex 只在 config.json 的 codex 打开时读（和「交给谁」同一个开关）；Claude 永远读，没人取数就是空数组。
 // 顶栏写号的名字，和「新任务」的账号下拉同一个来源：config.json 的 accounts。没登记的 id 原样写；没标号的条目 name 是 null
 const limitName = (id) => (id ? (CONFIG.accounts.find((a) => a.id === id) || { name: id }).name : null);
-let LIMITS = { claude: [], codex: null };
+// Gemini 是 API 预付余额的估算（limits.mjs 的 geminiLimits）：没有锚点文件就是 null，顶栏不画。单独 try：它坏了不连累 Claude / Codex 那几格
+let LIMITS = { claude: [], codex: null, gemini: null };
 function limitsLoop() {
-  try { const now = Date.now(); LIMITS = { claude: claudeLimits(LIMITS_DIR, now).map((e) => ({ ...e, name: limitName(e.account) })), codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null }; } catch (e) { console.error('limits', e); }
+  try { const now = Date.now(); LIMITS = { claude: claudeLimits(LIMITS_DIR, now).map((e) => ({ ...e, name: limitName(e.account) })), codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null, gemini: LIMITS.gemini }; } catch (e) { console.error('limits', e); }
+  try { LIMITS.gemini = geminiLimits(LIMITS_DIR, Date.now(), { ledgers: CONFIG.geminiLedgers }); } catch (e) { console.error('limits gemini', e); LIMITS.gemini = null; }
   setTimeout(limitsLoop, LIMITS_MS);
 }
 function fastLoop() {

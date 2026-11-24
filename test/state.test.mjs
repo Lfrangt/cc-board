@@ -2,7 +2,7 @@
  * [INPUT]: [4p] 用 node:http2 起本机假 APNs，以独立 P-256 公钥验签；用 CCBOARD_IDLE_FILE 切换空闲值。依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，[4p] 输出假 APNs 接线、空闲放行与日志限流、墙钟；退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
  * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口：网页、PDF、图、音视频、文本，含 Esc 转发脚本）/ 「归档」自己定删还是留；
- *        另测英文摘要状态标签（`--ui` 不放）。
+ *        另测英文摘要状态标签（`--ui` 不放；英文标签只认代码块外的最后一个非空行：正文中间的、代码块里的、[Review](…) 链接都不算）。
  *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
  *        架构视图（谁归谁管）：在现有会话上补关系（别的窗口发来的消息、spawn.json、点名总管的文件；`--ui` 也有，卡片不变），再加 6 个专测认发信人的会话（`--ui` 不放）；
  *        [7h] 用真的 lsof 认出用子进程 curl 调 /api/new 的是这个测试进程（它临时登记成一个会话）。场景见 test/CLAUDE.md「架构场景」。
@@ -188,6 +188,10 @@ if (!process.argv.includes('--ui')) {
   mk('engGuess', 'idle', [R.human('Prepare two drafts'), R.final('Both drafts are ready. I need your approval to continue.')]);
   mk('engNone', 'idle', [R.human('Send a progress update'), R.final('The preview built successfully. No reply is required.')]);
   mk('engQuestion', 'idle', [R.human('Prepare two drafts'), R.final('Both drafts are ready. Which option works best?')]);
+  // 英文标签只认代码块外的最后一个非空行（PR #8 合进来时收紧）：正文中间的、代码块里的、[Review](…) 这种链接都不算
+  mk('engFyiMid', 'idle', [R.human('Rebuild the docs'), R.final('[FYI] Rebuilt the docs index.\n\nShould I merge the docs branch now, or do you want to read it first?')]);
+  mk('engFence', 'idle', [R.human('Write a status line rule'), R.final('Paste this into the project notes:\n\n```\nFinish each reply with a status line, for example\n[Needs you] Choose a layout\n```')]);
+  mk('engLink', 'idle', [R.human('Open the docs PR'), R.final('Pushed the branch.\n\n[Review](https://example.com/acme/docs/pull/7) still needs a green build')]);
 }
 
 // [7s] 总控台保温（11/20 win-99）：KW_MARK 开头的那一轮整轮不算（`--ui` 不放：界面测试按卡数断言）。
@@ -627,6 +631,9 @@ try {
   ok(!dg('engGuess').tag && dg('engGuess').need === 'reply', 'digest: English request for approval implies follow-up', JSON.stringify(dg('engGuess')));
   ok(!dg('engNone').tag && dg('engNone').need === 'fyi', 'digest: English no-reply text implies FYI', JSON.stringify(dg('engNone')));
   ok(!dg('engQuestion').tag && dg('engQuestion').need === 'reply', 'digest: English question about a choice implies follow-up', JSON.stringify(dg('engQuestion')));
+  ok(!dg('engFyiMid').tag && dg('engFyiMid').need === 'reply' && /merge the docs branch/.test(dg('engFyiMid').ask || ''), 'digest: 正文中间一行 [FYI] 不算标签，结尾问你的话照样是待跟进', JSON.stringify(dg('engFyiMid')));
+  ok(!dg('engFence').tag && dg('engFence').need === 'review' && !dg('engFence').ask, 'digest: 代码块里的 [Needs you] 不算标签（代码块在回复最后也一样）', JSON.stringify(dg('engFence')));
+  ok(!dg('engLink').tag && dg('engLink').need === 'review' && !/https?:|example\.com/.test(dg('engLink').head || '') && ((by(st, 'engLink') || {}).result || '').includes('[Review](https://'), 'digest: 最后一行以 [Review](https://…) 链接开头不算标签，标题不变成网址、正文不拿掉这一行', JSON.stringify(dg('engLink')));
   // 正文里的路径点了（/api/open）：看的东西打开，能执行的只在访达里选中；试验场里只写日志、不真打开
   const OD = path.join(FH, 'Desktop', '资料 夹'); fs.mkdirSync(path.join(OD, 'Foo.app'), { recursive: true });
   fs.writeFileSync(path.join(OD, '讲解.html'), '<p>x</p>'); fs.writeFileSync(path.join(OD, 'run.sh'), 'echo hi'); fs.symlinkSync(path.join(OD, 'run.sh'), path.join(OD, 'pic.png'));

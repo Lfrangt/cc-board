@@ -1,8 +1,9 @@
 /**
  * [INPUT]: 依赖 ../limits.mjs（或命令行给的另一份，比如改坏版）和 ../statusline-tap.mjs（端到端那一项）。Codex 记录夹具照真实 rollout 里 token_count 事件的结构手搭（limit_id、primary、plan_type），Claude 的取数文件照 tap 脚本写出来的样子。
- * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过。带 --mutants 时改跑反向对照：造 16 个改坏的 limits.mjs，每个都必须让本测试变红
+ * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过。带 --mutants 时改跑反向对照：造 35 个改坏的 limits.mjs，每个都必须让本测试变红
  * [POS]: test/ 的「各订阅周额度」测试。不起服务，在临时目录里造假主目录和假数据目录，两秒内跑完。
  *        测：Codex 取最后一条而不是第一条、只认订阅那一条限额、截断的行不崩、窗口缺字段就丢、过期窗口丢掉；Claude 的多个窗口按周窗口截止时间分成各自的号、有标记的号认领同截止时间的无标数据、几个会话轮流更新时先后不跳；会话号和账号标记进文件名前要过滤；tap 脚本落盘只有额度、坏输入安静退出。
+ *        Gemini 余额估算（11/23）：锚点 − 锚点之后的账本花费，折回锚点币种；没有锚点或锚点写坏了就没有这一项；.tsv 只有分钟（锚点那一分钟算上）；.jsonl 出现后更早的 .tsv 行才算（不重复数）；坏行数进 bad、不算花费；余额封在 0；浮点尾巴去掉；锚点文件和取数文件同目录、互不被清。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 // 用法：node test/limits.test.mjs [limits.mjs 的路径]      node test/limits.test.mjs --mutants
@@ -30,6 +31,26 @@ if (process.argv.includes('--mutants')) {
     'any-account-text':  ['const ACCOUNT_ID = /^[\\w.@-]{1,40}$/;', 'const ACCOUNT_ID = /^.*$/;'],
     'purge-keeps-all':   ['now - fs.statSync(p).mtimeMs > TAP_KEEP_MS', 'false'],
     'corrupt-trusted':   ['if (!d || typeof d !== \'object\' || !num(d.at)) continue;', 'if (!d) continue;'],
+    // ── Gemini 余额估算 ──
+    'gem-no-clamp':      ['Math.max(0, a.amount - spent)', 'a.amount - spent'],
+    'gem-no-round':      ['const r6 = (x) => Math.round(x * 1e6) / 1e6;', 'const r6 = (x) => x;'],
+    'gem-tsv-no-floor':  ['x.at >= floor && x.at < jsonlFrom', 'x.at >= at && x.at < jsonlFrom'],
+    'gem-no-dedup':      ['x.at >= floor && x.at < jsonlFrom', 'x.at >= floor'],
+    'gem-jsonl-before-anchor': [': !(x.at >= at)', ': false'],
+    'gem-rate-ignored':  ['const spent = spentUsd / rate;', 'const spent = spentUsd;'],
+    'gem-usd-rate-trusted': ["const rate = currency === 'USD' ? 1 : a.usdPerUnit;", "const rate = currency === 'USD' && !num(a.usdPerUnit) ? 1 : a.usdPerUnit;"],
+    'gem-rate-guessed':  ["const rate = currency === 'USD' ? 1 : a.usdPerUnit;", "const rate = currency === 'USD' ? 1 : (a.usdPerUnit || 1);"],
+    'gem-seconds-accepted': ['return Number.isFinite(t) && t >= 1e11 ? t : null;', 'return Number.isFinite(t) ? t : null;'],
+    'gem-tsv-time-unchecked': ['if (+m[2] < 1 || +m[2] > 12 || +m[3] < 1 || +m[3] > 31 || +m[4] > 23 || +m[5] > 59 || +(m[6] || 0) > 59) return null;', ''],
+    'gem-negative-usd':  ['if (at == null || !num(usd) || usd < 0) { bad++; continue; }', 'if (at == null || !num(usd)) { bad++; continue; }'],
+    'gem-negative-amount': ['a.amount < 0 || ', ''],
+    'gem-currency-any':  ['/^[A-Z]{3}$/.test(a.currency)', 'true'],
+    'gem-size-uncapped': ['|| st.size > GEMINI_LEDGER_MAX', ''],
+    'gem-missing-file-bad': ["bad: e && e.code === 'ENOENT' ? 0 : 1", 'bad: 1'],
+    'gem-bad-ext-ignored': ['if (!kind) return { rows: [], bad: 1 };', 'if (!kind) return { rows: [], bad: 0 };'],
+    'gem-header-is-bad': ["if (head && line.startsWith('time\\t')) continue;", ''],
+    'gem-estimate-false': ['estimate: true, rows, bad', 'estimate: false, rows, bad'],
+    'gem-purge-eats-anchor': ["if (!f.startsWith(TAP_PREFIX) || !f.endsWith('.json')) continue;", "if (!f.endsWith('.json')) continue;"],
   };
   let bad = 0;
   for (const [name, [a, b]] of Object.entries(M)) {
@@ -147,6 +168,98 @@ console.log('文件名和清理');
   clear(); tap('aaaa1111-0001', NOW, { week: 1 }); tap('zzzz9999-0002', NOW, { week: 1 });
   const old = path.join(dir, 'claude-aaaa1111-0001.json'); const t = (Date.now() - 20 * 86400000) / 1000; fs.utimesSync(old, t, t);
   ok(L.purgeTaps(dir, Date.now()) === 1 && !fs.existsSync(old) && fs.existsSync(path.join(dir, 'claude-zzzz9999-0002.json')), '20 天没动的取数文件清掉，新的留着');
+}
+
+console.log('Gemini：账本估算预付余额（Google 没有查余额的接口：锚点 − 锚点之后账本里记的花费）');
+{
+  const gdir = path.join(TMP, 'glimits'); fs.mkdirSync(gdir, { recursive: true });
+  const G = (...a) => { try { return L.geminiLimits(...a); } catch (e) { return { __error: String(e) }; } };   // 没有这个函数也要按「FAIL」报，不是一崩了之
+  const lt = (y, mo, d, h, mi, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();                            // 本地时间：second-opinion 写 spend.tsv 就是这样，没有时区
+  const anchor = (o) => fs.writeFileSync(path.join(gdir, 'gemini-balance.json'), typeof o === 'string' ? o : JSON.stringify(o));
+  const lg = (name, text) => { const f = path.join(gdir, name); fs.writeFileSync(f, text); return f; };
+  const HEAD = 'time\tsession\tfile\tinput\toutput\tusd\n';
+  const row = (t, usd) => t + '\tsess01\t/tmp/x.md\t1000\t2000\t' + usd + '\n';
+  const J = (at, usd, extra = {}) => JSON.stringify({ at, usd, ...extra });
+  const A0 = lt(2026, 11, 22, 12, 0), CAD = { amount: 8, currency: 'CAD', usdPerUnit: 0.5, at: A0 };   // 汇率 0.5 是夹具，只为算起来好对
+  const rows = (g) => g && g.balance && g.balance.rows;
+
+  same(G(path.join(TMP, 'nope'), NOW), null, '数据目录不存在 = 没有这一项');
+  same(G(gdir, NOW), null, '目录在、没有 gemini-balance.json = 没有这一项（不猜余额）');
+  anchor(CAD);
+  let g = G(gdir, NOW);
+  ok(g && g.id === 'gemini' && g.provider === 'gemini' && g.account === null && g.plan === null && g.at === A0 && Array.isArray(g.windows) && g.windows.length === 0, '条目：id、来源、没有窗口、at 是锚点的时间', JSON.stringify(g));
+  same(g && g.balance, { currency: 'CAD', remaining: 8, start: 8, spent: 0, spentUsd: 0, usdPerUnit: 0.5, anchorAt: A0, estimate: true, rows: 0, bad: 0 }, '没给账本：余额就是锚点，并标明是估算');
+
+  // spend.tsv 的格式：表头 + 2 行（second-opinion 写的，一行一次调用，分钟精度的本地时间）
+  const tsv = lg('spend.tsv', HEAD + '2026-11-22 12:10\tsess01\t/tmp/a.md\t1200\t3400\t0.7\n2026-11-22 12:11\tsess01\t/tmp/b.md\t5600\t7800\t0.1\n');
+  g = G(gdir, NOW, { ledgers: [tsv] });
+  same(g && g.balance && [g.balance.spentUsd, g.balance.spent, g.balance.remaining, g.balance.rows], [0.8, 1.6, 6.4, 2], '美元合计 0.8（0.7 + 0.1 不出浮点尾巴）、按 1 加元 = 0.5 美元折成 1.6 加元、余额 6.4');
+  anchor({ ...CAD, at: lt(2026, 11, 22, 12, 10, 30) });
+  same(rows(G(gdir, NOW, { ledgers: [tsv] })), 2, '锚点在 12:10:30：12:10 那行只有分钟、多半在锚点之后，算上（宁可多算一行：估算本来就偏高）');
+  anchor({ ...CAD, at: lt(2026, 11, 22, 12, 11, 30) });
+  same(rows(G(gdir, NOW, { ledgers: [tsv] })), 1, '锚点在 12:11:30：12:10 那行在锚点之前不算，12:11 那行算');
+  anchor({ ...CAD, at: lt(2026, 11, 22, 12, 12) });
+  same(rows(G(gdir, NOW, { ledgers: [tsv] })), 0, '锚点在 12:12：两行都在锚点之前，一行都不算');
+
+  // .jsonl（网关回调写的）：at 是毫秒或 ISO 串，锚点之前的不算
+  anchor(CAD);
+  const jl = lg('calls.jsonl', [J(A0 - 1000, 5), J(A0, 0.1), J(new Date(A0 + 60000).toISOString(), 0.2, { model: 'gemini-4-carbon' }), ''].join('\n'));
+  g = G(gdir, NOW, { ledgers: [jl] });
+  same(g && g.balance && [g.balance.rows, g.balance.spentUsd], [2, 0.3], '.jsonl：锚点之前 1 秒的不算，正好在锚点那一刻的算；at 毫秒和 ISO 串都认');
+
+  // 两份账本同时给：.jsonl 有了以后，不早于它最早一行的 .tsv 行不再数（网关里每次调用都有，包括 second-opinion 的）
+  const tsv2 = lg('spend2.tsv', HEAD + row('2026-11-22 12:10', 0.7) + row('2026-11-22 14:10', 0.1));
+  const jl2 = lg('calls2.jsonl', [J(lt(2026, 11, 22, 14, 5), 1), J(lt(2026, 11, 22, 14, 6), 2)].join('\n'));
+  for (const order of [[tsv2, jl2], [jl2, tsv2]]) {
+    g = G(gdir, NOW, { ledgers: order });
+    same(g && g.balance && [g.balance.rows, g.balance.spentUsd], [3, 3.7], '14:05 起有 .jsonl：12:10 的 .tsv 行算（0.7），14:10 的不算（和 .jsonl 重复）；' + (order[0] === tsv2 ? '.tsv 在前' : '.jsonl 在前') + '结果一样');
+  }
+
+  // 坏行：数进 bad，不算进花费，也不崩
+  const badTsv = lg('bad.tsv', HEAD + 'garbage\n2026-11-22 25:61\ts\tf\t1\t1\t0.1\n2026-11-22 13:50\ts\tf\t1\t1\t-0.5\n2026-11-22 13:51\ts\tf\t1\t1\n2026-11-22 13:52\ts\tf\t1\t1\tabc\n\n2026-11-22 13:53\ts\tf\t1\t1\t0.5\n');
+  g = G(gdir, NOW, { ledgers: [badTsv] });
+  same(g && g.balance && [g.balance.rows, g.balance.spentUsd, g.balance.bad], [1, 0.5, 5], '.tsv：不是时间、25 点 61 分、负的金额、少一列、金额不是数 各算 1 个坏行；表头和空行不算；好的那行照算');
+  const badJl = lg('bad.jsonl', ['not json', J(1795000000, 1), J(A0 + 1000, '0.5'), J(A0 + 1000, -1), '[1,2]', 'null', '{"usd":1}', J(A0 + 1000, 0.25)].join('\n'));
+  g = G(gdir, NOW, { ledgers: [badJl] });
+  same(g && g.balance && [g.balance.rows, g.balance.spentUsd, g.balance.bad], [1, 0.25, 7], '.jsonl：不是 json、时间写成秒、金额是字符串、负的、数组、null、没有时间 各算 1 个坏行；好的那行照算');
+
+  // 账本文件本身的情形
+  g = G(gdir, NOW, { ledgers: [path.join(gdir, 'never.tsv'), path.join(gdir, 'never.jsonl')] });
+  same(g && g.balance && [g.balance.rows, g.balance.bad], [0, 0], '账本文件还不在：没有行，不算坏（还没人记过账）');
+  const dirp = path.join(gdir, 'dir.tsv'); fs.mkdirSync(dirp, { recursive: true });
+  g = G(gdir, NOW, { ledgers: [lg('spend.log', HEAD), dirp] });
+  same(g && g.balance && [g.balance.rows, g.balance.bad], [0, 2], '认不出格式（.log）、是文件夹：各算 1 个坏的，不读');
+  const big = path.join(gdir, 'big.jsonl'); fs.writeFileSync(big, J(A0 + 1000, 3) + '\n'); fs.truncateSync(big, 16 * 1024 * 1024 + 1);
+  g = G(gdir, NOW, { ledgers: [big] });
+  same(g && g.balance && [g.balance.rows, g.balance.spentUsd, g.balance.bad], [0, 0, 1], '超过 16 MB 的账本不读（每 30 秒整份读一遍，不能无限长），算 1 个坏的');
+  g = G(gdir, NOW, { ledgers: 'not-an-array' }); ok(g && g.balance && g.balance.rows === 0, 'ledgers 不是数组：当没给');
+  g = G(gdir, NOW, { ledgers: [null, 42, {}, tsv] }); ok(g && g.balance && g.balance.rows === 2 && g.balance.bad === 0, 'ledgers 里混了不是字符串的：跳过，不崩，后面那份真账本照读（2 行）');
+
+  // 余额的算法
+  anchor({ amount: 1, currency: 'USD', at: A0 });
+  g = G(gdir, NOW, { ledgers: [lg('three.jsonl', J(A0 + 1000, 3))] });
+  same(g && g.balance && [g.balance.remaining, g.balance.spent], [0, 3], '花得比锚点还多：余额封在 0（不出负数），花费照实记 3');
+  anchor({ amount: 10, currency: 'USD', usdPerUnit: 99, at: A0 });
+  g = G(gdir, NOW, { ledgers: [lg('two.jsonl', J(A0 + 1000, 2))] });
+  same(g && g.balance && [g.balance.remaining, g.balance.usdPerUnit], [8, 1], '币种是 USD：汇率恒为 1，写了别的（99）也不理');
+  anchor({ amount: 0, currency: 'USD', at: new Date(A0).toISOString() });
+  g = G(gdir, NOW); ok(g && g.balance && g.balance.remaining === 0 && g.at === A0, '余额 0 是合法的锚点；时间写成 ISO 串也认');
+
+  // 锚点写坏了：一律没有这一项，不猜
+  for (const [name, a] of [['金额是负数', { amount: -1, currency: 'USD', at: A0 }], ['金额是字符串', { amount: '8', currency: 'USD', at: A0 }],
+    ['币种小写', { ...CAD, currency: 'cad' }], ['币种不是三个字母', { ...CAD, currency: 'CA$' }],
+    ['非美元没写汇率', { amount: 8, currency: 'CAD', at: A0 }], ['汇率是 0', { ...CAD, usdPerUnit: 0 }], ['汇率是字符串', { ...CAD, usdPerUnit: '0.5' }],
+    ['时间写成秒', { ...CAD, at: 1795000000 }], ['没有时间', { amount: 8, currency: 'USD' }], ['时间不是时间', { ...CAD, at: 'yesterday' }],
+    ['是个数组', '[]'], ['是 null', 'null'], ['不是 json', '{坏']]) { anchor(a); same(G(gdir, NOW), null, '锚点写坏了（' + name + '）= 没有这一项'); }
+
+  // 锚点文件和 Claude 的取数文件在同一个目录里：互不相扰
+  clear(); tap('aaaa1111-0001', NOW - 1000, { week: 7 });
+  const anc = path.join(dir, 'gemini-balance.json'); fs.writeFileSync(anc, JSON.stringify({ amount: 8, currency: 'USD', at: A0 }));
+  const aged = (Date.now() - 30 * 86400000) / 1000; fs.utimesSync(anc, aged, aged);
+  ok(L.claudeLimits(dir, NOW).length === 1, '锚点文件放在取数目录里，不会被当成 Claude 的条目');
+  ok(G(dir, NOW) && G(dir, NOW).balance && G(dir, NOW).balance.remaining === 8, '同一个目录里读得到锚点');
+  ok(L.purgeTaps(dir, Date.now()) === 0 && fs.existsSync(anc), '30 天没动的锚点文件不会被清取数文件的那一步清掉（人写的，不是取数文件）');
+  clear();
 }
 
 console.log('取数脚本 statusline-tap.mjs（端到端）');

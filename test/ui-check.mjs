@@ -5,6 +5,7 @@
  *        diffSeg() 验逐笔补丁、文件入口、画布与加删行主题颜色、来源底栏、转义、错误和应答先后；DF_HTML 换页。
  *        undoSeg() 验 ⌘Z 单次 / 时限 / 输入焦点 / 提示覆盖、真实推迟清除、ccb_last 的成功发送 / 按卡取回 / 过期；UN_HTML 换完整页面做改坏对照。
  *        topbarLimitsSeg() 保留原有额度和顶栏尺寸断言，UI_ONLY=limits 可定点复核，LP_HTML 可回放旧顶栏。
+ *        geminiChipSeg() 验顶栏最后一格 Gemini 余额估算（11/23）：≈ 金额、花掉的比例、琥珀线、锚点 7 天以上变灰、提示的中英文、窄屏、没有 / null 不画、轮询换上新数；截图放 <OUT>/gemini-balance/；UI_ONLY=gbal 单跑，GB_HTML 换整页做红阶段与改坏对照。
  *        etaSeg() 验卡片牌子上的「预计 HH:MM 交 / 比预计晚 N 分钟」、跨到明天、悬停、不显示的三种、英文、窄条；UI_ONLY=eta / ET_HTML 支持红阶段与改坏对照。
  *        remotePreviewCheck() 验远程预览（C1 / C1.1）：远程模式点卡片上的路径带 sid 问 /api/remote/preview（浏览器里按服务的应答形状回、/rp/ 从预览端口取真文件并加 CSP 沙盒头），
  *        网页 / 图 / Markdown / 文件夹图集 / 「图集」按钮、拒绝只提示、不在卡片上的路径不发请求；UI_ONLY=rpreview 单跑，RP_HTML 换整页做红阶段与改坏对照。
@@ -46,6 +47,10 @@ async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900, unp
   const page = await ctx.newPage(); const errs = [];
   if (process.env.UI_ONLY === 'limits' && process.env.LP_HTML) {
     const html = fs.readFileSync(process.env.LP_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+    await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+  }
+  if (process.env.UI_ONLY === 'gbal' && process.env.GB_HTML) {       // Gemini 余额那一段的红阶段、改坏对照：换一份 ui.html
+    const html = fs.readFileSync(process.env.GB_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
     await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
   }
   if (process.env.UI_ONLY === 'update' && process.env.UP_HTML) {     // 检查新版本那一段的红阶段、改坏对照：换一份 ui.html
@@ -1591,6 +1596,105 @@ async function topbarLimitsSeg() {
   }
 }
 
+// ── 顶栏 · Gemini API 余额（11/23）：UI_ONLY=gbal 单跑；GB_HTML 换整页做红阶段 / 改坏对照 ──
+// 服务给 limits.gemini（锚点余额减掉账本里的花费，估算、上限）。期望值是照服务端测试那组手算的：起点 CA$8、花 US$0.571、1 CAD = 0.71 USD → 花 CA$0.804225、剩 CA$7.195775。
+// 夹具服务没有锚点（gemini 是 null），所以先在浏览器里直接喂 paintLimits 造的数据；最后拦一次真的 /api/state 往里塞 gemini，核轮询那条路也画得出来。
+async function geminiChipSeg() {
+  console.log('\n[顶栏 · Gemini API 余额]');
+  const shots = path.join(OUT, 'gemini-balance'); fs.mkdirSync(shots, { recursive: true });
+  const paintG = (page, g, rest = true) => page.evaluate(({ g, rest }) => {
+    const now = Date.now(), H = 3600000, D = 86400000, wk = (u) => [{ key: 'week', used: u, resetsAt: now + D }];
+    const base = { id: 'gemini', provider: 'gemini', account: null, plan: null, windows: [] };
+    const bal = (o) => Object.assign({ currency: 'CAD', start: 8, remaining: 7.195775, spent: 0.804225, spentUsd: 0.571, usdPerUnit: 0.71, anchorAt: now - 2 * H, estimate: true, rows: 3, bad: 0 }, o);
+    const gem = g === 'missing' ? undefined : g === 'null' ? null : g === 'nobal' ? Object.assign({}, base, { at: now }) : Object.assign({}, base, { at: now - 2 * H, balance: bal(g) });
+    if (gem && gem.balance) gem.at = gem.balance.anchorAt;
+    const lm = rest ? { claude: [{ id: 'amy', provider: 'claude', account: 'amy', name: 'amy', at: now, windows: wk(91) }, { id: 'ben', provider: 'claude', account: 'ben', name: 'ben', at: now, windows: wk(1) }], codex: { id: 'codex', provider: 'codex', plan: 'prolite', at: now, windows: wk(34) } } : { claude: [], codex: null };
+    if (g !== 'missing') lm.gemini = gem;
+    window.__gSt = { now, limits: lm }; paintLimits(window.__gSt);
+    const bar = document.querySelector('header.bar'), nb = document.querySelector('#newBtn'), lim = document.querySelector('#limits');
+    const chips = [...lim.querySelectorAll('.lq')].map((c) => {
+      const m = c.querySelector('.mtr'), i = m && m.querySelector('i'), a = c.querySelector('.ago'), r = c.getBoundingClientRect(), br = bar.getBoundingClientRect();
+      return { id: c.dataset.lq, text: c.textContent, warn: c.classList.contains('warn'), stale: c.classList.contains('stale'), tip: c.title, aria: c.getAttribute('aria-label') || '',
+        meter: !!m && m.offsetWidth > 0, fill: i ? parseFloat(i.style.width) : null, ago: a && a.offsetWidth > 0 ? a.textContent : null, w: Math.round(r.width), inBar: r.right <= br.right + 0.5 && r.left >= br.left - 0.5,
+        pcColor: getComputedStyle(c.querySelector('.pc')).color, op: +getComputedStyle(c).opacity };
+    });
+    return { shown: lim.offsetWidth > 0, chips, over: bar.scrollWidth > bar.clientWidth, newIn: nb.getBoundingClientRect().right <= innerWidth, attn: getComputedStyle(document.documentElement).getPropertyValue('--attn').trim() };
+  }, { g, rest });
+  const gOf = (r) => r.chips.find((c) => c.id === 'gemini') || null;
+  const cn = /[一-鿿]/;
+  for (const lang of ['zh', 'en']) {
+    const en = lang === 'en', tag = lang + ' 1520 px';
+    const { ctx, page, errs } = await open({ mode: 'flow', lang, w: 1520 });
+    // 1. 平常：两个 Claude 号 + Codex + Gemini
+    let r = await paintG(page, {}), g = gOf(r);
+    same(r.chips.map((c) => c.id), ['amy', 'ben', 'codex', 'gemini'], tag + '：Gemini 那格排在 Claude、Codex 后面，原来三格不动', JSON.stringify(r.chips.map((c) => c.id)));
+    ok(g && g.text === 'Gemini≈CA$7.20', tag + '：芯片写「Gemini ≈CA$7.20」（剩 CA$7.195775 取两位，带 ≈ 表示估算）', JSON.stringify(g && g.text));
+    ok(g && !g.warn && !g.stale && g.meter && Math.abs(g.fill - 10.05) < 0.1, tag + '：没到线不亮琥珀、不变灰；进度条是花掉的比例 0.804225 / 8 = 10.05%', JSON.stringify(g && [g.warn, g.stale, g.meter, g.fill]));
+    ok(g && (en ? /estimate/.test(g.tip) && /About CA\$7\.20 left of CA\$8\.00 \(read in AI Studio on \d+\/\d+ \d\d:\d\d\)/.test(g.tip) && /3 charges logged since then, \$0\.57 total \(CA\$0\.80 at 1 CAD = 0\.71 USD\)/.test(g.tip) && /upper bound/.test(g.tip)
+                : /估算/.test(g.tip) && /约剩 CA\$7\.20，起点 CA\$8\.00（\d+\/\d+ \d\d:\d\d 在 AI Studio 读的）/.test(g.tip) && /之后账本里记到 3 笔花费，共 US\$0\.57（按 1 CAD = 0\.71 USD 折成 CA\$0\.80）/.test(g.tip) && /这是上限/.test(g.tip)),
+       tag + '：提示里写明是估算、剩多少 / 起点 / 什么时候读的、账本里几笔共多少美元和折算、这是上限', JSON.stringify(g && g.tip));
+    if (en) ok(g && !cn.test(g.text + g.tip + g.aria), tag + '：Gemini 那格的文字、提示、读屏标签里没有中文', JSON.stringify(g && g.tip));
+    ok(g && g.inBar && !r.over && r.newIn, tag + '：四格时顶栏不溢出、「新任务」在视口里（Gemini 那格 ' + (g ? g.w : '?') + ' px）', JSON.stringify({ over: r.over, newIn: r.newIn, w: g && g.w }));
+    if (!en) await page.screenshot({ path: path.join(shots, '01-中文-平常.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } });
+    else await page.screenshot({ path: path.join(shots, '05-英文-平常.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } });
+    // 2. 到线：花掉 87.5%；按账本用完
+    r = await paintG(page, { remaining: 1, spent: 7, spentUsd: 4.97 }); g = gOf(r);
+    ok(g && g.warn && !g.stale && g.text === 'Gemini≈CA$1.00' && Math.abs(g.fill - 87.5) < 0.1, tag + '：花掉 87.5%（≥ 85%）亮琥珀，进度条 87.5%', JSON.stringify(g && [g.warn, g.text, g.fill]));
+    if (!en) await page.screenshot({ path: path.join(shots, '02-中文-快用完-琥珀.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } });
+    r = await paintG(page, { remaining: 0, spent: 8.3, spentUsd: 5.893 }); g = gOf(r);
+    ok(g && g.warn && g.text === 'Gemini≈CA$0.00' && g.fill === 100 && (en ? /used up/.test(g.tip) : /已经用完/.test(g.tip)), tag + '：按账本已经用完：≈CA$0.00、琥珀、进度条满、提示里说用完了', JSON.stringify(g && [g.warn, g.text, g.fill, g.tip]));
+    // 3. 锚点旧了：9 天前读的
+    r = await paintG(page, { anchorAt: Date.now() - 9 * 86400000 }); g = gOf(r);
+    ok(g && g.stale && !g.warn && g.ago === (en ? '9d ago' : '9 天前') && g.op > 0.5 && g.op < 0.9 && (en ? /Read it again in AI Studio/.test(g.tip) : /去 AI Studio 再读一次/.test(g.tip)), tag + '：锚点 9 天前读的：整格变灰、写「9 天前」、提示里请他再读一次', JSON.stringify(g && [g.stale, g.ago, g.op, g.tip]));
+    if (!en) await page.screenshot({ path: path.join(shots, '03-中文-锚点9天前-变灰.png'), clip: { x: 0, y: 0, width: 1520, height: 60 } });
+    r = await paintG(page, { anchorAt: Date.now() - 9 * 86400000, remaining: 0.5, spent: 7.5, spentUsd: 5.325 }); g = gOf(r);
+    ok(g && g.warn && !g.stale && g.ago === null && g.pcColor !== 'rgba(0, 0, 0, 0)', tag + '：锚点旧了但按上限也快用完：照旧亮琥珀、不变灰（上限都低了，真实的只会更低）', JSON.stringify(g && [g.warn, g.stale, g.ago]));
+    r = await paintG(page, { anchorAt: Date.now() - 6 * 86400000 }); g = gOf(r);
+    ok(g && !g.stale && g.ago === null, tag + '：6 天前读的不算旧（线是 7 天）', JSON.stringify(g && [g.stale, g.ago]));
+    // 4. 别的写法：账本坏行、还没有花费、美元
+    r = await paintG(page, { bad: 2 }); g = gOf(r);
+    ok(g && (en ? /2 ledger lines couldn't be read and were skipped/.test(g.tip) : /账本里有 2 行读不懂，没算进去/.test(g.tip)), tag + '：账本里有坏行：提示里写几行没算', JSON.stringify(g && g.tip));
+    r = await paintG(page, { rows: 0, spent: 0, spentUsd: 0, remaining: 8 }); g = gOf(r);
+    ok(g && g.text === 'Gemini≈CA$8.00' && g.fill === 0 && (en ? /No charges logged since then/.test(g.tip) : /之后账本里还没有记到花费/.test(g.tip)), tag + '：还没花：≈CA$8.00、进度条空、提示写还没有记到花费', JSON.stringify(g && [g.text, g.fill, g.tip]));
+    r = await paintG(page, { currency: 'USD', usdPerUnit: 1, start: 10, remaining: 9.429, spent: 0.571 }); g = gOf(r);
+    ok(g && g.text === (en ? 'Gemini≈$9.43' : 'Gemini≈US$9.43') && !/折成|CAD = /.test(g.tip), tag + '：锚点是美元：直接写美元，提示里没有折算那一段', JSON.stringify(g && [g.text, g.tip]));
+    // 5. 不画：老服务没有这个键、没锚点、缺 balance
+    for (const k of ['missing', 'null', 'nobal']) {
+      r = await paintG(page, k);
+      same(r.chips.map((c) => c.id), ['amy', 'ben', 'codex'], tag + '：gemini ' + ({ missing: '这个键没有（老服务）', null: '是 null（没锚点）', nobal: '没有 balance' })[k] + '：不画，原来三格照旧', JSON.stringify(r.chips.map((c) => c.id)));
+    }
+    r = await paintG(page, {}, false); g = gOf(r);
+    same(r.chips.map((c) => c.id), ['claude:none', 'gemini'], tag + '：还没有 Claude 数据也没开 Codex：灰的「Claude —」后面照样有 Gemini', JSON.stringify(r.chips.map((c) => c.id)));
+    ok(errs.length === 0, tag + '（Gemini 余额）：页面没报错', JSON.stringify(errs));
+    await ctx.close();
+  }
+  for (const w of [1100, 960]) {
+    const { ctx, page, errs } = await open({ mode: 'flow', lang: 'zh', w }); const tag = 'zh ' + w + ' px';
+    const r = await paintG(page, { anchorAt: Date.now() - 9 * 86400000 }), g = gOf(r);
+    if (w === 1100) {
+      ok(r.shown && g && !g.meter && g.ago === null && g.stale && g.text.startsWith('Gemini≈CA$7.20'), tag + '：窄了 Gemini 那格照旧在，进度条和「9 天前」跟别的格一起藏起来，旧的照样是灰的', JSON.stringify(g && [g.meter, g.ago, g.stale, g.text]));
+      ok(!r.over && r.newIn, tag + '：四格时顶栏不溢出、「新任务」在视口里', JSON.stringify({ over: r.over, newIn: r.newIn }));
+      await page.screenshot({ path: path.join(shots, '04-中文-1100宽-窄屏.png'), clip: { x: 0, y: 0, width: 1100, height: 60 } });
+    } else ok(!r.shown, tag + '：再窄（≤ 1000 px）整条让位，Gemini 也不出', JSON.stringify(r.shown));
+    ok(errs.length === 0, tag + '（Gemini 余额）：页面没报错', JSON.stringify(errs));
+    await ctx.close();
+  }
+  // 6. 轮询那条路：拦 /api/state，往真的整份里塞 gemini，等界面自己画
+  {
+    const { ctx, page, errs } = await open({ mode: 'flow', lang: 'zh', w: 1520 });
+    await page.route('**/api/state*', async (route) => {
+      const res = await fullState(route), j = await res.json(), now = Date.now();
+      if (j.limits) j.limits.gemini = { id: 'gemini', provider: 'gemini', account: null, plan: null, at: now - 600000, windows: [], balance: { currency: 'CAD', start: 8, remaining: 6.5, spent: 1.5, spentUsd: 1.065, usdPerUnit: 0.71, anchorAt: now - 600000, estimate: true, rows: 5, bad: 0 } };
+      await route.fulfill({ response: res, json: j });
+    });
+    let t = ''; for (let i = 0; i < 40 && t !== 'Gemini≈CA$6.50'; i++) { await sleep(250); t = await page.evaluate(() => { const c = document.querySelector('#limits .lq[data-lq="gemini"]'); return c ? c.textContent : ''; }); }
+    const n = await page.evaluate(() => document.querySelectorAll('#limits .lq').length);
+    ok(t === 'Gemini≈CA$6.50' && n === 4, 'zh 1520 px：真的 /api/state 里带上 gemini，轮询以后顶栏自己画出「Gemini ≈CA$6.50」，一共四格', JSON.stringify({ t, n }));
+    ok(errs.length === 0, 'zh 1520 px（Gemini 余额 · 轮询）：页面没报错', JSON.stringify(errs));
+    await ctx.close();
+  }
+}
+
 // ── 墙上降噪（11/18 窗口 A）：UI_ONLY=strip；ST_HTML 换整页做红阶段 / 改坏对照 ──
 // 期望由原始状态与状态 class 另算，不调用 stripOf / quietCard / workGrace。每个 context 固定同一份夹具；状态变化仍经过 fullState 路由。
 async function wallStripSeg() {
@@ -2135,6 +2239,7 @@ try {
   if (process.env.UI_ONLY === 'diff') { await diffSeg(); console.log('\n（UI_ONLY=diff：只跑逐笔改动，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'eta') { await etaSeg(); console.log('\n（UI_ONLY=eta：只跑了「预计交付」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'undo') { await undoSeg(); console.log('\n（UI_ONLY=undo：只跑了「撤销、↑ 取回上一句」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'gbal') { await geminiChipSeg(); console.log('\n（UI_ONLY=gbal：只跑了「顶栏 · Gemini API 余额」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'limits') { await topbarLimitsSeg(); console.log('\n（UI_ONLY=limits：只跑了原有顶栏额度断言，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'strip') { await wallStripSeg(); console.log('\n（UI_ONLY=strip：只跑了「墙上降噪」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'jump') { await draftJumpSeg(); console.log('\n（UI_ONLY=jump：只跑了「草稿不丢 · ⌘K 跳到窗口」这一段，不是整套）'); throw ONLY_DONE; }
@@ -3216,6 +3321,7 @@ try {
     await c5.close();
   }
   await topbarLimitsSeg();        // 原有额度断言原样保留，另可 UI_ONLY=limits 定点复核
+  await geminiChipSeg();         // Gemini API 余额那一格；UI_ONLY=gbal 单跑
   }   // UI_ONLY=org：到这里为止的整段不跑
   // ── 架构（11/16 win-a0）：窗口之间谁归谁管，画成一张从上往下的架构图。上下级由服务端的 org 定（org.mjs），界面只照着画。
   //    夹具（test/CLAUDE.md「架构场景」）：总管 projC（第 3 代，总控台列，列里没有别人）；其他列：负责人 peerDone，下面 hint（它开的）、unfin（听它的）、

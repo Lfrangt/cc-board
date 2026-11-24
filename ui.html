@@ -10,6 +10,7 @@
         点了先走 openPreview()：向 /api/preview 要网址和类型，在 #preview 弹层里按类型显示（网页 / PDF 用 iframe，图和音视频用自己的元素，文本和 Markdown 排版显示）；不能预览的、⌘ 点照旧 /api/open。
         文件夹也先问服务：多半是图 / 视频的回 kind: gallery，排成格子墙（renderGallery），点一张放大、← → 翻页、Esc 先回格子墙；其余文件夹服务回 no-preview，照旧交给访达。
         md() 发现正文里提到 2 张以上不同的图 / 视频路径时，在正文最上面放一个「图集」小按钮（data-gallery），点了把这些路径一起交给 /api/preview 的 paths（openGallery）。
+        顶栏右上角的额度（paintLimits）：Claude 各号、Codex 的周额度胶囊（limitChip），最后一格是 Gemini API 余额（geminiChip，11/23）：服务给的是估算的上限（锚点 − 账本花费），这里写「≈」、提示里写明是上限，锚点 7 天以上没重读就变灰。
         待审阅的卡正文最上面一行「这一轮改了 N 个文件 ▸」（服务给的 wrote，wroteHTML()），默认收起，点开才列，每行是 data-path，点了和正文里的路径同一条路；
         服务给了 collide 的卡在封面里多一行琥珀「和 <短名> 同时在写 <仓库>」（clashOf() / paintClash()，短名用架构视图的 shortName()）。
         放大看一张卡：⌘O（zoomTarget() 定哪一张）、双击卡片封面、右上角 ⤢，都走 zoomCard() → openDetail()。大窗口打开时滚到「最新交付」的第一行（标签青色、正文左边一道淡青线），不再落在最底。卡片右上角「归档」由服务定删还是留。
@@ -568,6 +569,7 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .cmf .sw:hover .swt{box-shadow:inset 0 0 0 var(--ink-w) var(--hair-2)}
 .cmf .cmn{margin:5px 0 0 41px;font-size:12px;line-height:1.5;color:var(--text-3)}
 .cmf[hidden]{display:none}
+.gemn{margin:0;font-size:12px;line-height:1.5;color:var(--text-3)} #nGemField[hidden]{display:none}
 @media (prefers-reduced-motion:reduce){.cmf .swt,.cmf .swt::after{transition:none}}
 .field textarea:focus,.field input:focus,.field select:focus{border-color:var(--hair-3)}
 /* ⌘K 跳到窗口（11/17）：一个搜索框 + 一列窗口。选中那行只加底色；状态字只有「要你处理」琥珀、「待审阅」青，和卡片同一套颜色，不加新颜色 */
@@ -744,9 +746,10 @@ body.org main:has(#org.map){overflow:hidden}
     <div class="frow">
       <div class="field" id="nProvField"><span class="lab">交给谁</span><div class="seg" id="nProv" style="height:34px;align-items:stretch"></div></div>
       <div class="field grow"><label for="nModel">模型</label><select id="nModel"></select></div>
-      <div class="field"><label for="nEffort">强度</label><select id="nEffort"></select></div>
+      <div class="field" id="nEffortField"><label for="nEffort">强度</label><select id="nEffort"></select></div>
       <div class="field" id="nAcctField"><label for="nAcct">账号</label><select id="nAcct"></select></div>
     </div>
+    <div class="field" id="nGemField" hidden><p class="gemn">Gemini 模型：窗口还是 Claude Code，只是模型换成 Gemini，走 gemini-gateway 按量计费，不占 Claude 的额度。没有强度，不能选账号，也没有 Code Mode。</p></div>
     <div class="field cmf" id="nCmField"><button type="button" class="sw" id="nCm" role="switch" aria-checked="false" aria-describedby="nCmNote"><span class="swt" aria-hidden="true"></span><span class="swl">Code Mode（实验）</span></button><p class="cmn" id="nCmNote">Claude 写脚本一次跑多个工具，适合大范围搜索、同一种改动改很多文件；这个窗口不能用 Remote Control。</p></div>
   </div>
   <div class="dfoot"><button class="plain" id="nClip" title="加图片或文件，也可以直接粘贴或拖进来">加附件</button><span class="grow" id="nMsg">⌘ 回车开工</span><button class="plain" data-close>取消</button><button class="primary" id="nGo">开工</button></div>
@@ -874,6 +877,7 @@ const EN = {
   '上一张': 'Previous', '上一张（←）': 'Previous (←)', '下一张': 'Next', '下一张（→）': 'Next (→)', '这些图都打不开了': 'None of these images could be opened',
   '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second', '文件太大，只显示了开头 1 MB。': 'File is large; showing the first 1 MB only.',
   '最近一条回复用的': 'used by its latest reply', '开窗口时定的': 'set when the window was opened',
+  'Gemini 模型：窗口还是 Claude Code，只是模型换成 Gemini，走 gemini-gateway 按量计费，不占 Claude 的额度。没有强度，不能选账号，也没有 Code Mode。': 'Gemini model: the window is still Claude Code, only the model is Gemini. It runs through gemini-gateway and is billed per use, so it does not count against your Claude quota. No effort setting, no account choice, no Code Mode.',
   'Code Mode（实验）': 'Code Mode (experimental)', 'Claude 写脚本一次跑多个工具，适合大范围搜索、同一种改动改很多文件；这个窗口不能用 Remote Control。': 'Claude writes a script that runs several tools in one go. Suits wide searches and the same change across many files. This window can’t use Remote Control.',
   '这个窗口开着 Code Mode（实验）：Claude 写脚本一次跑多个工具，不能用 Remote Control': 'This window runs Code Mode (experimental): Claude writes a script that runs several tools in one go; no Remote Control',
   // 架构视图（11/16 khalil-a0）
@@ -1097,6 +1101,7 @@ function setMeta(me, mt, eta) {
 // Claude 的数据来自它最近一条真回复，Codex 的是开窗口时定的，鼠标停上去写明是哪种。
 function modelName(id) {
   const raw = String(id || '').replace(/^claude-/, '').replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, ''); if (!raw) return null;
+  const gm = raw.match(/^gemini-(\d[\d.]*)-([a-z]+)$/i); if (gm) return { name: 'Gemini ' + gm[1] + ' ' + gm[2][0].toUpperCase() + gm[2].slice(1).toLowerCase(), ver: '' };   // Gemini 当 Claude Code 的模型（11/23）
   const fam = raw.match(/(fable|opus|sonnet|haiku)/i); if (!fam) return { name: raw, ver: '' };
   const nums = raw.split('-').filter((x) => /^\d+$/.test(x));
   return { name: fam[1][0].toUpperCase() + fam[1].slice(1).toLowerCase(), ver: nums.join('.') };
@@ -1114,7 +1119,7 @@ const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n 
 const ms = (t) => (t ? Date.parse(t) || 0 : 0);
 
 // ── 顶栏右上角：各订阅的额度 ──
-// 数据在 /api/state 的 limits（服务端 limits.mjs 汇总）：codex 一条或 null（config 没开 codex 就是 null）；claude 是数组，每个号一条，没人取数就是空。
+// 数据在 /api/state 的 limits（服务端 limits.mjs 汇总）：codex 一条或 null（config 没开 codex 就是 null）；claude 是数组，每个号一条，没人取数就是空；gemini 是 Gemini API 预付余额的估算一条，没锚点是 null（老服务没有这个键），见 geminiChip()。
 // 芯片上显示周额度（只有 5 小时窗口时显示那个）；鼠标停上去看每个窗口的已用、重置时间、数据多久前的。
 const WARN_AT = 85;
 // 数据超过 1 小时没更新（这个号最近没有窗口回过话），整格变灰、写上「N 小时前」：旧数字不当成现在的，也不再亮琥珀（额度用完以后，顶栏还写着前一天的旧数）
@@ -1156,14 +1161,44 @@ function limitChip(it, now, many) {
   return '<span class="lq' + (warn ? ' warn' : '') + (stale ? ' stale' : '') + (main ? '' : ' none') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="' + esc(it.id) + '" tabindex="0"><span>' + base + (tag ? '<span class="tg">' + esc(tag) + '</span>' : '') + '</span>'
     + (main ? '<span class="mtr" aria-hidden="true"><i style="width:' + Math.min(100, main.used).toFixed(1) + '%"></i></span>' : '') + '<span class="pc">' + pc + '</span>' + (stale ? '<span class="ago">' + agoShort(it.at, now) + '</span>' : '') + '</span>';
 }
+// Gemini API 的预付余额（11/23）：不是周额度，是钱。服务端 limits.mjs 拿他在 AI Studio 读的一次余额（锚点）减掉账本里记到的花费，所以只是估算、而且是上限：
+// 账本以外花掉的钱没减，真实余额只会更少。芯片写「≈CA$7.20」，进度条是已经花掉的比例；花掉 ≥ 85% 或按账本已经用完就亮琥珀（上限都低了，真实的更低，锚点旧了也照亮）。
+// 锚点超过 7 天：没亮琥珀时整格变灰、写「N 天前」，提醒他再读一次（不是数字过时，是误差越攒越大）。
+const GEMINI_OLD_MS = 7 * 86400000;
+function money(v, cur) {
+  try { return new Intl.NumberFormat(LANG === 'en' ? 'en-US' : 'zh-CN', { style: 'currency', currency: cur, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v); }
+  catch { return cur + ' ' + v.toFixed(2); }
+}
+function geminiChip(it, now) {
+  const b = it.balance || {}, cur = b.currency, en = LANG === 'en';
+  const used = b.start > 0 ? Math.min(100, Math.max(0, (b.start - b.remaining) / b.start * 100)) : 100;
+  const warn = used >= WARN_AT || !(b.remaining > 0);
+  const age = now - b.anchorAt, old = age > GEMINI_OLD_MS, stale = old && !warn;
+  const ad = new Date(b.anchorAt), read = (ad.getMonth() + 1) + '/' + ad.getDate() + ' ' + hm(b.anchorAt);     // 锚点一律写绝对时间：拼进句子里「刚刚 / 5 min ago」不通
+  const conv = cur !== 'USD' && b.usdPerUnit ? (en ? ' (' + money(b.spent, cur) + ' at 1 ' + cur + ' = ' + b.usdPerUnit + ' USD)' : '（按 1 ' + cur + ' = ' + b.usdPerUnit + ' USD 折成 ' + money(b.spent, cur) + '）') : '';
+  const lines = [en ? 'Gemini API balance (estimate)' : 'Gemini API 余额（估算）',
+    en ? 'About ' + money(b.remaining, cur) + ' left of ' + money(b.start, cur) + ' (read in AI Studio on ' + read + ')'
+       : '约剩 ' + money(b.remaining, cur) + '，起点 ' + money(b.start, cur) + '（' + read + ' 在 AI Studio 读的）',
+    b.rows ? (en ? b.rows + ' charge' + (b.rows > 1 ? 's' : '') + ' logged since then, ' + money(b.spentUsd, 'USD') + ' total' + conv : '之后账本里记到 ' + b.rows + ' 笔花费，共 ' + money(b.spentUsd, 'USD') + conv)
+           : (en ? 'No charges logged since then' : '之后账本里还没有记到花费'),
+    en ? 'This is an upper bound: only charges in the ledger are subtracted, so the real balance can only be lower.' : '这是上限：只减了账本里记到的花费，账本以外花掉的没减，真实余额只会更少。'];
+  if (b.bad) lines.push(en ? b.bad + ' ledger line' + (b.bad > 1 ? 's' : '') + " couldn't be read and " + (b.bad > 1 ? 'were' : 'was') + ' skipped.' : '账本里有 ' + b.bad + ' 行读不懂，没算进去。');
+  if (!(b.remaining > 0)) lines.push(en ? 'By the ledger it is used up.' : '按账本算已经用完了。');
+  if (old) lines.push(en ? 'This reading is from ' + agoShort(b.anchorAt, now) + ' and the error keeps growing. Read it again in AI Studio.' : '锚点是 ' + agoShort(b.anchorAt, now) + '读的，误差越攒越大，去 AI Studio 再读一次。');
+  const tip = lines.join('\n');
+  return '<span class="lq gm' + (warn ? ' warn' : '') + (stale ? ' stale' : '') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="gemini" tabindex="0"><span>Gemini</span>'
+    + '<span class="mtr" aria-hidden="true"><i style="width:' + used.toFixed(1) + '%"></i></span><span class="pc">≈' + money(b.remaining, cur) + '</span>'
+    + (stale ? '<span class="ago">' + agoShort(b.anchorAt, now) + '</span>' : '') + '</span>';
+}
 function paintLimits(st) {
   const el = $('#limits'), lm = st.limits; if (!el) return;
   const claude = lm && lm.claude && lm.claude.length ? lm.claude : [{ id: 'claude:none', provider: 'claude', windows: [] }];
-  const items = lm ? [...claude, ...(lm.codex ? [lm.codex] : [])] : [];
+  const gm = lm && lm.gemini && lm.gemini.balance ? lm.gemini : null;      // 老服务没有这个键；没锚点是 null：都不画
+  const items = lm ? [...claude, ...(lm.codex ? [lm.codex] : []), ...(gm ? [gm] : [])] : [];
   const key = JSON.stringify(items) + '|' + LANG + '|' + Math.floor(st.now / 60000);      // 提示里有「几天几小时后」，每分钟重画一次；其余时候数据没变就不动 DOM
   if (el.dataset.k === key) return; el.dataset.k = key;
   const many = claude.length > 1;
-  el.innerHTML = items.map((it) => limitChip(it, st.now, it.provider === 'claude' && many)).join('');
+  el.innerHTML = items.map((it) => it.provider === 'gemini' ? geminiChip(it, st.now) : limitChip(it, st.now, it.provider === 'claude' && many)).join('');
 }
 
 // ── 一个会话现在算什么状态；排在第几档 ──
@@ -2375,9 +2410,14 @@ function fillNew() {
   $('#nProv').innerHTML = Object.entries(P).map(([k, v]) => '<button data-prov="' + k + '" aria-pressed="' + (pick.provider === k) + '"' + (v.ok ? '' : ' disabled title="这台机器上没找到它的命令"') + ' style="height:auto">' + esc(v.label) + '</button>').join('');
   const p = P[pick.provider];
   // 模型是下拉菜单：默认 + 这一家认得的几个。以前存过列表之外的写法（完整的模型名）也留一项，不替你丢掉
-  const mNow = (pick.model || {})[pick.provider] || ''; const mAll = (p.models || []).concat(mNow && !(p.models || []).includes(mNow) ? [mNow] : []);
-  const mName = (m) => (/^[a-z]+$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m);
-  $('#nModel').innerHTML = L('<option value="">默认' + (p.defaultModel ? '（' + esc(mName(p.defaultModel)) + '）' : '') + '</option>' + mAll.map((m) => '<option value="' + esc(m) + '">' + esc(mName(m)) + '</option>').join(''));
+  // 存的是 Gemini 模型、但服务这回不报了（config 的 gemini 关了、脚本不在）：当没选，不留一项点了只会被服务拒的
+  const gList = p.geminiModels || [], mPick = (pick.model || {})[pick.provider] || '', mNow = /^gemini-/.test(mPick) && !gList.includes(mPick) ? '' : mPick;
+  const mAll = (p.models || []).concat(mNow && !(p.models || []).includes(mNow) ? [mNow] : []);
+  const mName = (m) => { const n = modelName(m); return /^gemini-/.test(m) && n ? n.name : /^[a-z]+$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m; };
+  const mOpt = (m) => '<option value="' + esc(m) + '">' + esc(mName(m)) + '</option>';
+  // 服务报了 Gemini 模型：下拉里分「Claude」「Gemini」两组（Gemini 是模型，不是第三个「交给谁」）；没报就和以前一样一长串
+  const mHtml = gList.length ? '<optgroup label="Claude">' + mAll.filter((m) => !gList.includes(m)).map(mOpt).join('') + '</optgroup><optgroup label="Gemini">' + gList.map(mOpt).join('') + '</optgroup>' : mAll.map(mOpt).join('');
+  $('#nModel').innerHTML = L('<option value="">默认' + (p.defaultModel ? '（' + esc(mName(p.defaultModel)) + '）' : '') + '</option>' + mHtml);
   $('#nModel').value = mNow;
   $('#nEffort').innerHTML = L('<option value="">默认' + (p.defaultEffort ? '（' + esc(p.defaultEffort) + '）' : '') + '</option>' + (p.efforts || []).map((e) => '<option value="' + esc(e) + '">' + esc(e) + '</option>').join(''));
   $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
@@ -2387,14 +2427,27 @@ function fillNew() {
   $('#nAcctField').style.display = A.length ? '' : 'none';
   $('#nAcct').innerHTML = L('<option value="">默认' + (dA ? '（' + esc(dA.name) + '）' : p.login ? '（当前登录 ' + esc(p.login) + '）' : '') + '</option>' + A.map((a) => '<option value="' + esc(a.id) + '"' + (a.ready ? '' : ' disabled') + '>' + esc(a.name) + (a.ready ? '' : '（钥匙串里还没有 token）') + '</option>').join(''));
   $('#nAcct').value = A.some((a) => a.ready && a.id === aNow) ? aNow : '';
-  const cmHide = pick.provider !== 'claude'; $('#nCmField').hidden = cmHide; if (cmHide) setCm(false);   // Code Mode 只有 Claude Code 有：选了 Codex 就收起，并关掉（看不见的开关不能还开着）
+  gemWas = false; syncGem();   // 强度 / 账号 / Code Mode 的显隐：选了 Gemini 模型就收起（要在 nAcctField 写完之后）
 }
+// 选了 Gemini 模型：强度、账号、Code Mode 都不适用，服务也会拒。收起来，不让他调一个根本没生效的东西；换回 Claude 的模型原样回来（强度回到他之前选的）
+let gemWas = false;
+function gemPick() { const g = ((last && last.providers && last.providers.claude) || {}).geminiModels || []; return pick.provider === 'claude' && g.includes($('#nModel').value); }
+function syncGem() {
+  const g = gemPick(), P = ((last && last.providers) || {})[pick.provider] || {};
+  if (g && !gemWas) { pick.effort = pick.effort || {}; pick.effort[pick.provider] = $('#nEffort').value; }   // 切走之前先记下他调的强度
+  if (!g && gemWas) $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
+  gemWas = g;
+  $('#nEffortField').style.display = g ? 'none' : ''; $('#nGemField').hidden = !g;
+  $('#nAcctField').style.display = !g && (P.accounts || []).length ? '' : 'none';
+  const cmHide = pick.provider !== 'claude' || g; $('#nCmField').hidden = cmHide; if (cmHide) setCm(false);   // Code Mode 只有 Claude Code 的 Claude 模型有：选了 Codex 或 Gemini 就收起，并关掉（看不见的开关不能还开着）
+}
+$('#nModel').addEventListener('change', syncGem);
 $('#nProv').addEventListener('click', (e) => { const b = e.target.closest('[data-prov]'); if (!b || b.disabled) return; keepPick(); pick.provider = b.dataset.prov; fillNew(); });
 // Code Mode 开关（11/17 Khalil 本人要的）：只对这一次开的这一个窗口。默认关，每次打开弹窗都回到关，不记上一次（不进 ccb_new）
 function setCm(on) { const b = $('#nCm'), v = on ? 'true' : 'false'; if (b.getAttribute('aria-checked') !== v) b.setAttribute('aria-checked', v); }   // function 声明：fillNew() 先于这一行被调也认得
 function cmOn() { return $('#nCm').getAttribute('aria-checked') === 'true' && !$('#nCmField').hidden; }
 $('#nCm').addEventListener('click', () => setCm(!cmOn()));
-function keepPick() { pick.model = pick.model || {}; pick.effort = pick.effort || {}; pick.model[pick.provider] = $('#nModel').value.trim(); pick.effort[pick.provider] = $('#nEffort').value; store('ccb_new', pick); }
+function keepPick() { pick.model = pick.model || {}; pick.effort = pick.effort || {}; pick.model[pick.provider] = $('#nModel').value.trim(); if (!gemPick()) pick.effort[pick.provider] = $('#nEffort').value; store('ccb_new', pick); }
 // 在哪一列的列头点的「新任务」：{key, name}，跟着任务交给服务，新卡落进那一列。右上角、⌘N 和「其他」那一列开的是 null（它自己找项目）
 let newIn = null;
 const NEW_TIP = '直接写任务，它在后台做，做完会站到最前面。放在哪个文件夹它自己定。留空 = 开一个空会话，等你在卡片里说第一句。';
@@ -2407,7 +2460,7 @@ function openNew(proj) {
 async function goNew() {
   const prompt = $('#nPrompt').value.trim(), cwd = '~';      // 不问放哪个文件夹：都开在主目录，服务会让它自己找项目文件夹
   keepPick(); $('#nGo').disabled = true; let r; const nFiles = newHold.atts.length;
-  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: pick.effort[pick.provider] || '', account: pick.provider === 'claude' ? $('#nAcct').value || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
+  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: gemPick() ? '' : pick.effort[pick.provider] || '', account: pick.provider === 'claude' && !gemPick() ? $('#nAcct').value || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   $('#nGo').disabled = false;
   if (r.ok) { $('#nPrompt').value = ''; saveDraft(NEW_DRAFT, ''); newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); if (fellText(r)) toast(fellText(r), { ms: 6000 }); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }
@@ -2422,7 +2475,9 @@ function fellText(r) {
 let focusNew = null, wantFocus = null, pickNext = null;
 async function openBlank() {
   const P = (last && last.providers) || {}; const pv = P[pick.provider] && P[pick.provider].ok ? pick.provider : 'claude';
-  let r; try { r = await api('/api/new', { prompt: '', cwd: '~', provider: pv, model: (pick.model || {})[pv] || '', effort: (pick.effort || {})[pv] || '', account: '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
+  // 记着的是 Gemini 模型：照样开成 Gemini（只带模型、不带强度）；服务这回已经不报它了（config 关了 gemini）就当默认，不去撞一条必拒的请求
+  const mm0 = (pick.model || {})[pv] || '', mm = /^gemini-/.test(mm0) && !(((P.claude || {}).geminiModels) || []).includes(mm0) ? '' : mm0;
+  let r; try { r = await api('/api/new', { prompt: '', cwd: '~', provider: pv, model: mm, effort: /^gemini-/.test(mm) ? '' : (pick.effort || {})[pv] || '', account: '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
   if (r.ok) { focusNew = r.name; toast(fellText(r) || '新会话启动中'); refresh(); } else toast(r.error || '没开起来');
 }
 window.ccbBlank = openBlank;

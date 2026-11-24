@@ -9,6 +9,7 @@
  *        rp-dir-* 5 个守远程文件夹图集（C1.1）：主目录和上层、/private 与 /Volumes 的顶层、不列链接、证据不认上一级、留痕。
  *        11/22 修一（rp-fix）加 7 个：rp-dir-home-parent（只拿掉「主目录的上层」）、rp-canon-case / rp-canon-firm（真身不收大小写 / firmlink 别名）、
  *        rp-link-target-evidence（链接指去的地方也算写到）、rp-no-normalize（不先规整）、rp-log-key（日志不遮钥匙）、rp-pdf-inline（PDF 不按附件发）。
+ *        11/23 PR #8 收紧加 3 个：digest-en-anyline（英文标签哪一行都认）、digest-en-fence（不跳过代码块）、digest-en-link（[Review](网址) 也当标签）。
  *        同时跑的几路各用自己的端口段（M_PORT + 第几路 × 2000）和自己的临时目录（test/.tmp/mutants-XXXXXX），互不撞、互不删。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -124,6 +125,10 @@ const MUTANTS = {
   'note-when-folder-given': ["  if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;", "  if (text) text += pin ? pinNote(pin) : FOLDER_NOTE;"],
   'digest-no-cond':      ["if (DG_COND.test(u) || DG_LATER.test(u) || DG_NONE.test(u)) continue;", "if (DG_NONE.test(u)) continue;"],
   'tag-line-kept':       ["const lines = ti < 0 ? all : all.filter((_, i) => i !== ti);", "const lines = all;"],
+  // 英文标签只认代码块外的最后一个非空行（11/23 PR #8 收紧）：拿掉「只看最后一行」、拿掉「跳过代码块」、链接也当标签
+  'digest-en-anyline':   ["if (m && (m[1] || i === last)) {", "if (m) {"],
+  'digest-en-fence':     ["else if (!fenced && l.trim()) last = i;", "else if (l.trim()) last = i;"],
+  'digest-en-link':      ["\\[(needs you|review|fyi)\\](?!\\()", "\\[(needs you|review|fyi)\\]"],
   'peer-turn-ignored':   ["        if (!st.open) { st.turnBy = 'peer'; st.turnPeer =", "        if (false) { st.turnBy = 'peer'; st.turnPeer ="],
   'pin-ignored-in-note': ["  if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;", "  if (text && sameDir(dir, HOME)) text += FOLDER_NOTE;"],
   'pin-trusts-client':   ["  const pin = opt.project ? pinnable(opt.project.key, opt.project.name) : null;", "  const pin = opt.project && opt.project.key ? { key: String(opt.project.key), name: String(opt.project.name) } : null;"],
