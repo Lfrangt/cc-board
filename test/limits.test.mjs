@@ -1,9 +1,10 @@
 /**
  * [INPUT]: 依赖 ../limits.mjs（或命令行给的另一份，比如改坏版）和 ../statusline-tap.mjs（端到端那一项）。Codex 记录夹具照真实 rollout 里 token_count 事件的结构手搭（limit_id、primary、plan_type），Claude 的取数文件照 tap 脚本写出来的样子。
- * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过。带 --mutants 时改跑反向对照：造 35 个改坏的 limits.mjs，每个都必须让本测试变红
+ * [OUTPUT]: 逐项打印 ok / FAIL，退出码 0 = 全过。带 --mutants 时改跑反向对照：造 42 个改坏的 limits.mjs，每个都必须让本测试变红
  * [POS]: test/ 的「各订阅周额度」测试。不起服务，在临时目录里造假主目录和假数据目录，两秒内跑完。
  *        测：Codex 取最后一条而不是第一条、只认订阅那一条限额、截断的行不崩、窗口缺字段就丢、过期窗口丢掉；Claude 的多个窗口按周窗口截止时间分成各自的号、有标记的号认领同截止时间的无标数据、几个会话轮流更新时先后不跳；会话号和账号标记进文件名前要过滤；tap 脚本落盘只有额度、坏输入安静退出。
  *        Gemini 余额估算（11/23）：锚点 − 锚点之后的账本花费，折回锚点币种；没有锚点或锚点写坏了就没有这一项；.tsv 只有分钟（锚点那一分钟算上）；.jsonl 出现后更早的 .tsv 行才算（不重复数）；坏行数进 bad、不算花费；余额封在 0；浮点尾巴去掉；锚点文件和取数文件同目录、互不被清。
+ *        收起时钉住哪几条（11/24 ng 车）：limitPins 默认 = 没标账号的那条 + defaultAccount 那条、config 的 limitsPin 压过默认、回拷贝；parseLimitsPin 认得的写法、去重、写错整项不用并说原因。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 // 用法：node test/limits.test.mjs [limits.mjs 的路径]      node test/limits.test.mjs --mutants
@@ -51,6 +52,14 @@ if (process.argv.includes('--mutants')) {
     'gem-header-is-bad': ["if (head && line.startsWith('time\\t')) continue;", ''],
     'gem-estimate-false': ['estimate: true, rows, bad', 'estimate: false, rows, bad'],
     'gem-purge-eats-anchor': ["if (!f.startsWith(TAP_PREFIX) || !f.endsWith('.json')) continue;", "if (!f.endsWith('.json')) continue;"],
+    // 11/24 ng 车：收起时钉住哪几条
+    'pin-config-ignored': ['if (Array.isArray(pin)) return [...pin];', ''],
+    'pin-not-copy': ['if (Array.isArray(pin)) return [...pin];', 'if (Array.isArray(pin)) return pin;'],
+    'pin-no-default-account': [' || (defaultAccount && e.account === defaultAccount)', ''],
+    'pin-no-anon': ['e.account == null || ', ''],
+    'pin-loose-id': ['const PIN_ID = /^(?:claude:[\\w.@-]{1,40}|codex|gemini)$/;', 'const PIN_ID = /^.+$/;'],
+    'pin-no-dedupe': ['return { pin: [...new Set(v)] };', 'return { pin: [...v] };'],
+    'pin-max-dropped': ["if (v.length > LIMITS_PIN_MAX) return { pin: null, error: '最多 ' + LIMITS_PIN_MAX + ' 个' };", ''],
   };
   let bad = 0;
   for (const [name, [a, b]] of Object.entries(M)) {
@@ -260,6 +269,41 @@ console.log('Gemini：账本估算预付余额（Google 没有查余额的接口
   ok(G(dir, NOW) && G(dir, NOW).balance && G(dir, NOW).balance.remaining === 8, '同一个目录里读得到锚点');
   ok(L.purgeTaps(dir, Date.now()) === 0 && fs.existsSync(anc), '30 天没动的锚点文件不会被清取数文件的那一步清掉（人写的，不是取数文件）');
   clear();
+}
+
+console.log('收起时钉住哪几条（limitPins / parseLimitsPin，11/24 ng 车）');
+{
+  // 拿旧的 limits.mjs（没有这两个导出）跑红阶段时逐项红，不在第一项就抛出去
+  const call = (f, ...a) => { try { return typeof L[f] === 'function' ? L[f](...a) : '<没有 ' + f + '>'; } catch (e) { return '<抛错 ' + e.message + '>'; } };
+  const anon = { id: 'claude:w123', provider: 'claude', account: null }, amy = { id: 'claude:amy', provider: 'claude', account: 'amy' }, ben = { id: 'claude:ben', provider: 'claude', account: 'ben' };
+  same(call('limitPins', [anon]), ['claude:w123'], '没配 accounts（只有没标账号的那条）：钉住它，收起也看得到自己的额度');
+  same(call('limitPins', [amy, ben, anon], { defaultAccount: 'ben' }), ['claude:ben', 'claude:w123'], '默认 = defaultAccount 那条 + 没标账号的那条，先后照条目');
+  same(call('limitPins', [amy, ben]), [], '两个号都标了账号、没有 defaultAccount：一条都不钉（不猜哪个是主号）');
+  same(call('limitPins', [amy, ben], { defaultAccount: 'nobody' }), [], 'defaultAccount 在额度里没有条目：不拿别的号顶上');
+  same(call('limitPins', [amy, ben, anon], { pin: ['claude:main', 'claude:alt'], defaultAccount: 'ben' }), ['claude:main', 'claude:alt'], 'config 写了 limitsPin：照它（作者本机 main + alt），压过默认');
+  same(call('limitPins', [anon], { pin: [] }), [], 'limitsPin 写成 []：一条都不钉（明说的，不退回默认）');
+  const cfgPin = ['codex'], got = call('limitPins', [], { pin: cfgPin });
+  ok(Array.isArray(got) && got !== cfgPin && JSON.stringify(got) === '["codex"]', '回的是拷贝：界面那边改它不会改到 config', JSON.stringify(got));
+  same(call('limitPins', undefined), [], '还没有 Claude 条目（undefined）：空数组，不抛');
+  clear(); tap('pin00000-0001', NOW - 1000, { week: 7 });
+  let real = L.claudeLimits(dir, NOW);
+  ok(real.length === 1 && /^claude:w\d+$/.test(real[0].id) && JSON.stringify(call('limitPins', real)) === JSON.stringify([real[0].id]), '真读出来的没标账号那条（id 是 claude:w<周截止分钟>）：默认钉住', JSON.stringify([real, call('limitPins', real)]));
+  tap('pin00000-0002', NOW - 1000, { week: 9, account: 'main', weekEnd: WEEK_END + 86400000 });
+  real = L.claudeLimits(dir, NOW);
+  ok(real.length === 2 && JSON.stringify(call('limitPins', real, { defaultAccount: 'main' })) === JSON.stringify(['claude:main', real[1].id]) && /^claude:w\d+$/.test(real[1].id), '真读出来的 main（标了账号）+ 没标账号那条，defaultAccount 是 main：两条都钉', JSON.stringify([real.map((e) => e.id), call('limitPins', real, { defaultAccount: 'main' })]));
+  clear();
+  same(call('parseLimitsPin', undefined), { pin: null }, 'config 没写 limitsPin：pin 是 null（服务照默认算）');
+  same(call('parseLimitsPin', null), { pin: null }, 'limitsPin 写成 null：同没写');
+  same(call('parseLimitsPin', ['claude:main', 'claude:alt', 'codex', 'gemini', 'claude:a.b@c-d_e']), { pin: ['claude:main', 'claude:alt', 'codex', 'gemini', 'claude:a.b@c-d_e'] }, '认得的写法：claude:<账号 id>（账号 id 同 CCBOARD_ACCOUNT 的 [\\w.@-]）、codex、gemini');
+  same(call('parseLimitsPin', ['codex', 'codex', 'claude:main']), { pin: ['codex', 'claude:main'] }, '重复的只留一个，先后不变');
+  const sixteen = Array.from({ length: 16 }, (_, i) => 'claude:a' + i);
+  ok(((call('parseLimitsPin', sixteen) || {}).pin || []).length === 16, '16 个照收（上限是 16）');
+  for (const v of ['claude:main', {}, ['main'], ['claude:a b'], [1], [''], ['claude:'], ['claude:' + 'x'.repeat(41)], ['Codex'], [...sixteen, 'claude:b']]) {
+    const r = call('parseLimitsPin', v);
+    ok(r && typeof r === 'object' && r.pin === null && typeof r.error === 'string' && r.error.length > 0, '写错整项不用、带原因：' + JSON.stringify(v).slice(0, 48), JSON.stringify(r));
+  }
+  const mixed = call('parseLimitsPin', ['claude:main', 'claude:a b']);
+  ok(mixed && mixed.pin === null && /claude:a b/.test(mixed.error || ''), '错的是哪一个写进原因里（日志里看得出改哪）', JSON.stringify(mixed));
 }
 
 console.log('取数脚本 statusline-tap.mjs（端到端）');

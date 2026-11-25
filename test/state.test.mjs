@@ -9,6 +9,7 @@
  *        [7m] 独立账号夹具核归档保留原号、默认号和缺 token 时不接回。
  *        [1f] 按轮次和已扫描字节验证逐笔补丁、安全门、截断、重启与只读读取。
  *        [1d] 这一轮改了哪些文件（wrote / wroteMore）和撞车提示（collide）：另造 21 个会话（`--ui` 不放），假主目录里放几个假仓库（.git 文件夹、worktree 的 .git 文件、没有 .git 的、主目录自己的 .git）。
+ *        [7n] 新窗口的名字（11/24 ng 车）：另起一份服务（T_PORT + 270）、假主目录 nmh；--name 的写法和位置、活登记 / 刚发出去的不撞、两个同时开、256 个占满换 4 位、接回还原名或另起、总控台起的名字不顶掉标题。[9] 逐次核每次启动都正好一个 --name。
  *        [7r] 新开的会话一开就退了（撞上 claude 自动更新）：假 claude 按 argv.flaky 先退几次（马上退 / 0.4 秒后退），服务要看出来、重新找 claude、换名字重开一次；接回归档一样；两次都退报「一开就退了」。
  *        [3p]「审完了」跨设备（11/18）：另起一份服务（T_PORT + 250）、5 个刚交付【待审阅】的会话，两个「页面」各拿各的 v 读 /api/state 的 processed；重启读回 processed.json、文件写坏当空表。[10] 末尾两项核远程端口也带。
  *        [8u] 检查新版本的接线（11/22）：把被测服务拷进新文件夹、真放 .bundle-version，先后起三份（T_PORT + 1150）对本机假 GitHub 数请求：有记号 1 次、updateCheck:false 0 次、没记号 0 次。
@@ -408,7 +409,7 @@ setTimeout(() => process.exit(0), 25000);
 // 睡 0 = 马上退的那种（exec 就落空）；睡 0.4 = 晚一点退的那种（选了号的那层 zsh 先读钥匙串再 exec，has-session 早过了，会话 1 秒内才退）。放在 argv.all 和 argv.cm.XXXXXX 都记完之后：退掉的那次也算进 [9] 的逐次核对（参数白名单、核环境两份记录的次数要对得上；11/18 第一趟红放在 argv.cm 前面，核环境 51 对 46 红了）
 const FLAKY_SH = 'if [ -s "$T_ARGV.flaky" ]; then { read fn; read fp; read fd; } < "$T_ARGV.flaky"; case "$*" in *"$fp"*) if [ "$fn" -gt 0 ]; then printf "%s\\n%s\\n%s\\n" $((fn-1)) "$fp" "$fd" > "$T_ARGV.flaky"; echo die >> "$T_ARGV.flakyn"; case "$fd" in 0) ;; swap:*) s=${TMUX%%,*}; p=${TMUX#*,}; p=${p%%,*}; /bin/mv -f "${fd#swap:}" "$s"; echo "$s $p" > "$T_ARGV.swapped"; exec /bin/sleep 30;; *) /bin/sleep "$fd";; esac; exit 1; fi; echo live >> "$T_ARGV.flakyn";; esac; fi\n';
 // 第一行先把这次启动收到的全部参数追加进 argv.all（每个参数以 \0 结尾，一次启动以 \036\0 收尾）：[9]「不改脑子」按它逐次核对。放在最前面，下面 exec 去向导 / 信任框 / --resume 的也记得到
-fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV.all"; done; printf \'\\036\\0\' >> "$T_ARGV.all"\nf=$(/usr/bin/mktemp "$T_ARGV.cm.XXXXXX") && printf \'%s\\0\' "${CLAUDE_CODE_EXPERIMENTAL_CODE_MODE-unset}" "$@" > "$f"\n' + FLAKY_SH + 'case "$T_ARGV" in *resume-argv) printf "%s|%s" "$CLAUDE_CODE_OAUTH_TOKEN" "$CCBOARD_ACCOUNT" > "$T_ARGV.env";; esac\ncase "$*" in *ONBOARD*|*LOGINSCREEN*|*--resume*) exec "' + NODE + '" "' + path.join(BIN, 'onboard.mjs') + '" "$@";; esac\ncase "$*" in *TRUSTME*|*OTHERDIALOG*) exec "' + NODE + '" "' + path.join(BIN, 'dialog.mjs') + '" "$@";; esac\n/bin/pwd > "$T_ARGV.cwd"\nprintf "%s|%s" "$CLAUDE_CODE_OAUTH_TOKEN" "$CCBOARD_ACCOUNT" > "$T_ARGV.env"\n/usr/bin/env | /usr/bin/grep -E "^(CLAUDE|CCBOARD|TMUX=)" > "$T_ARGV.cenv"\nprintf "%s|%s|%s" "${CLAUDE_CODE_CHILD_SESSION-unset}" "${CLAUDE_PID-unset}" "${CCBOARD_DATA-unset}" > "$T_ARGV.child"\n: > "$T_ARGV"\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV"; done\ncase "$*" in *PW-*) /bin/sleep 90;; *) /bin/sleep 25;; esac\n', { mode: 0o755 });
+fs.writeFileSync(path.join(BIN, 'claude'), '#!/bin/sh\ncase "$1" in --help) echo help >> "$T_ARGV.help"; echo "Usage: claude [options] [command] [prompt]"; [ -e "$T_ARGV.noname" ] || echo "  -n, --name <name>  Set a display name for this session"; echo "  -r, --resume [value]  Resume a conversation"; exit 0;; esac\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV.all"; done; printf \'\\036\\0\' >> "$T_ARGV.all"\nf=$(/usr/bin/mktemp "$T_ARGV.cm.XXXXXX") && printf \'%s\\0\' "${CLAUDE_CODE_EXPERIMENTAL_CODE_MODE-unset}" "$@" > "$f"\n' + FLAKY_SH + 'case "$T_ARGV" in *resume-argv) printf "%s|%s" "$CLAUDE_CODE_OAUTH_TOKEN" "$CCBOARD_ACCOUNT" > "$T_ARGV.env";; esac\ncase "$*" in *ONBOARD*|*LOGINSCREEN*|*--resume*) exec "' + NODE + '" "' + path.join(BIN, 'onboard.mjs') + '" "$@";; esac\ncase "$*" in *TRUSTME*|*OTHERDIALOG*) exec "' + NODE + '" "' + path.join(BIN, 'dialog.mjs') + '" "$@";; esac\n/bin/pwd > "$T_ARGV.cwd"\nprintf "%s|%s" "$CLAUDE_CODE_OAUTH_TOKEN" "$CCBOARD_ACCOUNT" > "$T_ARGV.env"\n/usr/bin/env | /usr/bin/grep -E "^(CLAUDE|CCBOARD|TMUX=)" > "$T_ARGV.cenv"\nprintf "%s|%s|%s" "${CLAUDE_CODE_CHILD_SESSION-unset}" "${CLAUDE_PID-unset}" "${CCBOARD_DATA-unset}" > "$T_ARGV.child"\n: > "$T_ARGV"\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV"; done\ncase "$*" in *PW-*) /bin/sleep 90;; *) /bin/sleep 25;; esac\n', { mode: 0o755 });
 // [7r] 重开前重新找 claude：服务用 zsh -lc 'command -v claude' 找。假主目录的 .zprofile 在 alt-claude-on 在时把 altbin 排到 PATH 最前面（像自动更新以后 claude 换了位置）；
 // altbin/claude 在 argv.alt 记一行再原样交给 BIN/claude，所以服务之后一直缓存着它也不影响别的段
 fs.mkdirSync(path.join(FH, 'altbin'), { recursive: true });
@@ -568,6 +569,8 @@ const ok = (cond, name, extra = '') => { if (cond) { pass++; console.log('  ok  
 const by = (st, name) => st.sessions.find((x) => x.sid === S[name].sid);
 const kind = (st, name) => { const s = by(st, name); return s ? (s.alert ? s.alert.kind : null) : 'MISSING'; };
 const until = async (fn, ms = 20000) => { const end = Date.now() + ms; let v; while (Date.now() < end) { v = await fn(); if (v) return v; await sleep(400); } return v; };
+// 11/24 名字：总控台起的每个 claude 都带一对 --name <名字>（[9] 逐次核、[7n] 核怎么挑）。别的段核参数时先拿掉这一对，原来的断言照旧
+const dropName = (args) => { const i = args.indexOf('--name'); return i < 0 ? args : [...args.slice(0, i), ...args.slice(i + 2)]; };
 
 let ticker = null;
 const hintTick = setInterval(() => { try { append('hint', R.tool(), R.result()); } catch {} }, 800);   // hint 这个会话从头到尾都在正常干活
@@ -1342,7 +1345,7 @@ try {
   ok(kind(st, 'limit') === null && by(st, 'limit').prompt === '继续', 'limit: 回话后 alert 清掉');
 
   console.log('\n[7] 新任务不问放哪个文件夹：开在主目录，任务后面附一段让它自己找项目文件夹的说明');
-  const readArgv = async () => { for (let i = 0; i < 40; i++) { await sleep(150); try { const cwd = fs.readFileSync(ARGV + '.cwd', 'utf8').trim(); const a = fs.readFileSync(ARGV, 'utf8'); await sleep(200); return { cwd, args: fs.readFileSync(ARGV, 'utf8').split('\0').filter((x, i2, all) => i2 < all.length - 1) }; } catch {} } return null; };
+  const readArgv = async () => { for (let i = 0; i < 40; i++) { await sleep(150); try { const cwd = fs.readFileSync(ARGV + '.cwd', 'utf8').trim(); const a = fs.readFileSync(ARGV, 'utf8'); await sleep(200); const raw = fs.readFileSync(ARGV, 'utf8').split('\0').filter((x, i2, all) => i2 < all.length - 1); return { cwd, raw, name: raw[raw.indexOf('--name') + 1], args: dropName(raw) }; } catch {} } return null; };
   const clearArgv = () => { for (const f of [ARGV, ARGV + '.cwd']) { try { fs.unlinkSync(f); } catch {} } };
   const real = (x) => fs.realpathSync(x);
   let n1 = await post('/api/new', { prompt: '做个小工具', cwd: '~', provider: 'claude', model: 'opus', effort: 'low' }); let got = await readArgv();
@@ -1392,6 +1395,51 @@ try {
   ok(n1.body.ok === false && !fs.existsSync(ARGV), '档位写成 __proto__ 也拦下，窗口没开', JSON.stringify(n1.body));
   ok(/\nroute \S+ ccb-\w+ light claude sonnet high\n/.test('\n' + log()) && /\nroute \S+ ccb-\w+ heavy claude fable xhigh\n/.test('\n' + log()), '服务日志每开一个声明了档位的窗口记一行 route <时间> <窗口> <档位> <谁> <模型> <强度>');
   ok(!/\nroute \S+ \S+ xl /.test('\n' + log()), '被拦下的档位不记 route');
+
+  console.log('\n[7g-2] 派活单 brief（11/24 brief-v2，FIX-1 返修）：缺栏 / 空白 / 只写「无」/ 不是对象（含 "" false 0）/ 派给和 tier 对不上 / prompt 里又写一张 / 太长都拒开；齐了按固定版式拼进 prompt；不带的一字不差照旧（七栏的细节在 route.test.mjs）');
+  // 期望的版式手写在这里，不从 route.mjs 拼：栏名 + 全角冒号补到 12 个显示列，续行缩进 12 格
+  const BF = { to: 'tier standard（主号）', role: '写代码 + 补测试', goal: '/api/new 可以带 brief', context: '任务单 `BRIEF.md`\n规格 "ROUTING.md" 第五节 $(touch /tmp/ccb-brief-canary) ; echo x', doneWhen: 'node test/route.test.mjs → 全过', doNot: '不部署；不碰 4747', report: '回给 win-1b，15 行以内' };
+  const BF_TEXT = '【派活单】/api/new 可以带 brief\n派给：      tier standard（主号）\n角色：      写代码 + 补测试\n目标：      /api/new 可以带 brief\n背景：      任务单 `BRIEF.md`\n            规格 "ROUTING.md" 第五节 $(touch /tmp/ccb-brief-canary) ; echo x\n做完的标准：node test/route.test.mjs → 全过\n不要做：    不部署；不碰 4747\n回报：      回给 win-1b，15 行以内';
+  const bfWith = (over) => { const b = { ...BF }; for (const [k, v] of Object.entries(over)) { if (v === undefined) delete b[k]; else b[k] = v; } return b; };
+  const sockNow = () => { try { return fs.readdirSync(WD); } catch { return []; } };
+  { const before = sockNow(); clearArgv();
+    const rj = [
+      ['缺一栏（回报）', await post('/api/new', { prompt: '缺一栏', cwd: CWD, provider: 'claude', tier: 'standard', brief: bfWith({ report: undefined }) }), (b) => JSON.stringify(b.missing) === '["report"]' && /^派活单缺栏，没开窗口：缺 回报（report）$/.test(b.error)],
+      ['缺几栏（背景、不要做）', await post('/api/new', { prompt: '缺几栏', cwd: CWD, provider: 'claude', tier: 'standard', brief: bfWith({ context: undefined, doNot: undefined }) }), (b) => JSON.stringify(b.missing) === '["context","doNot"]' && /缺 背景（context）、不要做（doNot）/.test(b.error)],
+      ['只有空白（目标）', await post('/api/new', { prompt: '空白', cwd: CWD, provider: 'claude', tier: 'standard', brief: bfWith({ goal: ' \n\t ' }) }), (b) => JSON.stringify(b.missing) === '["goal"]' && /缺 目标（goal）/.test(b.error)],
+      ['只写「无」（不要做）', await post('/api/new', { prompt: '无', cwd: CWD, provider: 'claude', tier: 'standard', brief: bfWith({ doNot: '无' }) }), (b) => JSON.stringify(b.missing) === '["doNot"]' && /不要做（doNot）只写了「无」，也算缺/.test(b.error)],
+      ['brief 是一段文字', await post('/api/new', { prompt: '文字', cwd: CWD, provider: 'claude', tier: 'standard', brief: '派给 standard，目标是……' }), (b) => /brief 要是一个对象/.test(b.error) && (b.missing || []).length === 7],
+      ['brief 是数组', await post('/api/new', { prompt: '数组', cwd: CWD, provider: 'claude', tier: 'standard', brief: [BF] }), (b) => /brief 要是一个对象/.test(b.error)],
+      ['派给写 standard、请求 tier 是 light', await post('/api/new', { prompt: '对不上', cwd: CWD, provider: 'claude', tier: 'light', brief: BF }), (b) => /^派活单不对，没开窗口：派给写的是 standard，请求里的 tier 是 light/.test(b.error)],
+      ['派给写 standard、请求没声明 tier', await post('/api/new', { prompt: '没声明', cwd: CWD, provider: 'claude', brief: BF }), (b) => /派给写的是 standard，请求里没有 tier/.test(b.error)],
+      // FIX-1：""、false、0 也算带了 brief（判的是 != null，不是真假），照「要是一个对象」拒，不当成没带去开空窗口
+      ['brief 是 ""', await post('/api/new', { prompt: '空串', cwd: CWD, provider: 'claude', tier: 'standard', brief: '' }), (b) => /brief 要是一个对象/.test(b.error) && (b.missing || []).length === 7],
+      ['brief 是 false', await post('/api/new', { prompt: 'false', cwd: CWD, provider: 'claude', tier: 'standard', brief: false }), (b) => /brief 要是一个对象/.test(b.error) && (b.missing || []).length === 7],
+      ['brief 是 0', await post('/api/new', { prompt: '零', cwd: CWD, provider: 'claude', tier: 'standard', brief: 0 }), (b) => /brief 要是一个对象/.test(b.error) && (b.missing || []).length === 7],
+      ['prompt 里又写了一张派活单', await post('/api/new', { prompt: '先看 A\n派给：tier light', cwd: CWD, provider: 'claude', tier: 'standard', brief: BF }), (b) => /^派活单不对，没开窗口：prompt 里又写了一张派活单，只留 brief（prompt 里顶格的这一行：派给：tier light）$/.test(b.error)],
+      ['派活单加 prompt 太长', await post('/api/new', { prompt: 'p'.repeat(14000), cwd: CWD, provider: 'claude', tier: 'standard', brief: BF }), (b) => /^派活单太长，没开窗口：prompt 太长（14000 字），长内容放进文件，prompt 里写路径（派活单加 prompt 拼出来 \d+ 字节，上限 14000/.test(b.error)],
+    ];
+    for (const [what, r, check] of rj) ok(r.code === 200 && r.body.ok === false && check(r.body), what + '：拒，报错说清哪一栏', JSON.stringify(r.body));
+    const tb = await post('/api/new', { prompt: '档位也写错', cwd: CWD, provider: 'claude', tier: 'xl', brief: bfWith({ report: undefined }) });
+    ok(tb.body.ok === false && /档位只能是/.test(tb.body.error || ''), '档位写错又缺栏：先报档位（和以前一样先过 routeNew）', JSON.stringify(tb.body));
+    await sleep(1500);
+    const born = sockNow().filter((x) => !before.includes(x));
+    ok(!fs.existsSync(ARGV) && born.length === 0, '上面 14 个被拒的请求：一个窗口都没开（没有新的 tmux、假 claude 没被启动）', JSON.stringify(born));
+    ok(/\nbrief \S+ - reject missing=report problems=0\n/.test('\n' + log() + '\n') && /\nbrief \S+ - reject missing=- problems=1\n/.test('\n' + log() + '\n'), '服务日志每次拒记一行 brief <时间> - reject missing=<缺的栏> problems=<几处不对>'); }
+  clearArgv(); n1 = await post('/api/new', { prompt: '另外补一句', cwd: CWD, provider: 'claude', tier: 'standard', brief: BF }); got = await readArgv();
+  ok(n1.body.ok === true && n1.body.brief === true && n1.body.route && n1.body.route.tier === 'standard', '七栏都有：开了，应答带 brief: true 和 route', JSON.stringify(n1.body));
+  ok(got && got.args.length === 5 && got.args.slice(0, 4).join(' ') === '--model opus --effort xhigh' && got.args[4] === BF_TEXT + '\n\n另外补一句', '七栏都有：按固定版式逐字拼进 prompt，原来的 prompt 空一行接在后面；引号、反引号、$() 原样是同一个参数', JSON.stringify(got && got.args));
+  ok(!fs.existsSync('/tmp/ccb-brief-canary'), '派活单里的 $() 没被当命令执行');
+  ok(n1.body.name && new RegExp('\\nbrief \\S+ ' + n1.body.name + ' ok\\n').test('\n' + log() + '\n'), '服务日志记一行 brief <时间> <窗口> ok', n1.body.name);
+  clearArgv(); n1 = await post('/api/new', { cwd: CWD, provider: 'claude', brief: { 派给: 'win-1b 那条线的新窗口', 角色: BF.role, 目标: BF.goal, 背景: BF.context, 做完的标准: BF.doneWhen, 不要做: BF.doNot, 回报: BF.report } }); got = await readArgv();
+  ok(n1.body.ok === true && got && got.args.length === 1 && got.args[0] === BF_TEXT.replace('派给：      tier standard（主号）', '派给：      win-1b 那条线的新窗口'), '中文栏名、派给没写档位、没给 prompt、没给 tier：只有派活单那一段，没有 --model / --effort', JSON.stringify(got && got.args));
+  // 不带 brief：和 [7] 那几条同样的请求，收到的参数一字不差；带 brief: null 也算没带
+  clearArgv(); n1 = await post('/api/new', { prompt: '做个小工具', cwd: '~', provider: 'claude', model: 'opus', effort: 'low' }); got = await readArgv();
+  ok(n1.body.ok && !('brief' in n1.body) && got && got.args.length === 5 && got.args.slice(0, 4).join(' ') === '--model opus --effort low' && got.args[4] === t1, '不带 brief：参数和 [7] 第一条逐字一样（任务原话 + 找文件夹的说明），应答里没有 brief', JSON.stringify(n1.body));
+  clearArgv(); n1 = await post('/api/new', { prompt: '在这里做', cwd: CWD, provider: 'claude', brief: null }); got = await readArgv();
+  ok(n1.body.ok && !('brief' in n1.body) && got && got.args.length === 1 && got.args[0] === '在这里做', 'brief: null 算没带：照旧开，prompt 一字不差', JSON.stringify(n1.body) + ' ' + JSON.stringify(got && got.args));
+  clearArgv(); n1 = await post('/api/new', { prompt: '', cwd: CWD, provider: 'claude', tier: 'light', brief: null }); got = await readArgv();
+  ok(n1.body.ok && !('brief' in n1.body) && n1.body.route && got && got.args.join(' ') === '--model sonnet --effort high', '空会话 + 档位 + brief: null：照旧只有 --model / --effort，什么都不附', JSON.stringify(got && got.args));
 
   console.log('\n[7h-0] 短暂套接字故障不删归属；真退出跨三拍才删并记日志');
   const pruneRead = (file) => { try { return JSON.parse(fs.readFileSync(path.join(DATA, file), 'utf8')); } catch { return {}; } };
@@ -1556,7 +1604,7 @@ try {
 
   console.log('\n[7m] Code Mode 开窗口和接回（11/17 作者 本人要的）：勾了开关的那一个窗口、记录里最后一次是 Code Mode 的接回窗口，环境里带 CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1，claude 的参数不变；别的一律不带');
   // 假 claude 每次启动写一个 argv.cm.XXXXXX：第一段是它看到的这个变量（没有写 unset），后面是它收到的参数（\0 分隔）
-  const cmLaunch = () => fs.readdirSync(ROOT).filter((f) => f.startsWith('argv.cm.')).map((f) => { const p = fs.readFileSync(path.join(ROOT, f), 'utf8').split('\0').slice(0, -1); return { env: p[0], args: p.slice(1) }; });
+  const cmLaunch = () => fs.readdirSync(ROOT).filter((f) => f.startsWith('argv.cm.')).map((f) => { const p = fs.readFileSync(path.join(ROOT, f), 'utf8').split('\0').slice(0, -1); return { env: p[0], args: dropName(p.slice(1)) }; });
   const cmWait = async (pred, ms = 8000) => { for (let t = 0; t < ms; t += 200) { const hit = cmLaunch().filter(pred); if (hit.length) { await sleep(300); return cmLaunch().filter(pred); } await sleep(200); } return []; };
   const cmLog = () => log().split('\n').filter((l) => l.startsWith('codemode '));
   const has7 = (p) => (x) => x.args.some((a) => a.startsWith(p));
@@ -1656,6 +1704,101 @@ try {
     } finally { await ustop(); }
   }
 
+  console.log('\n[7n] 新窗口的名字（11/24 ng 车）：总控台开 Claude 会话时自己挑一个「目录名-十六进制」、现在没人用的名字，--name 交给它（在任务原文 / --resume 前面）；两个同时开的不撞；256 个都占了换 4 位；接回还给原来的名字，有人在用、和目录对不上才另起；总控台起的名字不顶掉卡片标题');
+  // 另起一份服务（PORT + 270）、自己的假主目录 nmh（目录名就是名字的前半段）；窗口照 U 那段开在这次测试的 TMUXDIR/tmux 下，段末一台台 kill-server
+  {
+    const NH = path.join(ROOT, 'nmh'), ND = path.join(NH, 'Library/Application Support/cc-board'), NP = PORT + 270;
+    const NS = path.join(NH, '.claude/sessions'), NC = path.join(NH, 'work'), pj = (d) => path.join(NH, '.claude/projects', d.replace(/[^A-Za-z0-9]/g, '-'));
+    for (const d of [ND, NS, NC, pj(NH), pj(NC)]) fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(ND, 'config.json'), '{}');
+    const NA = path.join(ROOT, 'name-argv'), N = {}, wins = [];            // 假 claude 每次启动写 name-argv.cm.XXXXXX（[9] 只认 argv.cm. 开头的，不混进去）
+    const live = () => { const c = spawn(NODE, ['-e', 'setInterval(() => {}, 1e6)', 'claude-fake'], { stdio: 'ignore' }); kids.push(c.pid); return c; };
+    // 活会话：登记里写名字和 nameSource（derived = Claude Code 自己起的；user = --name 给的，总控台照 derived 写法起的和他自己起的都是 user）
+    const SEED = { auto: ['nmh-3c', 'user', NH], mine: ['推广负责人', 'user', NH], drv: ['work-a7', 'derived', NC], tkn: ['work-6f', 'derived', NC], mvd: ['oldproj-3a', 'derived', NC] };
+    for (const [i, [key, [name, src, cwd]]] of Object.entries(SEED).entries()) {
+      const c = live(), sid = 'nm00000' + i + '-0000-4000-8000-000000000001', at = Date.now() - 60000, file = path.join(pj(cwd), sid + '.jsonl');
+      const recs = [{ type: 'ai-title', aiTitle: 'AI 起的标题 ' + key, sessionId: sid }, R.human('核对名字'), R.tool('Edit'), R.result(), R.final('改好了。')];
+      fs.writeFileSync(file, recs.map((x, k) => JSON.stringify({ ...x, timestamp: new Date(at + k * 1000).toISOString() })).join('\n') + '\n');
+      fs.writeFileSync(path.join(NS, c.pid + '.json'), JSON.stringify({ pid: c.pid, sessionId: sid, cwd, startedAt: at, kind: 'interactive', entrypoint: 'cli', name, nameSource: src, status: 'idle', statusUpdatedAt: at, updatedAt: at }));
+      N[key] = { sid, pid: c.pid };
+    }
+    // 只有名字的登记（没有 sessionId，不上墙）：拿来占名字。文件名是随便的数字，pid 写一个活着的进程（liveNames 只看内容里的 pid 活不活）
+    let regN = 900000; const holder = live();
+    const nameReg = (name, pid = holder.pid) => { const f = path.join(NS, (regN++) + '.json'); fs.writeFileSync(f, JSON.stringify({ pid, name, nameSource: 'user', cwd: NC, kind: 'interactive' })); return f; };
+    const dead = spawn('/usr/bin/true', [], { stdio: 'ignore' }); await new Promise((r) => dead.on('exit', r));
+    let nsrv, ntok = '';
+    const nstart = async () => {
+      const o = fs.openSync(path.join(ROOT, 'name-server.out'), 'a');
+      nsrv = spawn(NODE, [SERVER], { env: { ...env, HOME: NH, CCBOARD_DATA: ND, CCBOARD_PORT: String(NP), CCBOARD_PREVIEW_PORT: String(NP + 1000), T_ARGV: NA }, stdio: ['ignore', o, o] }); kids.push(nsrv.pid);
+      return until(async () => { try { const h = await (await fetch('http://127.0.0.1:' + NP + '/health')).json(); ntok = fs.readFileSync(path.join(ND, '.token'), 'utf8').trim(); return h.pid === nsrv.pid; } catch { return false; } }, 10000);
+    };
+    const nstop = async () => { if (nsrv?.pid > 1) { try { process.kill(nsrv.pid, 'SIGTERM'); } catch {} await until(() => nsrv.exitCode !== null, 5000); } };
+    const nrq = async (p, body) => (await fetch('http://127.0.0.1:' + NP + p, { method: body ? 'POST' : 'GET', headers: { 'x-ccboard': ntok, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) })).json();
+    const nlog = () => { try { return fs.readFileSync(path.join(ROOT, 'name-server.out'), 'utf8').split('\n').filter((l) => l.startsWith('name ')); } catch { return []; } };
+    const nLaunch = () => fs.readdirSync(ROOT).filter((f) => f.startsWith('name-argv.cm.')).map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8').split('\0').slice(0, -1).slice(1));
+    const nWait = async (pred, n = 1, ms = 8000) => { for (let t = 0; t < ms; t += 200) { if (nLaunch().filter(pred).length >= n) { await sleep(300); return nLaunch().filter(pred); } await sleep(200); } return nLaunch().filter(pred); };
+    try {
+      if (!(await nstart())) throw Error('[7n] 名字夹具服务没起来');
+      const st = await until(async () => { const s = await nrq('/api/state?peek=1'); return s.sessions.length === 5 ? s : null; }, 10000);
+      const tOf = (k) => (st?.sessions || []).find((x) => x.sid === N[k].sid)?.title;
+      ok(tOf('auto') === 'AI 起的标题 auto' && tOf('mine') === '推广负责人' && tOf('drv') === 'AI 起的标题 drv',
+        '卡片标题：总控台照 derived 写法起的名字（登记成 nameSource user）不顶掉 AI 起的标题；他自己起的名字照旧当标题；derived 的照旧', JSON.stringify(['auto', 'mine', 'drv'].map(tOf)));
+      const n1 = await nrq('/api/new', { prompt: '起个名字', cwd: '~', provider: 'claude' }); if (n1.name) wins.push(n1.name);
+      const a1 = (await nWait((a) => a.some((x) => x.startsWith('起个名字'))))[0] || [];
+      ok(n1.ok && /^nmh-[0-9a-f]{2}$/.test(n1.claudeName || '') && n1.claudeName !== 'nmh-3c' && a1.length === 3 && a1[0] === '--name' && a1[1] === n1.claudeName && a1[2].startsWith('起个名字') && nlog().some((l) => l.endsWith(' ' + n1.name + ' ' + n1.claudeName + ' new new')),
+        '新任务：名字是「主目录名-2 位十六进制」（nmh-xx），不是活会话正在用的 nmh-3c；--name 在任务原文前面；应答的 claudeName 就是交给 claude 的那个；日志一行 name … new new', JSON.stringify({ body: n1, argv: a1.map((x) => x.slice(0, 20)), log: nlog() }));
+      // 256 个只剩一个：work-00…work-ff 除了 work-5e 都有活着的登记；work-5e 只有一份进程已经没了的登记（不算有人用）
+      const fill = []; for (let i = 0; i < 256; i++) { const h = i.toString(16).padStart(2, '0'); if (h !== '5e') fill.push(nameReg('work-' + h)); }
+      fill.push(nameReg('work-5e', dead.pid));
+      const [p1, p2] = await Promise.all([1, 2].map((k) => nrq('/api/new', { prompt: '同时开 ' + k, cwd: NC, provider: 'claude' })));
+      for (const p of [p1, p2]) if (p.name) wins.push(p.name);
+      const two = [p1.claudeName, p2.claudeName], L2 = await nWait((a) => a.some((x) => x.startsWith('同时开 ')), 2);
+      const argN = L2.map((a) => a[a.indexOf('--name') + 1]).sort().join(), resN = [...two].sort().join();
+      ok(p1.ok && p2.ok && two.filter((x) => x === 'work-5e').length === 1 && two.some((x) => /^work-[0-9a-f]{4}$/.test(x || '')) && argN === resN && nlog().some((l) => l.endsWith(' new long')),
+        '两个 /api/new 同时进来、256 个 work-xx 只剩 work-5e（它那份登记的进程已经没了，不算占着）：正好一个拿到 work-5e，另一个换成 4 位 work-xxxx，不撞；交给 claude 的就是这两个；日志 long', JSON.stringify({ two, argN, log: nlog().slice(-2) }));
+      for (const f of fill) fs.unlinkSync(f);
+      const KS = ['auto', 'mine', 'drv', 'tkn', 'mvd'];
+      for (const k of KS) await nrq('/api/archive', { sid: N[k].sid });
+      await until(async () => { const a = await nrq('/api/archive'); return KS.every((k) => a.items.some((x) => x.sid === N[k].sid && x.state === 'archived')); }, 15000);
+      const AJ = JSON.parse(fs.readFileSync(path.join(ND, 'archive.json'), 'utf8')).items, an = (k) => AJ[N[k].sid] && { name: AJ[N[k].sid].name, named: AJ[N[k].sid].named };
+      ok(an('auto')?.name === 'nmh-3c' && !an('auto').named && an('mine')?.name === '推广负责人' && an('mine').named === true && an('drv')?.name === 'work-a7' && !an('drv').named,
+        '归档记下原来的名字：总控台起的、Claude Code 自己起的不标 named；他自己起的标 named', JSON.stringify(['auto', 'mine', 'drv'].map(an)));
+      nameReg('work-6f');                                                     // tkn 原来的名字现在被别的窗口占着
+      const res = {};
+      for (const k of KS) { const r = await nrq('/api/unarchive', { sid: N[k].sid }); if (r.name) wins.push(r.name); res[k] = { ok: r.ok, argv: (await nWait((a) => a.includes('--resume') && a.includes(N[k].sid)))[0] || [] }; }
+      const rn = (k) => res[k].argv[1], rlog = (k) => nlog().find((l) => l.includes(' resume ' + N[k].sid.slice(0, 8) + ' ')) || '';
+      ok(['auto', 'mine', 'drv'].every((k) => res[k].ok && res[k].argv.join(' ') === '--name ' + SEED[k][0] + ' --resume ' + N[k].sid && / orig$/.test(rlog(k))),
+        '接回：原来的名字现在没人用就还给它（总控台起的、他自己起的、Claude Code 起的），--name 在 --resume 前面，日志 orig', JSON.stringify({ argv: ['auto', 'mine', 'drv'].map((k) => res[k].argv), log: ['auto', 'mine', 'drv'].map(rlog) }));
+      const taken = new Set(['work-6f', 'work-a7', ...two]);
+      ok(res.tkn.ok && /^work-[0-9a-f]{2}$/.test(rn('tkn') || '') && !taken.has(rn('tkn')) && res.tkn.argv.slice(2).join(' ') === '--resume ' + N.tkn.sid && rlog('tkn').endsWith(' new (原来的 work-6f 有人在用)'),
+        '接回：原来的 work-6f 现在有活着的登记占着 → 另起一个 work-xx（不撞占着的、也不撞刚发出去还没登记的），日志写明原来的有人在用', JSON.stringify({ argv: res.tkn.argv, log: rlog('tkn') }));
+      ok(res.mvd.ok && /^work-[0-9a-f]{2}$/.test(rn('mvd') || '') && !taken.has(rn('mvd')) && rn('mvd') !== rn('tkn') && rlog('mvd').endsWith(' new (原来的 oldproj-3a 和现在的目录对不上)'),
+        '接回：原来的 oldproj-3a 是 Claude Code 照别的目录起的，和现在的工作目录（work）对不上 → 照现在的目录另起 work-xx，日志写明', JSON.stringify({ argv: res.mvd.argv, log: rlog('mvd') }));
+      // 11/24 返修 S2：--name 不是硬依赖。上面这台服务问过一次 --help（有 --name）以后不再问；换一台、让假 claude 的帮助里没有 --name：新开只带任务原文，接回只带 --resume <sid>
+      const helpN = () => { try { return fs.readFileSync(NA + '.help', 'utf8').split('\n').filter(Boolean).length; } catch { return 0; } };
+      const h1 = helpN();
+      await nrq('/api/archive', { sid: N.auto.sid });
+      await until(async () => { const a = await nrq('/api/archive'); return a.items.some((x) => x.sid === N.auto.sid && x.state === 'archived'); }, 15000);
+      await nstop(); fs.writeFileSync(NA + '.noname', '');
+      if (!(await nstart())) throw Error('[7n] 名字夹具服务（不认 --name）没起来');
+      const q1 = await nrq('/api/new', { prompt: '不认名字', cwd: '~', provider: 'claude' }); if (q1.name) wins.push(q1.name);
+      const b1 = (await nWait((a) => a.some((x) => x.startsWith('不认名字'))))[0] || [];
+      const q2 = await nrq('/api/new', { prompt: '不认名字二', cwd: NC, provider: 'claude' }); if (q2.name) wins.push(q2.name);
+      const b2 = (await nWait((a) => a.some((x) => x.startsWith('不认名字二'))))[0] || [];
+      const qr = await nrq('/api/unarchive', { sid: N.auto.sid }); if (qr.name) wins.push(qr.name);
+      const bL = await nWait((a) => a.includes('--resume') && a.includes(N.auto.sid), 2), br = bL.find((a) => !a.includes('--name')) || [];   // 文件名是 mktemp 的随机后缀，读目录的顺序不是启动顺序：挑没有 --name 的那次
+      const noLog = nlog().filter((l) => l.endsWith(' --help 没有 --name，不传'));
+      ok(h1 === 1 && q1.ok && !('claudeName' in q1) && b1.length === 1 && b1[0].startsWith('不认名字') && q2.ok && !('claudeName' in q2) && b2.length === 1 && noLog.length === 1 && helpN() === 2,
+        'claude 的 --help 里没有 --name（11/24 返修 S2）：新开的窗口不传 --name、应答没有 claudeName，只带任务原文（老写法）；--help 每台服务只问一次（有的那台问 1 次，这台两个窗口也只问 1 次），日志一行「没有 --name，不传」', JSON.stringify({ h1, help: helpN(), q1, b1: b1.map((x) => x.slice(0, 20)), b2: b2.map((x) => x.slice(0, 20)), noLog }));
+      ok(qr.ok && bL.length === 2 && br.join(' ') === '--resume ' + N.auto.sid && !('claudeName' in qr),
+        'claude 不认 --name 时接回：argv 就是原来的 --resume <sid>，没有 --name、应答没有 claudeName', JSON.stringify({ qr, argv: br }));
+    } finally {
+      try { fs.unlinkSync(NA + '.noname'); } catch {}
+      await nstop();
+      for (const w of wins) { try { spawnSync(TMUX_BIN, [...TMW(w), 'kill-server'], { env, stdio: 'ignore', timeout: 5000 }); } catch {} }
+    }
+  }
+
   console.log('\n[7r] 新开的会话一开就退了（撞上 claude 自动更新）：等一下、重新找 claude、换个名字重开一次；还退就说「会话一开就退了（claude 可能正在更新）」，套接字目录明明在就不再问它');
   const FLK = ARGV + '.flaky', FLKN = ARGV + '.flakyn', ALTON = path.join(FH, 'alt-claude-on'), ALTLOG = ARGV + '.alt';
   const flaky = (n, pat, d) => { for (const f of [FLKN, ARGV + '.env']) try { fs.unlinkSync(f); } catch {} fs.writeFileSync(FLK, n + '\n' + pat + '\n' + d + '\n'); };
@@ -1743,6 +1886,15 @@ try {
   let ben = null; for (let i = 0; i < 20 && !(ben && wk(ben).used === 55); i++) { await sleep(300); ben = ((await get('/api/state')).limits.claude || []).find((x) => x.account === 'ben'); }
   ok(ben && wk(ben).used === 55, '取数文件更新后，下一轮读到新的（ben 55%，' + (Date.now() - wrote) + ' ms 内）', JSON.stringify(ben));
   limTap('bbbb2222-0002', 'ben', 6, 1, 1.9);                                       // 还原：界面测试要的是 1%
+  // 收起时钉住哪几条（11/24 ng 车）：这份 config 没写 limitsPin、没有 defaultAccount，两条都标了账号 → 一条都不钉；来一条没标账号的 → 钉它
+  const pin0 = (await get('/api/state')).limits.pin;
+  ok(JSON.stringify(pin0) === '[]', 'limits.pin：两个号都标了账号、没有 defaultAccount、没写 limitsPin → []（不猜哪个是主号）', JSON.stringify(pin0));
+  limTap('dddd4444-0004', undefined, 2, 12, 4.2);                                 // 默认登录开的窗口（不带 CCBOARD_ACCOUNT）说了一句话；周截止和 amy / ben 都不同，不被认领
+  let anonPin = null; for (let i = 0; i < 20 && !anonPin; i++) { await sleep(300); const l = (await get('/api/state')).limits; const a = (l.claude || []).find((x) => x.account === null); if (a && JSON.stringify(l.pin) === JSON.stringify([a.id])) anonPin = a.id; }
+  ok(anonPin && /^claude:w\d+$/.test(anonPin), 'limits.pin：没标账号的那条（没配 accounts 的人只有这一条）默认钉住', String(anonPin));
+  fs.rmSync(path.join(DATA0, 'limits', 'claude-dddd4444-0004.json'));             // 还原：后面的断言和界面测试要的是两个号
+  let pinBack = false; for (let i = 0; i < 20 && !pinBack; i++) { await sleep(300); const l = (await get('/api/state')).limits; pinBack = (l.claude || []).length === 2 && JSON.stringify(l.pin) === '[]'; }
+  ok(pinBack, 'limits.pin：那条取数文件没了，钉住的也跟着没了（还原成两个号、[]）');
 
   console.log('\n[7d] config 里 codex 打开：总控台起过的 Codex 会话照常上墙，「交给谁」里有 Codex');
   st = await get('/api/state');
@@ -2788,13 +2940,19 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
   await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 96);
   f8 = await fbNew({ account: '' }, true);
   ok(f8.body.ok && f8.body.account === 'spare' && !fs.existsSync(FB_OUT) && fbLines('server8c2b.out').some((l) => /^account \S+ - 试验服务只往自己的数据目录里写退回记录，不写 /.test(l)), '试验服务的 note 指到数据目录外面（像拿真 config 拷贝起的）：照样退回，但不往那个文件写，日志说清', JSON.stringify([f8.body, fs.existsSync(FB_OUT), fbLines('server8c2b.out')]));
-  cB = await restartB({ ...cfgB, accounts: accC, defaultAccount: 'good', accountFallback: { to: 'spare', notes: FB_NOTE } }, 'server8c3.out');
+  cB = await restartB({ ...cfgB, accounts: accC, defaultAccount: 'good', accountFallback: { to: 'spare', notes: FB_NOTE }, limitsPin: 'main' }, 'server8c3.out');
   ok(cB && /accountFallback 不用（不认识的键：notes）/.test(cB) && /accounts=3，defaultAccount=good，/.test(cB) && /accountFallback=无，/.test(cB), 'accountFallback 写错（note 拼成 notes）：只关这一项、日志说清，别的键照用（不像 defaultAccount 写错那样整份不用）', String(cB));
+  ok(cB && /limitsPin 不用（要是额度条目 id 的数组），额度收起时照默认钉住/.test(cB) && /limitsPin=默认，/.test(cB) && /accounts=3，defaultAccount=good，/.test(cB), 'limitsPin 写错（写成字符串 "main"）：只关这一项、日志说清、照默认钉住，别的键照用', String(cB));
   await fbSeen((c) => wkOf(c, 'week') && wkOf(c, 'week').used === 96);
   f8 = await fbNew({ account: '' }, true);
   ok(f8.body.ok && f8.body.account === 'good' && !('fallback' in f8.body), 'accountFallback 写错时界面新建、主号 96% 也照开主号（和没这一项一样）', JSON.stringify(f8.body));
+  fbTapOf(FB_TAP2, 'acctfb02-0002', 'spare', 10, 5); await fbSeen((c) => !!c, 'spare');
+  { const p = ((await get('/api/state')).limits || {}).pin || []; ok(p.includes('claude:good') && !p.includes('claude:spare'), 'limitsPin 没用上时照默认：defaultAccount（good）那条钉住，别的号（spare）不钉', JSON.stringify(p)); }
   for (const f of [FB_TAP, FB_TAP2]) { try { fs.unlinkSync(f); } catch {} }
-  cB = await restartB({ ...cfgB, accounts: accB, defaultAccount: 'good' }, 'server8c4.out');   // 还原成 [8b] 结尾的样子，后面几段照旧
+  cB = await restartB({ ...cfgB, accounts: accB, defaultAccount: 'good', limitsPin: ['codex', 'claude:alt'] }, 'server8c4.out');   // 还原成 [8b] 结尾的样子（多一个 limitsPin，后面几段不看它），后面几段照旧
+  ok(cB && /limitsPin=2，/.test(cB), 'limitsPin 写对（["codex","claude:alt"]）：启动日志写钉住几条', String(cB));
+  { let p = null; for (let i = 0; i < 20; i++) { p = ((await get('/api/state')).limits || {}).pin; if (JSON.stringify(p) === '["codex","claude:alt"]') break; await sleep(300); }
+    ok(JSON.stringify(p) === '["codex","claude:alt"]', 'limits.pin 照 config 的 limitsPin 原样给（作者本机写 main + alt 就保持现在的样子；额度里没有的条目也照给，界面只认对得上的）', JSON.stringify(p)); }
 
   console.log('\n[8u] 检查新版本的接线（11/22 1b 修复轮）：代码文件夹里真放一个 .bundle-version、updateCheck 开着 → 假 GitHub 收到 1 次；updateCheck:false → 0 次；没有 .bundle-version → 0 次');
   {
@@ -2859,9 +3017,9 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     ugh.close();
   }
 
-  console.log('\n[9] 不改脑子（P0-2）：这一整趟里总控台起的每个 Claude 会话，参数只有模型、强度、--resume 和任务原文；假主目录里的 CLAUDE.md / AGENTS.md / settings / .claude.json 一个没动');
+  console.log('\n[9] 不改脑子（P0-2）：这一整趟里总控台起的每个 Claude 会话，参数只有模型、强度、名字、--resume 和任务原文；假主目录里的 CLAUDE.md / AGENTS.md / settings / .claude.json 一个没动');
   // 白名单，不是黑名单：--append-system-prompt、--system-prompt、--disallowedTools、--settings、--mcp-config、--agents……任何没列在这里的旗子都算违约
-  const FLAG_OK = new Set(['--model', '--effort', '--resume']);
+  const FLAG_OK = new Set(['--model', '--effort', '--resume', '--name']);
   let allRaw = ''; try { allRaw = fs.readFileSync(ARGV + '.all', 'utf8'); } catch {}
   const launches = []; let cur9 = [];
   for (const a of allRaw.split('\0').slice(0, -1)) { if (a === '\x1e') { launches.push(cur9); cur9 = []; } else cur9.push(a); }
@@ -2875,9 +3033,13 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     if (pos > 1) bad9.push('多于一个原文参数：' + L.map((x) => x.slice(0, 20)).join(' '));
   }
   ok(launches.length >= 20 && launches.some((L) => L.includes('--model')) && launches.some((L) => L.includes('--resume')), '对照：记到了这一趟的启动（' + launches.length + ' 次），其中有带 --model 的、有恢复归档的 --resume（记录本身没坏）', String(launches.length));
-  ok(launches.length > 0 && bad9.length === 0, '每一次启动都只有 --model / --effort / --resume 和至多一段任务原文，没有往说明里塞东西的旗子', JSON.stringify(bad9.slice(0, 5)));
+  ok(launches.length > 0 && bad9.length === 0, '每一次启动都只有 --model / --effort / --name / --resume 和至多一段任务原文，没有往说明里塞东西的旗子', JSON.stringify(bad9.slice(0, 5)));
+  // 11/24 名字：每一次启动正好一个 --name，值是「目录名-十六进制」，而且排在任务原文 / --resume 前面（Claude Code 把 --name 后面那个当名字，放到原文后面原文就成了名字）
+  const badN = launches.filter((L) => { const k = L.filter((a) => a === '--name').length, i = L.indexOf('--name'), rest = L.slice(i + 2);
+    return k !== 1 || !/^[a-z0-9-]+-[0-9a-f]{2,16}$/.test(L[i + 1] || '') || !(rest.length === 0 || (rest.length === 1 && !rest[0].startsWith('-')) || (rest[0] === '--resume' && rest.length === 2)); });
+  ok(launches.length >= 20 && badN.length === 0, '每一次启动（' + launches.length + ' 次）都正好带一个 --name <目录名-十六进制>，后面只跟任务原文或 --resume <会话号>', JSON.stringify(badN.slice(0, 3).map((L) => L.map((x) => x.slice(0, 20)))));
   // 核环境（Code Mode，11/17 唯一的例外）：参数白名单管不到环境变量，所以另核一遍。「有」「无」两种都要这一趟里真起过
-  const cm9 = fs.readdirSync(ROOT).filter((f) => f.startsWith('argv.cm.')).map((f) => { const p = fs.readFileSync(path.join(ROOT, f), 'utf8').split('\0').slice(0, -1); return { env: p[0], args: p.slice(1) }; });
+  const cm9 = fs.readdirSync(ROOT).filter((f) => f.startsWith('argv.cm.')).map((f) => { const p = fs.readFileSync(path.join(ROOT, f), 'utf8').split('\0').slice(0, -1); return { env: p[0], args: dropName(p.slice(1)) }; });
   const on9 = (L) => L.args.some((a) => a.startsWith('CMODE-ON ')) || (L.args[0] === '--resume' && [S.cmReal.sid, S.cmEdge.sid, S.cmNest.sid].includes(L.args[1]));
   const bad9e = cm9.filter((L) => (on9(L) ? L.env !== '1' : L.env !== 'unset')).map((L) => L.env + ' ' + L.args.map((a) => a.slice(0, 20)).join(' '));
   ok(cm9.length === launches.length && cm9.filter(on9).length >= 3 && cm9.filter((L) => !on9(L)).length >= 20 && bad9e.length === 0,
@@ -2891,11 +3053,11 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     const R1P = PORT + 400, R2P = PORT + 500, R3P = PORT + 600, R4P = PORT + 700, R5P = PORT + 800, R6P = PORT + 900;
     // 远程端口：服务默认听 端口+1，这里每份都用 CCBOARD_REMOTE_PORT 改成 端口+50。mutants.mjs 并行时各份的 T_PORT 只差 1（按改坏版序号），用 +1 会撞上隔壁那份
     const R1R = R1P + 50, R2R = R2P + 50, R3R = R3P + 50, R4R = R4P + 50;
-    const startR = (name, port, cfg, extra = {}, dir) => {
+    const startR = (name, port, cfg, extra = {}, dir, pre = []) => {   // pre：node 自己的参数（r1 带 --import race-preload，见下面的固定竞态）
       const d = dir || path.join(ROOT, name + '-data'); fs.mkdirSync(d, { recursive: true });
       if (cfg !== undefined) fs.writeFileSync(path.join(d, 'config.json'), JSON.stringify(cfg));
       const lg = path.join(ROOT, name + '.out'), o = fs.openSync(lg, 'a');
-      const p = spawn(NODE, [SERVER], { env: { ...env, CCBOARD_PORT: String(port), CCBOARD_DATA: d, CCBOARD_TMUX_SOCKET: path.join(TMUXDIR, name, 'c.sock'), CCBOARD_PAIR_MS: '3000', CCBOARD_DEV_RETRY_MS: '500', CCBOARD_REMOTE_PORT: String(port + 50), ...extra }, stdio: ['ignore', o, o] }); kids.push(p.pid);
+      const p = spawn(NODE, [...pre, SERVER], { env: { ...env, CCBOARD_PORT: String(port), CCBOARD_DATA: d, CCBOARD_TMUX_SOCKET: path.join(TMUXDIR, name, 'c.sock'), CCBOARD_PAIR_MS: '3000', CCBOARD_DEV_RETRY_MS: '500', CCBOARD_REMOTE_PORT: String(port + 50), ...extra }, stdio: ['ignore', o, o] }); kids.push(p.pid);
       return { p, d, lg };
     };
     const upR = async (port) => { for (let i = 0; i < 60; i++) { await sleep(200); try { if ((await (await fetch('http://127.0.0.1:' + port + '/health')).json()).ok) return true; } catch {} } return false; };
@@ -2919,7 +3081,9 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     const errOf = (x) => x.code + ' ' + ((x.body && (x.body.why || x.body.error)) || '');
     const logOf = (r) => { try { return fs.readFileSync(r.lg, 'utf8'); } catch { return ''; } };
 
-    let r1 = startR('r1', R1P, { remote: { on: true, hosts: [TS] } }, { CCBOARD_RP_TTL_MS: '8000' });
+    // 远程图集的固定竞态（11/24 ng 车）：r1 挂着 test/race-preload.mjs，写了 RACE.arm 才动手（只碰假主目录里的 Projects/rpv/gal），见 [10] 中段「列完再绑钥匙」那三项
+    const FHR = fs.realpathSync.native(FH), RACE = { dir: path.join(FHR, 'Projects', 'rpv', 'gal'), decoy: path.join(FHR, 'Elsewhere', 'pics3'), away: path.join(FHR, 'Projects', 'rpv', 'gal-away'), pdecoy: path.join(FHR, 'Elsewhere', 'rpvP'), paway: path.join(FHR, 'Projects', 'rpv-away'), arm: path.join(ROOT, 'race-arm') };
+    let r1 = startR('r1', R1P, { remote: { on: true, hosts: [TS] } }, { CCBOARD_RP_TTL_MS: '8000', T_RACE: JSON.stringify(RACE) }, undefined, ['--import', new URL('./race-preload.mjs', import.meta.url).href]);
     const up1 = await upR(R1P), tok1 = tokOf(r1.d);
     let x = await rq(R1P, 'GET', '/api/state?peek=1', { 'x-ccboard': tok1 });
     ok(up1 && x.code === 200 && x.body && x.body.remote && x.body.remote.hosts.join() === TS && x.body.remote.devices === 0 && x.body.remote.port === R1R && !('down' in x.body.remote) && /^remote \S+ on：多认 1 个名字 ccb-r1\.tail1a2b\.ts\.net$/m.test(logOf(r1)) && new RegExp('^remote \\S+ listen 127\\.0\\.0\\.1:' + R1R + '（', 'm').test(logOf(r1)), 'remote 开着：本机的 /api/state 多一个 remote（名单、已配对 0 台、远程端口 = 端口+1），启动日志 remote on + 远程端口听上了', JSON.stringify([up1, x.code, x.body && x.body.remote]));
@@ -3031,6 +3195,8 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     fs.symlinkSync(path.join(RD, 'shot1.png'), path.join(RD, 'twin.png')); fs.symlinkSync(path.join(RD, 'gal'), path.join(RD, 'galtwin'));
     fs.mkdirSync(path.join(RO, 'pics2'), { recursive: true }); for (const n of ['q1.png', 'q2.png']) fs.writeFileSync(path.join(RO, 'pics2', n), PNG + 'pics2-' + n); fs.symlinkSync(path.join(RO, 'pics2'), path.join(RD, 'gal', 'outdir'));
     fs.mkdirSync(path.join(RO, 'pics3'), { recursive: true }); fs.writeFileSync(path.join(RO, 'pics3', 'a.png'), PNG + 'pics3-a');
+    for (const n of ['b', 'c', 'd', 'e']) fs.writeFileSync(path.join(RO, 'pics3', n + '.png'), PNG + 'pics3-' + n);
+    fs.mkdirSync(path.join(RO, 'rpvP', 'gal'), { recursive: true }); for (const n of ['a', 'b', 'c', 'd', 'e']) fs.writeFileSync(path.join(RO, 'rpvP', 'gal', n + '.png'), PNG + 'pdecoy-' + n);   // 固定竞态 P（换上一层，11/24 返修 S1）：rpv 被换成指到 rpvP 的链接时 gal/a–e 落到这里   // 固定竞态里 gal 被换成指到 pics3 的链接时，a–e 每张在那边都有同名的（11/24）
     const FHP = path.dirname(FH); for (const n of ['up1.png', 'up2.png']) fs.writeFileSync(path.join(FHP, n), PNG + 'up-' + n);
     for (const n of ['h3.png', 'h4.png']) fs.writeFileSync(path.join(FH, n), PNG + 'home-' + n);
     fs.writeFileSync(path.join(RD, 'doc.pdf'), '%PDF-1.4\n% RP_PDF\n');
@@ -3133,6 +3299,33 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     const gaAfter = await rpg(gaU);
     fs.unlinkSync(rpAt('gal')); fs.renameSync(rpAt('gal-moved'), rpAt('gal'));
     ok(gaBefore.code === 200 && gaBefore.text === PNG + 'gal/a.png' && gaAfter.code === 404 && !gaAfter.text.includes('pics3'), '远程文件夹图集发了钥匙以后，文件夹本身被换成指到别处的链接（那边也有 a.png）：GET 核打开的是不是当时那个文件 → 404', gaBefore.code + ' → ' + gaAfter.code + ' ' + gaAfter.text.slice(0, 60));
+    // ── 列完再绑钥匙的竞态（11/24 ng 车；原来是 test/known-red/preview-gallery-race.mjs，跑 20 秒碰运气）。r1 挂着 test/race-preload.mjs，写了 RACE.arm 以后扮演本机另一个进程：
+    // 服务每次核文件夹本身之前把 gal 换回真的，列完以后再碰同一张图、chdir 进去时换成指到 pics3 的链接（pics3 里 a–e 都有）。每一步都换得及时，所以只调顺序的修法也照样被骗。
+    // A：chdir 那一刻 gal 已经是链接 → 钉住的「.」不是核过的那个文件夹 → 整个不给。B：chdir 时是真的、进去以后马上换成链接 → 相对打开的仍是真文件夹里的图，
+    // 钥匙绑真图：换着的时候 GET 是 404（链接那边的同名图不是那个文件），换回来同一批网址给原图。
+    const raceOff = () => {
+      try { fs.unlinkSync(RACE.arm); } catch {}
+      try { const pp = path.dirname(RACE.dir); if (fs.lstatSync(pp).isSymbolicLink()) { fs.unlinkSync(pp); fs.renameSync(RACE.paway, pp); } } catch {}                              // P
+      try { if (fs.lstatSync(RACE.dir).isSymbolicLink()) { fs.unlinkSync(RACE.dir); fs.renameSync(RACE.away, RACE.dir); } } catch {}                                                // A / B
+      try { if (fs.existsSync(RACE.away) && !fs.existsSync(RACE.decoy)) { fs.renameSync(RACE.dir, RACE.decoy); fs.renameSync(RACE.away, RACE.dir); } } catch {}                    // R
+    };
+    const raceRun = async (m) => { fs.writeFileSync(RACE.arm, m); try { const y = await rpp({ sid: rvS, path: rpAt('gal') + '/' }); const its = (y.body && y.body.items) || []; return { y, its, g: await Promise.all(its.map((it) => rpg(it.url))) }; } finally { raceOff(); } };
+    const raceOn = /race-preload on gal/.test(logOf(r1)), rA = await raceRun('A'), rB = await raceRun('B'), rBG2 = await Promise.all(rB.its.map((it) => rpg(it.url)));
+    const raceLeak = (r) => r.g.filter((y) => y.text.includes('pics3')).length;
+    ok(raceOn && rA.y.code === 404 && rA.y.body.reason === 'missing' && rA.its.length === 0 && raceLeak(rA) === 0 && fs.lstatSync(RACE.dir).isDirectory(),
+      '远程文件夹图集列完再绑钥匙（A）：chdir 进去那一刻文件夹已被换成指到别处的链接 → 钉住的不是核过的那个文件夹 → 整个不给，没有一把钥匙', 'preload=' + raceOn + ' ' + errOf(rA.y) + ' items=' + rA.its.length + ' leak=' + raceLeak(rA));
+    ok(raceOn && rB.y.code === 200 && rB.its.length === 5 && rB.g.length === 5 && rB.g.every((y) => y.code === 404) && raceLeak(rB) === 0,
+      '远程文件夹图集列完再绑钥匙（B）：进去以后文件夹马上被换成链接，绑钥匙、GET 时都是链接 → 照样 5 把钥匙，GET 一张都拿不到那边的图（404）', errOf(rB.y) + ' items=' + rB.its.length + ' get=' + rB.g.map((y) => y.code).join() + ' leak=' + raceLeak(rB));
+    ok(rBG2.length === 5 && rBG2.every((y, i) => y.code === 200 && y.text === PNG + 'gal/' + rB.its[i].name),
+      '远程文件夹图集列完再绑钥匙（B）：换回来以后同一批网址给的是真文件夹里的原图（钥匙绑在真图上，不是链接那边的同名图）', rBG2.map((y) => y.code + ' ' + y.text.slice(-12)).join(' | '));
+    // 11/24 返修（审查 S1 / M3）：R 守「核 .」那一道（路径还是那个、cwd 对得上，inode 换成了另一个真文件夹 pics3）；P 守 cwd === dir 那一道（rpResolve 三次按路径查之间换了上一层，
+    // 核出来的 dev+ino 本身就是外面那个，「核 .」也对得上，只有 chdir 以后问内核 cwd 在哪才认得出）。P 在改前的提交上红：5 把钥匙全给了 rpvP 那边的图
+    const rR = await raceRun('R'), rP = await raceRun('P');
+    const leakP = (r) => r.g.filter((y) => y.text.includes('pdecoy')).length;
+    ok(rR.y.code === 404 && rR.y.body.reason === 'missing' && rR.its.length === 0 && raceLeak(rR) === 0 && fs.lstatSync(RACE.dir).isDirectory() && fs.existsSync(path.join(RACE.decoy, 'a.png')),
+      '远程文件夹图集列完再绑钥匙（R）：chdir 那一刻同一个路径换成了另一个真文件夹（cwd 对得上、inode 不是核过的那个）→ 整个不给', errOf(rR.y) + ' items=' + rR.its.length + ' leak=' + raceLeak(rR));
+    ok(rP.y.code === 404 && rP.y.body.reason === 'missing' && rP.its.length === 0 && leakP(rP) === 0 && !fs.lstatSync(path.dirname(RACE.dir)).isSymbolicLink(),
+      '远程文件夹图集列完再绑钥匙（P）：rpResolve 按路径查的几次之间上一层被换成链接（核出来的就是外面那个文件夹）→ chdir 以后 cwd 不是这个路径 → 整个不给', errOf(rP.y) + ' items=' + rP.its.length + ' leak=' + leakP(rP));
     // PDF（11/22 作者 定）：远程不画，界面给下载链接。网址照样是 /rp/ 钥匙、同一套核对，服务按附件发（content-disposition: attachment），也套沙盒
     const pdf = await rpp({ sid: rvS, path: rpAt('doc.pdf') }), pdfG = await rpg((pdf.body && pdf.body.url) || '/rp/none'), pdfX = await rpg((pdf.body && pdf.body.url) || '/rp/none', { 'tailscale-user-login': 'someone@example.org' });
     ok(pdf.code === 200 && pdf.body.kind === 'pdf' && /^\/rp\/[0-9a-f]{32}\/doc\.pdf$/.test(pdf.body.url || '') && pdfG.code === 200 && pdfG.headers['content-type'] === 'application/pdf' && pdfG.text.includes('RP_PDF')

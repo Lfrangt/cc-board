@@ -1,8 +1,9 @@
 /**
  * [INPUT]: 依赖 ~/.codex/sessions/<年>/<月>/<日>/rollout-*.jsonl（只读，token_count 事件里的 rate_limits）；依赖 <数据目录>/limits/claude-*.json（statusline-tap.mjs 写的，只读）。不联网，不起进程，不读任何登录凭据。
  *           Gemini：依赖 <数据目录>/limits/gemini-balance.json（人从 AI Studio 结算页读到的余额，手写的「锚点」：{ amount, currency, usdPerUnit, at }），和调用方给的花费账本（网关的 logs/spend.tsv、回调写的 *.jsonl；只读，文件不在 = 没有行）。
- * [OUTPUT]: 导出 codexLimits(codexHome, now)、claudeLimits(dir, now)、geminiLimits(dir, now, { ledgers })、geminiAnchorFile(dir)、parseCodexTail(text)、tapFile(dir, session)、purgeTaps(dir, now)、windowKey(minutes)。
+ * [OUTPUT]: 导出 codexLimits(codexHome, now)、claudeLimits(dir, now)、geminiLimits(dir, now, { ledgers })、geminiAnchorFile(dir)、limitPins(claude, { pin, defaultAccount })、parseLimitsPin(v)、parseCodexTail(text)、tapFile(dir, session)、purgeTaps(dir, now)、windowKey(minutes)。
  *           每个订阅一条 { id, provider, account, plan, at, windows: [{ key, used, resetsAt }] }：used 是 0 以上的百分数，resetsAt 是毫秒时间戳，key 是 five_hour / week / other。
+ *           limitPins：顶栏额度收起时钉住哪几条（条目 id 的数组）：config 的 limitsPin 给了就照它；没给 = 没标账号的 Claude 那条 + defaultAccount 那条（11/24 ng 车）。parseLimitsPin 校验 limitsPin，写错整项不用。
  * [POS]: 顶栏右上角「各订阅周额度」的唯一数据来源。server.mjs 隔半分钟调一次，结果挂在 /api/state 的 limits 字段；界面只收结果。
  *        两家的来源不同：Codex 自己把额度写进每次 token_count 事件；Claude Code 只在状态栏的 JSON 里给 rate_limits（文档写明只有 Pro / Max / Ultra 订阅有，且要等第一次 API 回复之后），
  *        所以由 statusline-tap.mjs 在会话里取走、存成一个会话一个文件，这里再汇总。一个会话一个文件是为了几十个窗口同时写也不会互相覆盖。
@@ -128,6 +129,25 @@ export function claudeLimits(dir, now = Date.now()) {
     if (!g || t.at > g.at) groups.set(id, { id, provider: 'claude', account, plan: null, at: t.at, windows: t.windows });
   }
   return [...groups.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));   // 按 id 排：几个窗口轮流更新时，顶栏上的先后不跳
+}
+
+// ───────────── 收起时钉住哪几条（11/24 ng 车） ─────────────
+// 顶栏额度那一排默认收起，只留「钉住」的几格。原来界面写死作者本机的 claude:main、claude:alt，别人装上以后一格都不钉。
+// 现在服务算好交给界面（/api/state 的 limits.pin）：config 的 limitsPin 写了就照它；没写 = 没标账号的那条（没配 accounts 的人只有这一条）+ defaultAccount 那条。
+// 两个号都标了账号、又没写 defaultAccount 时一条都不钉：不猜哪个是主号。
+export const LIMITS_PIN_MAX = 16;
+const PIN_ID = /^(?:claude:[\w.@-]{1,40}|codex|gemini)$/;      // 和条目的 id 同一套：claude:<账号 id>（ACCOUNT_ID）、codex、gemini
+export function parseLimitsPin(v) {
+  if (v === undefined || v === null) return { pin: null };
+  if (!Array.isArray(v)) return { pin: null, error: '要是额度条目 id 的数组' };
+  if (v.length > LIMITS_PIN_MAX) return { pin: null, error: '最多 ' + LIMITS_PIN_MAX + ' 个' };
+  const bad = v.find((x) => typeof x !== 'string' || !PIN_ID.test(x));
+  if (bad !== undefined) return { pin: null, error: '认不出 ' + JSON.stringify(bad).slice(0, 60) + '（要 claude:<账号 id>、codex 或 gemini）' };
+  return { pin: [...new Set(v)] };
+}
+export function limitPins(claude, { pin = null, defaultAccount = '' } = {}) {
+  if (Array.isArray(pin)) return [...pin];
+  return (claude || []).filter((e) => e.account == null || (defaultAccount && e.account === defaultAccount)).map((e) => e.id);
 }
 
 // ───────────── Gemini（API 预付余额的估算） ─────────────

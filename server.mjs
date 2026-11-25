@@ -21,6 +21,8 @@
  *        limitsLoop 每 30 秒让 limits.mjs 汇总一遍各订阅的周额度（Codex 读它的记录，只在 codex 打开时；Claude 读状态栏取数脚本存在 <数据目录>/limits 的文件），挂在 /api/state 的 limits 字段上，顶栏右上角显示；Claude 条目带上 config.json accounts 里登记的名字（name），和新任务的账号下拉同名。
  *        limits 里还有 gemini：Gemini API 预付余额的估算（<数据目录>/limits/gemini-balance.json 人读的锚点 − config.json geminiLedgers 账本里锚点之后的花费），没有锚点就是 null。
  *        /api/new 先过 route.mjs：开窗口的一方（比如总指挥窗口）声明档位 heavy / standard / light，服务翻成 --model / --effort 再交给 newSession，写错的档位拦下、不开窗口；不声明档位就沿用 settings.json 的默认（界面「新任务 → 默认」走这条）。声明了档位的，应答带 route，日志记一行 route。
+ *        /api/new 带了 brief（七栏派活单）的再过 route.mjs 的 briefNew：缺栏、空白、只写「无」、派给和 tier / model 对不上都拒开（日志 brief … reject），齐了按固定版式拼在 prompt 前面（应答带 brief: true，日志 brief … ok）；没带 brief 的一字不差照旧。
+ *        FIX-1（11/24 返修）起，请求另带的 prompt 里又写了一张派活单、派活单加 prompt 超过 14000 字节（BRIEF_MAX），也拒；判断都在 briefNew 里，这里只把 prompt 递过去。
  *        每个 Claude 会话记着它最近一条真回复的 model 和 effort（对话记录里每条 assistant 消息自带，跟着 /model、/effort 走），卡片右上角的模型胶囊显示它；Codex 会话用开窗口时给的值。
  *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex、autoTidy、tidyJudge 四个开关默认关。
  *        autoTidy 打开时，watchTidy() 把「已经交付、歇着、没人在等、没人再理」的会话交给 archiveSession 自动收工（tidyDue 定哪些，tidyVerdict 定删还是留）；
@@ -36,6 +38,7 @@
  *        seat-history.json 保留点名岗位的进程时代；归属跨拍裁剪，启动按日志核验后恢复。
  *        手机远程的预览（/api/remote/preview、/rp/<钥匙>/）：只给这个会话交付里写到的文件；一个路径只解析一次（rpResolve：先按字面规整、再取真身，大小写和 firmlink 别名收成一种写法），
  *        主目录和它的上层按 dev+ino 认；钥匙绑真身和 dev+ino，GET 时按 O_NOFOLLOW 打开、核同一个文件再从这个 fd 发；PDF 按附件发；拒绝日志里的钥匙换成 <key>。
+ *        图集列完以后 rpBind() 把工作目录钉在核过的文件夹上（chdir + 核「.」的 dev+ino），按文件名逐张打开、钥匙绑打开出来的 dev+ino，再换回原来的目录（11/24 ng 车）。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 // 只读 ~/.claude/sessions（会话登记）和 ~/.claude/projects（对话记录），不读终端画面（弹着选择框的会话除外）。
@@ -49,10 +52,10 @@ import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseSuggest, promptEmpty } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
-import { codexLimits, claudeLimits, geminiLimits, purgeTaps, TAP_PREFIX } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件），和 Gemini API 余额的估算
+import { codexLimits, claudeLimits, geminiLimits, purgeTaps, limitPins, parseLimitsPin, TAP_PREFIX } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件），和 Gemini API 余额的估算
 import { noteTool, classify, pinnable, useRules } from './projects.mjs';
 import { judgeArgs, judgeInput, parseJudge, failReason, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
-import { routeNew } from './route.mjs';                                         // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数
+import { routeNew, briefNew } from './route.mjs';                               // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数；带了派活单（brief）的，七栏核过再拼进 prompt
 import { parseAccounts, parseFallback, pickDefault, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
 import { startPreview, kindOf, mimeOf, readText, serveFile, listGallery } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 import { buildOrg } from './org.mjs';
@@ -220,7 +223,7 @@ function parseGeminiLedgers(v) {
 }
 let CONFIG_OK = false;                  // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], limitsPin: null, accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
@@ -235,6 +238,7 @@ const CONFIG = (() => {
     const judgeAccount = c.judgeAccount || '';
     const gemini = parseGemini(c.gemini);              // 写错只关这一项（同 remote / apns），不连累整份
     const geminiLedgers = parseGeminiLedgers(c.geminiLedgers);   // 同上
+    const lp = parseLimitsPin(c.limitsPin); if (lp.error) console.log(`config ${CONFIG_FILE}：limitsPin 不用（${lp.error}），额度收起时照默认钉住`);   // 顶栏额度收起时钉住哪几条（11/24 ng 车）：写错只关这一项
     // 默认号到顶才退回哪个号（11/22 Khalil：「我之后新建的任务开到主号」）：写错只关这一项，不连累整份（同 remote / apns）
     const fbr = parseFallback(c.accountFallback, accounts, defaultAccount);
     if (fbr.error) console.log(`config ${CONFIG_FILE}：accountFallback 不用（${fbr.error}），默认号到顶也不退`);
@@ -243,8 +247,8 @@ const CONFIG = (() => {
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns) };   // remote / apns 写错各自关闭，不抛
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，limitsPin=${lp.pin ? lp.pin.length : '默认'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns), limitsPin: lp.pin };   // remote / apns / limitsPin 写错各自关闭，不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -488,6 +492,47 @@ async function openSession(name, args) {
 // 新会话名：ccb- + 6 位随机。老的 tmux.sock 上和 tmux/ 下都不能已经有它
 function newName() {
   for (;;) { const n = 'ccb-' + crypto.randomBytes(3).toString('hex'); if (!fs.existsSync(sockPath(n)) && !panes.some((p) => p.name === n)) return n; }
+}
+// 新窗口的名字（ListAgents / SendMessage 认的那个，和上面的 tmux 名是两回事；11/24 ng 车）。
+// Claude Code 自己起的（登记里 nameSource 是 derived）是「工作目录最后一段的 slug - 2 位十六进制」，只有 256 种：主目录开的窗口全叫 khalil-xx，
+// 11/24 线上同时有两对重名（khalil-62、khalil-f3），发给其中一个的消息会落到另一个。总控台开 Claude 会话时自己挑一个同样写法、现在没人用的，
+// 用 --name 交给它（2.1.331 实测：登记成 name=它、nameSource=user；两个窗口给同一个名字，Claude Code 照样都登记成这个名字，不替我们去重）。
+// 「没人用」= 活着的会话登记（SESS_DIR/<pid>.json，pid 还在）里没有，也不在 nameHold 里（刚开出去、还没登记的先占着）。
+// pickName() 从读登记到记进 nameHold 中间没有 await：两个同时进来的 /api/new 拿不到同一个。256 个都占了换 4 位，再换 6、8 位。
+const NAME_HOLD_MS = 10 * 60000;
+const nameHold = new Map();      // 规整后的名字 → 占到几点（毫秒）
+const normName = (n) => String(n || '').trim().toLowerCase().replace(/\s+/g, '-');   // 照 Claude Code 比名字的写法：去两头空白、小写、空白换成 -
+// 照 Claude Code 的 derived 名字前半段：工作目录最后一段，前 4 个词，小写，非 a-z0-9 的连成一个 -，最长 40，去掉两头的 -；什么都不剩写 claude
+function nameBase(dir) {
+  const b = path.basename(String(dir || HOME)).split(/\s+/).filter(Boolean).slice(0, 4).join(' ').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-+|-+$/g, '');
+  return b || 'claude';
+}
+// 这个名字是不是总控台照 derived 的写法起的（nameSource 是 user，但不是他起的）：卡片标题照旧用 AI 起的标题，不写成 khalil-3a
+const autoNamed = (name, cwd) => typeof name === 'string' && name.startsWith(nameBase(cwd) + '-') && /^[0-9a-f]{2,16}$/.test(name.slice(nameBase(cwd).length + 1));
+function liveNames() {
+  const out = new Set();
+  let fl = []; try { fl = fs.readdirSync(SESS_DIR); } catch {}
+  for (const f of fl) {
+    if (!/^\d+\.json$/.test(f)) continue;
+    try { const d = JSON.parse(fs.readFileSync(path.join(SESS_DIR, f), 'utf8')); if (d && typeof d.name === 'string' && d.name.trim() && Number.isInteger(d.pid) && alive(d.pid)) out.add(normName(d.name)); } catch {}
+  }
+  return out;
+}
+// 挑一个名字并马上占住。want = 接回时原来的名字：现在没人用就还给它（how = orig）
+function pickName(dir, want) {
+  const now = Date.now();
+  for (const [k, t] of nameHold) if (t <= now) nameHold.delete(k);
+  const used = liveNames(); for (const k of nameHold.keys()) used.add(k);
+  const take = (n, how) => { nameHold.set(normName(n), now + NAME_HOLD_MS); return { name: n, how }; };
+  if (want && !used.has(normName(want))) return take(want, 'orig');
+  const base = nameBase(dir);
+  for (let w = 2; w <= 8; w += 2) {
+    const free = [];
+    if (w <= 4) { for (let i = 0; i < 16 ** w; i++) { const c = base + '-' + i.toString(16).padStart(w, '0'); if (!used.has(c)) free.push(c); } }
+    else for (let k = 0; k < 64 && !free.length; k++) { const c = base + '-' + crypto.randomBytes(w / 2).toString('hex'); if (!used.has(c)) free.push(c); }
+    if (free.length) return take(free[crypto.randomInt(free.length)], w === 2 ? 'new' : 'long');
+  }
+  return take(base + '-' + crypto.randomBytes(8).toString('hex'), 'long');
 }
 // 老的 tmux.sock 那台的全局环境里要是有 CLAUDE* / CCBOARD_* 变量（服务器是别人从 Claude 会话里起的，或者起在这个修复之前），拿掉（11/16 cc-board-9e envfix、datalock）。启动时一次，之后每分钟一次；已经开着的窗口不受影响。
 // 每个窗口一台以后新窗口不再开在它上面（各自那台起的时候环境就是 TMUX_ENV），这里只管老的那台
@@ -1359,7 +1404,7 @@ function watchGone(out, seen) {
     const cid = goneCrash.get(sid);
     if (!p.mid && !cid) { if (now - since > CRASH_WIN + 2000) { lastLive.delete(sid); goneSince.delete(sid); } continue; }   // 闲着的：等过了「一起退出」的窗口还是单个，就不记
     const account = readTap(sid)?.account;
-    archive.items[sid] = { sid, provider: p.provider, ...(typeof account === 'string' && account.trim() ? { account } : {}), title: p.title, cwd: p.cwd, file: p.file, prompt: p.prompt, resultAt: p.resultAt, ...(isGemini(p.model) ? { gemini: p.model } : {}),
+    archive.items[sid] = { sid, provider: p.provider, ...(typeof account === 'string' && account.trim() ? { account } : {}), title: p.title, cwd: p.cwd, file: p.file, prompt: p.prompt, resultAt: p.resultAt, ...(isGemini(p.model) ? { gemini: p.model } : {}), ...nameOf(p),
       archivedAt: now, state: 'archived', lost: true, lostAt: since, project: p.project, role: p.role || null, lastAt: p.lastAt || 0, ...(cid ? { crash: cid, idle: !p.mid } : {}) };
     dirty = true; lastLive.delete(sid); goneSince.delete(sid);
     if (cid) {                                                         // 记成 lost 以后就不再挂在 goneCrash 上：它被接回、又上墙时不该把自己从这一起里拿掉（不然横幅的总数越接越小）
@@ -1370,7 +1415,7 @@ function watchGone(out, seen) {
   }
   for (const s of out) {
     const tr = tracks.get(s.sid) || codexTracks.get(s.sid);
-    lastLive.set(s.sid, { title: s.title, cwd: s.cwd, provider: s.provider || 'claude', model: isGemini(s.model) ? s.model : null, file: (tr && tr.file) || s.file || null, prompt: s.prompt, resultAt: s.resultAt, project: s.project,
+    lastLive.set(s.sid, { title: s.title, cwd: s.cwd, provider: s.provider || 'claude', model: isGemini(s.model) ? s.model : null, file: (tr && tr.file) || s.file || null, prompt: s.prompt, resultAt: s.resultAt, project: s.project, regName: s.regName, userNamed: s.userNamed,
       mid: s.status === 'busy' || s.status === 'waiting', role: roleOf.get(s.sid) || null, lastAt: Math.max(Date.parse(s.lastAt || '') || 0, s.statusAt || 0), tmux: s.tmux || null, sock: s.tmux ? sockFor(s.tmux) : null });
   }
   for (const [sid, t] of leaving) if (now - t > 120000) leaving.delete(sid);
@@ -1678,11 +1723,12 @@ function scanSessions() {
     if (!tr) { tr = new Track(d.sessionId, d.cwd); tracks.set(d.sessionId, tr); }
     try { tr.refresh(); } catch (e) { /* 读不到就先显示登记信息 */ }
     const st = tr.st;
+    const named = !!d.nameSource && d.nameSource !== 'derived' && !(d.nameSource === 'user' && autoNamed(d.name, d.cwd));   // 总控台照 derived 写法起的（--name）不算他起的名字
     const o = {
       sid: d.sessionId, provider: 'claude', pid: d.pid, cwd: d.cwd, startedAt: d.startedAt, status: d.status || 'idle',
       statusAt: d.statusUpdatedAt || d.updatedAt || null,
-      regName: d.name || '', userNamed: d.nameSource && d.nameSource !== 'derived',
-      title: st.custom || (d.nameSource && d.nameSource !== 'derived' ? d.name : null) || st.title || d.name || d.sessionId.slice(0, 8),
+      regName: d.name || '', userNamed: named,
+      title: st.custom || (named ? d.name : null) || st.title || d.name || d.sessionId.slice(0, 8),
       aiTitle: st.title, custom: st.custom,
       prompt: st.prompt, promptAt: st.promptAt,
       ...deliver(st.result, st.resultBy),
@@ -1995,8 +2041,8 @@ function rpFile(raw, ev) {
 // 文件夹 → 图集（C1.1，11/21 Khalil 本人要的）。文件夹本身要在交付里写到过（rpFile 已经核过：真身在证据里、本身不是链接、主目录以下没有点开头的段）；
 // 只写到文件夹里某个文件不算写到这个文件夹。主目录、它的上层、/tmp 这种顶层不列。只列第一层、真放在里面的图和视频（链接一律不列），
 // 达标线、排法、上限和本机图集一样（listGallery）；应答只带列出来的媒体文件名，文件夹里别的文件名不露
-// 威胁模型见 CLAUDE.md「手机远程」的「远程预览」：防的是远程那一头；本机同一个用户在列完和逐张 lstat 之间换文件夹的竞态在信任边界里面，
-// 这一车不修，留作已知会红的用例 test/known-red/preview-gallery-race.mjs（修法方向和「只调顺序不算修好」写在它的文件头）
+// 每张图的钥匙绑在真放在这个文件夹里的那个文件上（rpBind，11/24 ng 车修）：原来列完再逐张按路径 lstat，中间本机另一个进程把文件夹换成指到外面的链接，
+// 钥匙就绑到外面那张图（11/22 留的已知会红用例 preview-gallery-race）；只把核文件夹挪到 lstat 后面不算修好（换过去、核之前再换回来照样过）
 function rpGallery(dir, id) {
   const home = rpHomeIds();
   if (id === home[0]) return { why: 'shallow' };                      // 主目录本身（按 dev+ino 比：/Users/Khalil、firmlink 别名都认得出，11/22 修）
@@ -2006,9 +2052,35 @@ function rpGallery(dir, id) {
   const g = listGallery(dir, { direct: true });
   if (g.error) return { why: g.error === 'missing' ? 'missing' : 'not-gallery' };
   if (idOf(dir) !== id) return { why: 'missing' };                    // 列的时候文件夹被换掉了：不给
-  const media = [];
-  for (const m of g.media) { let s; try { s = fs.lstatSync(m.real, { bigint: true }); } catch { continue; } if (s.isFile()) media.push({ ...m, id: s.dev + ':' + s.ino }); }   // 每张带上它的 dev:ino，钥匙绑这个
-  return { ...g, media };
+  const media = rpBind(dir, id, g.media);                             // 每张带上它的 dev:ino，钥匙绑这个
+  if (!media || !media.length) return { why: 'missing' };            // 钉住的不是核过的那个文件夹（被换掉了），或者一张都打不开
+  return { ...g, media };                                             // total 仍是列出来的张数：列完到绑钥匙之间被换成链接、删掉的那几张不减（只在被人动过时才不一样）
+}
+// 先 chdir 进文件夹，问内核 cwd 现在在哪（要正好是 dir 这个路径），再核「.」就是核过的那个（dev+ino），然后按文件名相对打开：cwd 钉住的是文件夹本身（inode），
+// 不是路径。堵住的是 rpFile 之后文件夹「本身」被换的那一段：之后路径被换成链接、换成别的文件夹、连上层一起挪走再挪回来，相对打开的都还是这个文件夹里的那一项。
+// cwd === dir（11/24 返修 S1）：rpResolve 按路径查了三次（lstat → realpath → stat），在这几次之间换「上一层」，核出来的 dev+ino 本身就是外面那个，
+// 「核 .」也会对得上；chdir 以后内核给的 cwd 是外面那个文件夹的位置，和 dir 不一样，这一道认得出（state.test [10] 的 P）。单个文件那条路没走这里，换上一层照样漏，见 CLAUDE.md「还开着的」。
+// O_NOFOLLOW：这一项本身是链接打不开；O_NONBLOCK：管道不卡。
+// Node 没有 openat，这是拿到「相对一个文件夹 inode 打开」的唯一办法。全程同步、中间不 await，做完马上 chdir 回去，别的 JS 插不进来；
+// 代价：这几毫秒里线程池里正在跑、又用相对路径的异步 fs 调用会按这个文件夹解析（服务里的路径都是完整路径）。回不去就退到 /，记一行。
+// 不用 O_NOFOLLOW_ANY：它只挡链接、挡不住真文件夹被挪走换上另一个；而且和 O_NOFOLLOW 一起给是 EINVAL（11/24 在 Darwin 27 实测）
+function rpBind(dir, id, list) {
+  let back; try { back = process.cwd(); } catch { back = '/'; }      // 服务自己的工作目录没了（被删、Node 又没缓存）：做完退到 /，图集照给（11/24 返修 S3）
+  try { process.chdir(dir); } catch { return null; }
+  try {
+    let here = ''; try { here = process.cwd(); } catch {}
+    if (here !== dir) return null;                                     // 内核说现在在别处：上一层在核的时候被换过（11/24 返修 S1）。问不出来也不给
+    if (idOf('.') !== id) return null;
+    const out = [];
+    for (const m of list) {
+      if (!m.name || m.name.includes('/')) continue;                   // 只认这一层的一个名字（readdir 给的本来就是）
+      let fd; try { fd = fs.openSync(m.name, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); } catch { continue; }
+      try { const s = fs.fstatSync(fd, { bigint: true }); if (s.isFile()) out.push({ ...m, id: s.dev + ':' + s.ino }); } catch {} finally { fs.closeSync(fd); }
+    }
+    return out;
+  } finally {
+    try { process.chdir(back); } catch (e) { try { process.chdir('/'); } catch {} console.log(`rpreview ${new Date().toISOString()} 回不到原来的工作目录（${e.code || e.message}），退到 /`); }
+  }
 }
 function rpKey(dev, login, f) {
   const k = dev.id + '\0' + f.real; let id = rpByFile.get(k);
@@ -2239,6 +2311,8 @@ function tidyNote(s, st) {
   const dg = s.digest || {};
   return { project: s.project ? s.project.name : null, head: dg.head || null, ask: dg.need === 'reply' ? dg.ask || null : null, roots, human: st.nHuman, tools: st.nTools, edits: st.nEdits };
 }
+// 归档时记下它在 ListAgents 里的名字：接回时现在没人用就还给它（名字 + 是不是他自己起的）。Codex 没有这个名字
+const nameOf = (s) => (s && s.provider !== 'codex' && typeof s.regName === 'string' && s.regName.trim() ? { name: s.regName.slice(0, 120), ...(s.userNamed ? { named: true } : {}) } : {});
 function archiveSession(sid, force, auto) {      // auto = 自动收工的理由（字符串）；手点的不带
   const s = allSessions.find((x) => x.sid === sid);
   if (!s) return { ok: false, error: '这个会话已经不在了' };
@@ -2247,7 +2321,7 @@ function archiveSession(sid, force, auto) {      // auto = 自动收工的理由
   const tr = tracks.get(sid) || codexTracks.get(sid), st = tr ? tr.st : newState(), v = tidyVerdict(s, st);
   const why = auto ? auto + '，' + v.why : v.why;
   const account = readTap(sid)?.account;
-  archive.items[sid] = { sid, provider: s.provider || 'claude', ...(typeof account === 'string' && account.trim() ? { account } : {}), title: s.title, cwd: s.cwd, file: tr ? tr.file : null, prompt: s.prompt, resultAt: s.resultAt, ...(isGemini(s.model) ? { gemini: s.model } : {}),
+  archive.items[sid] = { sid, provider: s.provider || 'claude', ...(typeof account === 'string' && account.trim() ? { account } : {}), title: s.title, cwd: s.cwd, file: tr ? tr.file : null, prompt: s.prompt, resultAt: s.resultAt, ...(isGemini(s.model) ? { gemini: s.model } : {}), ...nameOf(s),
     archivedAt: Date.now(), state: 'archiving', stopAt: Date.now() + GRACE, note: tidyNote(s, st), why, ...(auto ? { auto: true } : {}), ...(v.keep ? {} : { drop: true }) };
   processed.delete(sid);
   saveArchive(); scheduleStop(sid); scanSessions();
@@ -2481,12 +2555,15 @@ async function unarchive(sid) {
   let name = newName();
   it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now();   // 先同步占住：排队接和他手点同一个、双击，都只会接一次（下面几个 await 期间别人看到的已经是 restoring）
   const cm = it.provider !== 'codex' && !gemM && await lastReplMode(it.file || locate(sid, it.cwd), sid);   // 所有接回（单张卡、一起退出后的排队接回）都从这里过：上次是 Code Mode 的，接回来还是
-  const cl = it.provider === 'codex' ? null : [await findClaude(), '--resume', sid];   // Codex 不找 claude（第一次找可能等到 15 秒，接回的看护是 12 秒）
-  let cmd = it.provider === 'codex' ? [codexBin || 'codex', 'resume', sid] : gemM ? geminiArgv(gemM, cl[0], ['--resume', sid]) : wrapLaunch(acct, cm ? withCodeMode(cl) : cl);
+  // 名字（11/24）：原来那个现在没人用就还给它。原来是 derived 写法、可工作目录已经不在（退回主目录开）的，照现在的目录另起一个，写法和目录对得上
+  const nm = it.provider === 'codex' || !(await claudeHasName()) ? null : pickName(dir, typeof it.name === 'string' && (it.named || autoNamed(it.name, dir)) ? it.name : null);
+  const tail = nm ? ['--name', nm.name, '--resume', sid] : ['--resume', sid];   // --name 在 --resume 前面；Gemini 的外壳原样经 "$@" 交给 claude。claude 不认 --name 就是原来的 --resume <sid>（S2）
+  const cl = it.provider === 'codex' ? null : [await findClaude(), ...tail];   // Codex 不找 claude（第一次找可能等到 15 秒，接回的看护是 12 秒）
+  let cmd = it.provider === 'codex' ? [codexBin || 'codex', 'resume', sid] : gemM ? geminiArgv(gemM, cl[0], tail) : wrapLaunch(acct, cm ? withCodeMode(cl) : cl);
   let r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);   // 接回来的也是自己一台 tmux
   if (r.gone && cl) {                               // 一开就退了：和 newSession 一样重开一次。先占上新名字、重新计 12 秒（重开前那几秒别人再点接回，拿到的是要开的那个）
     const was = name; name = newName(); if (archive.items[sid] === it) { it.tmux = name; it.restoreAt = Date.now(); }
-    if (gemM) cmd = geminiArgv(gemM, await refindClaude(was), ['--resume', sid]); else cmd[cmd.length - cl.length] = await refindClaude(was);
+    if (gemM) cmd = geminiArgv(gemM, await refindClaude(was), tail); else cmd[cmd.length - cl.length] = await refindClaude(was);   // 名字不换：前一个已经退了，它还占着
     r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...cmd]);
   }
   if (!r.ok) { if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r.gone ? { ok: false, error: gemM ? GONE_GEM_MSG : cl ? GONE_MSG : '会话一开就退了' } : r; }
@@ -2496,9 +2573,10 @@ async function unarchive(sid) {
   if (acct) console.log(`account ${new Date().toISOString()} ${name} ${acct.id} ${accountSource} resume`);
   if (cm) console.log(`codemode ${new Date().toISOString()} ${name} resume ${sid.slice(0, 8)} on`);
   if (gemM) console.log(`gemini ${new Date().toISOString()} ${name} resume ${sid.slice(0, 8)} ${gemM}`);
+  if (nm) console.log(`name ${new Date().toISOString()} ${name} ${rpName(nm.name)} resume ${sid.slice(0, 8)} ${nm.how}${it.name && nm.how !== 'orig' ? ' (原来的 ' + rpName(it.name) + (it.named || autoNamed(it.name, dir) ? ' 有人在用' : ' 和现在的目录对不上') + ')' : ''}`);
   it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now(); saveArchive();
   await refreshPanes();
-  return { ok: true, resumed: true, name };
+  return { ok: true, resumed: true, name, ...(nm ? { claudeName: nm.name } : {}) };
 }
 
 async function deleteSession(sid) {
@@ -2605,6 +2683,20 @@ async function refindClaude(name) {
   console.log(`launch ${new Date().toISOString()} ${name} 一开就退了，${RESPAWN_MS} ms 后重新找 claude、换个名字再开一次`);
   await sleep(RESPAWN_MS); claudeBin = null;
   return findClaude();
+}
+// --name 认不认（11/24 返修 S2）：--name 不是硬依赖。第一次要用时跑一次 `<claude> --help`（实测 0.2 秒，最多等 5 秒），看帮助里有没有 --name；按 claude 的路径缓存，
+// 自动更新换了位置（claudeBin 变了）就重问一次。没有 --name → 不传，走原来的老路（新开只带任务原文，接回只带 --resume <sid>），名字照旧由 Claude Code 自己起。
+// 问不出来（退出码不是 0、超时）：这一次不传、不缓存，下一次再问。一开就退的那次重开（refindClaude）不重问：名字和第一次一样，
+// --name X --resume <sid> 在 2.1.331 上实测过能接回（11/24 M1），重开再拿掉它只会把重名悄悄带回来，还盖住真的毛病。
+let nameFlag = { bin: null, has: false };
+async function claudeHasName() {
+  const bin = await findClaude();
+  if (nameFlag.bin === bin) return nameFlag.has;
+  const r = await run(bin, ['--help'], { timeout: 5000 });
+  const has = r.ok && /(^|[\s,])--name\b/m.test(r.out);
+  if (r.ok) nameFlag = { bin, has };
+  console.log(`name ${new Date().toISOString()} ${bin} --help ${r.ok ? (has ? '有 --name' : '没有 --name，不传') : '问不出来，这次不传'}`);
+  return has;
 }
 
 const BORDER = /^[\s─━═│┃╭╮╰╯┌┐└┘▔▁]+$/;
@@ -3273,6 +3365,7 @@ async function newSession(prompt, cwd, opt = {}) {
   const pin = opt.project ? pinnable(opt.project.key, opt.project.name) : null;   // 在哪一列的列头开的；核不过就当右上角开的
   if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;   // 明确指定了别的文件夹（界面上已经没有这一格，接口还认）就不附
   let name = newName(), cl = null, gemMk = null;
+  const nm = provider === 'claude' && await claudeHasName() ? pickName(dir) : null;   // ListAgents 里的名字：同样写法、现在没人用的（Codex 没有这个名字；claude 不认 --name 也没有，S2）
   const args = ['-x', '160', '-y', '48', '-c', dir];                // openSession 在它自己那台 tmux 上 new-session -d -s <名字> 加上这些
   const base = args.length;
   if (provider === 'codex') {
@@ -3280,10 +3373,11 @@ async function newSession(prompt, cwd, opt = {}) {
     args.push(codexBin); if (model) args.push('-m', model); if (effort) args.push('-c', 'model_reasoning_effort="' + effort + '"');
     if (text) args.push(text);
   } else if (gem) {
-    gemMk = (claude) => geminiArgv(model, claude, text ? [text] : []);   // 没有账号包装、没有 Code Mode：脚本自己设环境，不让 Claude 的登录混进来
+    gemMk = (claude) => geminiArgv(model, claude, [...(nm ? ['--name', nm.name] : []), ...(text ? [text] : [])]);   // 没有账号包装、没有 Code Mode：脚本自己设环境，不让 Claude 的登录混进来。--name 在任务原文前面
     args.push(...gemMk(await findClaude()));
   } else {
     cl = [await findClaude()]; if (model) cl.push('--model', model); if (effort) cl.push('--effort', effort);
+    if (nm) cl.push('--name', nm.name);                              // 名字在任务原文前面
     if (text) cl.push(text);
     args.push(...wrapLaunch(acct, opt.codeMode === true ? withCodeMode(cl) : cl));   // 没选账号原样不变；选了就在外面包一层读钥匙串的 zsh。Code Mode 套在这一层里面
   }
@@ -3297,10 +3391,11 @@ async function newSession(prompt, cwd, opt = {}) {
   const codeMode = provider === 'claude' && opt.codeMode === true;
   if (codeMode) console.log(`codemode ${new Date().toISOString()} ${name} new on`);
   if (gem) console.log(`gemini ${new Date().toISOString()} ${name} new ${model}`);
+  if (nm) console.log(`name ${new Date().toISOString()} ${name} ${rpName(nm.name)} new ${nm.how}`);   // 名字过一遍 rpName：本机 /rename 起的名字里有换行也拆不出假日志行（11/24 返修 S4）
   if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
   if (provider === 'codex') { agents[name] = { cwd: dir, at: Date.now(), prompt: shown, sid: null, rollout: null, model, effort }; saveAgents(); }
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // config 里打开就替他点，开在哪个文件夹都一样；不等它，卡片先出来
-  return { ok: true, name, project: pin, account: acct ? acct.id : null, codeMode, ...(gem ? { gemini: model } : {}), ...(fell ? { fallback: { from: fell.from, key: fell.key, used: fell.used } } : {}) };
+  return { ok: true, name, ...(nm ? { claudeName: nm.name } : {}), project: pin, account: acct ? acct.id : null, codeMode, ...(gem ? { gemini: model } : {}), ...(fell ? { fallback: { from: fell.from, key: fell.key, used: fell.used } } : {}) };
 }
 // 退回时让总管知道（总管 khalil-4c 11/22 要的）：config 的 accountFallback.note 写了文件就追加一行。同一件事（同一个号、同一个额度窗口）只写一次（只记在内存：服务重启后可能再写一次）。
 // 试验服务只往它自己的数据目录里写：拿真 config 拷贝起的试验服务不能往总管的 fyi.md 写假记录（11/22 审查）
@@ -3350,9 +3445,9 @@ async function suggestLoop() {
 // 顶栏写号的名字，和「新任务」的账号下拉同一个来源：config.json 的 accounts。没登记的 id 原样写；没标号的条目 name 是 null
 const limitName = (id) => (id ? (CONFIG.accounts.find((a) => a.id === id) || { name: id }).name : null);
 // Gemini 是 API 预付余额的估算（limits.mjs 的 geminiLimits）：没有锚点文件就是 null，顶栏不画。单独 try：它坏了不连累 Claude / Codex 那几格
-let LIMITS = { claude: [], codex: null, gemini: null };
+let LIMITS = { claude: [], codex: null, gemini: null, pin: limitPins([], { pin: CONFIG.limitsPin }) };      // pin：顶栏额度收起时钉住哪几条（limits.mjs 的 limitPins）
 function limitsLoop() {
-  try { const now = Date.now(); LIMITS = { claude: claudeLimits(LIMITS_DIR, now).map((e) => ({ ...e, name: limitName(e.account) })), codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null, gemini: LIMITS.gemini }; } catch (e) { console.error('limits', e); }
+  try { const now = Date.now(), claude = claudeLimits(LIMITS_DIR, now).map((e) => ({ ...e, name: limitName(e.account) })); LIMITS = { claude, codex: CONFIG.codex ? codexLimits(CODEX_HOME, now) : null, gemini: LIMITS.gemini, pin: limitPins(claude, { pin: CONFIG.limitsPin, defaultAccount: CONFIG.defaultAccount }) }; } catch (e) { console.error('limits', e); }
   try { LIMITS.gemini = geminiLimits(LIMITS_DIR, Date.now(), { ledgers: CONFIG.geminiLedgers }); } catch (e) { console.error('limits gemini', e); LIMITS.gemini = null; }
   setTimeout(limitsLoop, LIMITS_MS);
 }
@@ -3648,8 +3743,19 @@ const handle = async (req, res, via) => {
       const rt = routeNew({ provider: body.provider, model: body.model, effort: body.effort, tier: body.tier });
       if (!rt.ok) return reply(res, 200, rt);
       if (body.codeMode != null && typeof body.codeMode !== 'boolean') return reply(res, 200, { ok: false, error: 'codeMode 只能是 true 或 false' });   // "1"、1 这类写法不猜：只有 true 才开
-      const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, fromUi: !!req.headers.origin, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null, codeMode: body.codeMode === true });
-      if (r.ok) { await refreshPanes(); if (rt.tier) console.log(`route ${new Date().toISOString()} ${r.name} ${rt.tier} ${body.provider === 'codex' ? 'codex' : 'claude'} ${rt.model || '-'} ${rt.effort}`); }
+      // 派活单（brief，11/24 brief-v2）：带了才核。缺栏、空白、只写「无」、派给和 tier / model 对不上，都和写错档位一样：报错、不开窗口，不悄悄忽略。
+      // prompt 也递给 briefNew（FIX-1）：prompt 里又写一张派活单要拒，长度上限算的是派活单加 prompt。"" / false / 0 也算带了（!= null），由 briefNew 报「要是一个对象」。
+      // brief 是 undefined 或 null = 没带，prompt 和以前一字不差（界面新任务、⌘T、手机远程、newwin.py、auto.py 都不带）。齐了拼在 prompt 前面，prompt 也给了就接在后面。
+      let prompt = String(body.prompt || '');
+      const withBrief = body.brief != null;
+      if (withBrief) {
+        const bf = briefNew(body.brief, rt, prompt);
+        if (!bf.ok) { console.log(`brief ${new Date().toISOString()} - reject missing=${bf.missing.join(',') || '-'} problems=${bf.problems.length}`); return reply(res, 200, bf); }
+        prompt = bf.text + (prompt.trim() ? '\n\n' + prompt.trim() : '');
+      }
+      const r = await newSession(prompt, String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, fromUi: !!req.headers.origin, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null, codeMode: body.codeMode === true });
+      if (r.ok) { await refreshPanes(); if (rt.tier) console.log(`route ${new Date().toISOString()} ${r.name} ${rt.tier} ${body.provider === 'codex' ? 'codex' : 'claude'} ${rt.model || '-'} ${rt.effort}`); if (withBrief) console.log(`brief ${new Date().toISOString()} ${r.name} ok`); }
+      if (r.ok && withBrief) r.brief = true;               // 带了派活单才带 brief: true；没带的应答和以前一样
       if (r.ok && who) {
         const w = await who;
         if (w) {

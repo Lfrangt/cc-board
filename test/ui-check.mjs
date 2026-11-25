@@ -10,6 +10,8 @@
  *        remotePreviewCheck() 验远程预览（C1 / C1.1）：远程模式点卡片上的路径带 sid 问 /api/remote/preview（浏览器里按服务的应答形状回、/rp/ 从预览端口取真文件并加 CSP 沙盒头），
  *        网页 / 图 / Markdown / 文件夹图集 / 「图集」按钮、拒绝只提示、不在卡片上的路径不发请求；UI_ONLY=rpreview 单跑，RP_HTML 换整页做红阶段与改坏对照。
  *        11/22 修一：PDF 不画、写明显示不了并给下载链接（点了真开始下载）；「指到别处的链接」「点开头的文件夹」两句拒绝的英文。
+ *        limitPinSeg() 验顶栏额度收起时钉住哪几条（11/24 ng 车）：界面不写死账号 id、服务给的 limits.pin、老服务退回没标账号那条、「Claude —」一直钉着、琥珀点只看收掉的、中英文提示、本机 ccb_limpin；UI_ONLY=limpin 单跑，PN_HTML 换整页做红阶段与改坏对照。
+ *        额度那一排 11/24 起默认收起：老的段默认 ccb_limoff=false（展开），照旧核每一格；只有 limitPinSeg 看默认收起的样子。
  *        wallStripSeg() 独立核窄条、要你筛选、展开与回话、自动续跑、2 秒宽限（含两拍相隔 1.3 秒）和重复绘制；UI_ONLY=strip / ST_HTML 支持红阶段与改坏对照。老的段默认 ccb_strip='off'，保留整格断言。
  *        只读页面 + 点「先不管」和筛选，不往任何会话里发话；新段的发送与自动续跑请求拦在浏览器里。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
@@ -30,20 +32,22 @@ const srvClear = (ids) => { const u = new URL(FX.url); return fetch(u.origin + '
 
 const browser = await launch();
 // 老断言继续核原来的整格；只有 wallStripSeg 创建 context 时开启窄条。
-let STRIPS_ON = false;
+let STRIPS_ON = false, LIMS_DEFAULT = false;      // LIMS_DEFAULT：额度那一排保持默认（收起），只有 limitPinSeg 打开
 const newContext = browser.newContext.bind(browser);
 browser.newContext = async (...args) => {
   const ctx = await newContext(...args);
   if (!STRIPS_ON) await ctx.addInitScript(() => { try { localStorage.setItem('ccb_strip', 'off'); } catch (e) {} });
+  if (!LIMS_DEFAULT) await ctx.addInitScript(() => { try { if (localStorage.getItem('ccb_limoff') === null) localStorage.setItem('ccb_limoff', 'false'); } catch (e) {} });   // 11/24 起额度默认收起；老的段要看每一格
   return ctx;
 };
 // 架构：服务 11/17 起把没有窗口在管的窗口按项目挂到负责人 / 总管下面（org 的 via: 'dept'）。测「你直接带」那套画法的块在浏览器里把它们还原成
 // boss: null（没有负责人、也没有总管时服务就是这样出的，比如刚装的总控台）；按项目挂上的画法另有一块，用服务的真实输出
 const unplace = (j) => { const N = j && j.org && j.org.nodes; if (N) for (const x of Object.values(N)) if (x && (x.via === 'dept' || x.via === 'contact')) Object.assign(x, { boss: null, via: null, n: 0, last: 0, handed: false }); return j; };   // contact（11/17 win-49）也是第 5 步挂上的，一起还原
 const unplaceRoute = async (route) => { const r = await route.fetch(); const j = await r.json(); await route.fulfill({ response: r, json: unplace(j) }); };
-async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900, unplaced = false }) {      // 无头浏览器的系统语言是英文，中文界面要明说
+async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900, unplaced = false, init = null }) {      // 无头浏览器的系统语言是英文，中文界面要明说
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, deviceScaleFactor: 2 });
   await ctx.addInitScript((m) => { try { localStorage.setItem('ccb_mode', JSON.stringify(m)); } catch (e) {} }, mode);
+  if (init) await ctx.addInitScript(([k, v]) => { try { localStorage.setItem(k, v); } catch (e) {} }, init);      // init = [键, 原样的字符串]：页面载入前放进 localStorage
   const page = await ctx.newPage(); const errs = [];
   if (process.env.UI_ONLY === 'limits' && process.env.LP_HTML) {
     const html = fs.readFileSync(process.env.LP_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
@@ -51,6 +55,10 @@ async function open({ mode, scheme = 'dark', lang = 'zh', w = 1520, h = 900, unp
   }
   if (process.env.UI_ONLY === 'gbal' && process.env.GB_HTML) {       // Gemini 余额那一段的红阶段、改坏对照：换一份 ui.html
     const html = fs.readFileSync(process.env.GB_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+    await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+  }
+  if (process.env.UI_ONLY === 'limpin' && process.env.PN_HTML) {     // 额度钉住那一段的红阶段、改坏对照：换一份 ui.html
+    const html = fs.readFileSync(process.env.PN_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
     await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
   }
   if (process.env.UI_ONLY === 'update' && process.env.UP_HTML) {     // 检查新版本那一段的红阶段、改坏对照：换一份 ui.html
@@ -1695,6 +1703,129 @@ async function geminiChipSeg() {
   }
 }
 
+// ── 顶栏额度收起时钉住哪几条（11/24 ng 车）：UI_ONLY=limpin；PN_HTML 换整页做红阶段 / 改坏对照 ──
+// 原来界面写死作者本机的 claude:main、claude:alt：别人装上以后（没配 accounts 时条目 id 是 claude:w<周截止分钟>），额度默认收起，一格都不剩。
+// 现在钉哪几条：本机 ccb_limpin → 服务给的 limits.pin → 老服务没有 pin 时只钉没标账号的 Claude 那条；还没有 Claude 数据时的「Claude —」一直钉着。
+// 轮询每 1.5 秒按真数据重画顶栏，所以「画一份造的数据 + 读结果」放在同一次 evaluate 里（geminiChipSeg 同一个做法）；点按钮也在里面点、点完按造的数据再画一次
+async function limitPinSeg() {
+  console.log('\n[顶栏 · 额度收起时钉住哪几条]');
+  const shots = path.join(OUT, 'limit-pin'); fs.mkdirSync(shots, { recursive: true });
+  const ANON = 'claude:w29412345';
+  const paintP = (page, spec) => ev(page, (spec) => {
+    const now = Date.now(), D = 86400000, wk = (u) => [{ key: 'week', used: u, resetsAt: now + D }];
+    const C = (id, account, u) => ({ id, provider: 'claude', account, name: account, plan: null, at: now, windows: wk(u) });
+    const ent = { anon: C(spec.anon, null, 7), amy: C('claude:amy', 'amy', 91), ben: C('claude:ben', 'ben', 1), main: C('claude:main', 'main', 40), alt: C('claude:alt', 'alt', 20),
+      codex: { id: 'codex', provider: 'codex', account: null, plan: 'prolite', at: now, windows: wk(34) },
+      gemini: { id: 'gemini', provider: 'gemini', account: null, plan: null, at: now, windows: [], balance: { currency: 'USD', start: 10, remaining: 9, spent: 1, spentUsd: 1, usdPerUnit: 1, anchorAt: now, estimate: true, rows: 1, bad: 0 } } };
+    const lm = { claude: (spec.claude || []).map((k) => ent[k]), codex: spec.codex ? ent.codex : null };
+    if (spec.gemini) lm.gemini = ent.gemini;
+    if ('pin' in spec) lm.pin = spec.pin;          // 不给这个键 = 老服务
+    const st = { now, limits: lm };
+    paintLimits(st);
+    if ('pin2' in spec) { lm.pin = spec.pin2; paintLimits(st); }      // 条目一样、只换 pin：要重画
+    for (let i = 0; i < (spec.click || 0); i++) { document.querySelector('#limBtn').click(); paintLimits(st); }
+    const el = document.querySelector('#limits'), b = document.querySelector('#limBtn'), wd = b.querySelector('.wd'), chips = [...el.querySelectorAll('.lq')];
+    let store = null; try { store = localStorage.getItem('ccb_limoff'); } catch (e) {}
+    return { ids: chips.map((c) => c.dataset.lq), shown: chips.filter((c) => c.offsetWidth > 0).map((c) => c.dataset.lq), pinned: chips.filter((c) => c.hasAttribute('data-pin')).map((c) => c.dataset.lq),
+      btn: !b.hidden && b.offsetWidth > 0, exp: b.getAttribute('aria-expanded'), title: b.title, aria: b.getAttribute('aria-label') || '', lt: b.querySelector('.lt').textContent, dot: !wd.hidden && wd.offsetWidth > 0, off: el.classList.contains('off'), store };
+  }, Object.assign({ anon: ANON }, spec));
+  const clip = { x: 0, y: 0, width: 1520, height: 60 };
+  LIMS_DEFAULT = true;
+  try {
+    {
+      const { ctx, page, errs } = await open({ mode: 'flow', lang: 'zh', w: 1520 });
+      const tag = 'zh 1520 px';
+      // 没点过：默认收起
+      let r = await paintP(page, { claude: ['anon'], codex: true });
+      ok(r.off && r.exp === 'false' && r.btn && r.title === '展开全部额度', tag + '：没点过「额度」：默认收起，按钮在、提示「展开全部额度」', JSON.stringify(r));
+      same(r.shown, [ANON], tag + '：老服务（没有 limits.pin）、没配 accounts（只有没标账号的那条）：收起也看得到自己的 Claude 那格', JSON.stringify(r));
+      await page.screenshot({ path: path.join(shots, '01-中文-没配账号-收起.png'), clip });
+      r = await paintP(page, { claude: ['anon'], codex: true, pin: [ANON] });
+      same(r.shown, [ANON], tag + '：服务给 limits.pin = [没标账号那条]：钉住它，Codex 收掉', JSON.stringify(r));
+      r = await paintP(page, { claude: ['amy', 'ben', 'anon'], codex: true, pin: ['claude:ben', ANON] });
+      same(r.shown, ['claude:ben', ANON], tag + '：服务给 [defaultAccount 那条, 没标账号那条]：钉这两条，先后照条目，amy 和 Codex 收掉', JSON.stringify(r));
+      ok(r.dot, tag + '：被收掉的 amy 到了 91%：按钮上亮琥珀点', JSON.stringify(r));
+      r = await paintP(page, { claude: ['main', 'alt'], codex: true, gemini: true, pin: ['claude:main', 'claude:alt'] });
+      same(r.shown, ['claude:main', 'claude:alt'], tag + '：作者本机（config 的 limitsPin 写 main + alt）：和现在一样只留主号、副号', JSON.stringify(r));
+      ok(!r.dot, tag + '：收掉的 Codex 34%、Gemini 没到线：不亮点', JSON.stringify(r));
+      await page.screenshot({ path: path.join(shots, '02-中文-作者本机-main-alt-收起.png'), clip });
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true });
+      same(r.shown, [], tag + '：老服务、两个号都标了账号：一条都不钉（不猜哪个是主号；按钮还在、点开就有）', JSON.stringify(r));
+      ok(r.btn && r.dot, tag + '：一条都不钉时按钮照旧在，收掉的 amy 91% 亮点', JSON.stringify(r));
+      r = await paintP(page, { claude: [], codex: true });
+      same(r.shown, ['claude:none'], tag + '：还没有任何 Claude 数据：灰的「Claude —」一直钉着（它的提示写怎么接入），Codex 收掉', JSON.stringify(r));
+      r = await paintP(page, { claude: [], codex: true, pin: [] });
+      same(r.shown, ['claude:none'], tag + '：limits.pin 是 [] 时「Claude —」也照样钉着', JSON.stringify(r));
+      r = await paintP(page, { claude: ['amy'], codex: true, gemini: true, pin: ['codex', 'gemini'] });
+      same(r.shown, ['codex', 'gemini'], tag + '：limits.pin 写 codex、gemini：Codex 和 Gemini 那两格也钉得住', JSON.stringify(r));
+      ok(r.dot, tag + '：这时 amy（91%）被收掉：亮点', JSON.stringify(r));
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:amy'] });
+      ok(r.shown.join() === 'claude:amy' && !r.dot, tag + '：91% 的 amy 自己钉着（看得见）：琥珀点只看收掉的，不亮', JSON.stringify(r));
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:ben'] });
+      ok(r.shown.join() === 'claude:ben' && r.dot, tag + '：换成钉 ben：amy 被收掉，亮点', JSON.stringify(r));
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:amy'], pin2: ['claude:ben'] });
+      same(r.shown, ['claude:ben'], tag + '：条目没变、只是 limits.pin 变了：顶栏照新的重画（防重画的 key 里有 pin）', JSON.stringify(r));
+      // 点「额度」展开再收起
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:ben'], click: 1 });
+      ok(!r.off && r.exp === 'true' && r.shown.length === 3 && !r.dot, tag + '：点一下展开：三格都在、aria-expanded=true、展开时不亮点', JSON.stringify(r));
+      ok(r.title === '只留钉住的' && r.aria === '只留钉住的' && r.store === 'false', tag + '：展开后按钮提示「只留钉住的」（不再写「常看的两个」），记成 ccb_limoff=false', JSON.stringify(r));
+      await page.screenshot({ path: path.join(shots, '03-中文-点开以后-全部.png'), clip });
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:ben'], click: 1 });
+      ok(r.off && r.exp === 'false' && r.shown.join() === 'claude:ben' && r.title.startsWith('展开全部额度') && r.store === 'true', tag + '：再点收起：只剩钉住的 ben，记成 true', JSON.stringify(r));
+      // 页面源码里不写死任何账号 id
+      const src = await ev(page, () => fetch(location.href).then((x) => x.text()).then((t) => ({ main: t.includes('claude:main'), alt: t.includes('claude:alt'), len: t.length })));
+      ok(src && src.len > 10000 && !src.main && !src.alt, tag + '：ui.html 里没有 claude:main、claude:alt 这两个写死的账号 id', JSON.stringify(src));
+      // 真轮询：夹具服务出的 limits.pin
+      await sleep(1600);
+      const real = await ev(page, () => {
+        const pin = last && last.limits ? last.limits.pin : undefined, chips = [...document.querySelectorAll('#limits .lq')];
+        return { pin, ids: chips.map((c) => c.dataset.lq), shown: chips.filter((c) => c.offsetWidth > 0).map((c) => c.dataset.lq) };
+      });
+      ok(real && Array.isArray(real.pin) && real.ids.length > 0, tag + '：夹具服务的 /api/state 带 limits.pin（数组）', JSON.stringify(real));
+      ok(real && Array.isArray(real.pin) && JSON.stringify(real.shown) === JSON.stringify(real.ids.filter((id) => real.pin.includes(id) || id === 'claude:none')), tag + '：真轮询画出来的：收起时露出的正好是 limits.pin 里有的那几格', JSON.stringify(real));
+      ok(errs.length === 0, tag + '（额度钉住）：页面没报错', JSON.stringify(errs));
+      await ctx.close();
+    }
+    {
+      // 轮询那条路：拦 /api/state，把 limits.pin 改成第一条 Claude，等界面自己画
+      const { ctx, page, errs } = await open({ mode: 'flow', lang: 'zh', w: 1520 });
+      let want = null;
+      await page.route('**/api/state*', async (route) => {
+        const res = await fullState(route), j = await res.json();
+        if (j.limits) { const c = (j.limits.claude || [])[0]; want = c ? c.id : 'claude:none'; j.limits.pin = c ? [c.id] : []; }
+        await route.fulfill({ response: res, json: j });
+      });
+      let s = null; for (let i = 0; i < 40; i++) { await sleep(250); s = await ev(page, () => [...document.querySelectorAll('#limits .lq')].filter((c) => c.offsetWidth > 0).map((c) => c.dataset.lq)); if (want && JSON.stringify(s) === JSON.stringify([want])) break; }
+      ok(want && JSON.stringify(s) === JSON.stringify([want]), 'zh 1520 px：服务把 limits.pin 改成第一条 Claude（' + want + '）：轮询以后顶栏收起时只露它', JSON.stringify({ want, s }));
+      ok(errs.length === 0, 'zh 1520 px（额度钉住 · 轮询）：页面没报错', JSON.stringify(errs));
+      await ctx.close();
+    }
+    {
+      // 本机 ccb_limpin 压过服务给的；写坏了（不是数组）就当没写
+      for (const [v, want, why] of [['["codex"]', ['codex'], '本机 ccb_limpin 写 ["codex"]：压过服务给的 [ben]'], ['"claude:amy"', ['claude:ben'], '本机 ccb_limpin 写坏了（不是数组）：当没写，照服务给的 [ben]']]) {
+        const { ctx, page, errs } = await open({ mode: 'flow', lang: 'zh', w: 1520, init: ['ccb_limpin', v] });
+        const r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:ben'] });
+        same(r.shown, want, 'zh 1520 px：' + why, JSON.stringify(r));
+        ok(errs.length === 0, 'zh 1520 px（ccb_limpin ' + v + '）：页面没报错', JSON.stringify(errs));
+        await ctx.close();
+      }
+    }
+    {
+      const { ctx, page, errs } = await open({ mode: 'flow', lang: 'en', w: 1520 });
+      const tag = 'en 1520 px', cn = /[一-鿿]/;
+      let r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:ben'] });
+      ok(r.lt === 'Quota' && r.title.startsWith('Show all quotas') && r.dot && /hidden account/.test(r.title) && !cn.test(r.title + r.aria + r.lt), tag + '：收起时按钮「Quota」、提示「Show all quotas」和被收掉的号到线那一句，没有中文', JSON.stringify(r));
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:ben'], click: 1 });
+      ok(r.title === 'Show pinned only' && r.aria === 'Show pinned only' && !r.off, tag + '：展开后提示「Show pinned only」', JSON.stringify(r));
+      await page.screenshot({ path: path.join(shots, '04-英文-点开以后.png'), clip });
+      r = await paintP(page, { claude: ['amy', 'ben'], codex: true, pin: ['claude:ben'], click: 1 });
+      ok(r.off && r.shown.join() === 'claude:ben', tag + '：再点收起，只剩钉住的', JSON.stringify(r));
+      ok(errs.length === 0, tag + '（额度钉住）：页面没报错', JSON.stringify(errs));
+      await ctx.close();
+    }
+  } finally { LIMS_DEFAULT = false; }
+}
+
 // ── 墙上降噪（11/18 窗口 A）：UI_ONLY=strip；ST_HTML 换整页做红阶段 / 改坏对照 ──
 // 期望由原始状态与状态 class 另算，不调用 stripOf / quietCard / workGrace。每个 context 固定同一份夹具；状态变化仍经过 fullState 路由。
 async function wallStripSeg() {
@@ -2240,6 +2371,7 @@ try {
   if (process.env.UI_ONLY === 'eta') { await etaSeg(); console.log('\n（UI_ONLY=eta：只跑了「预计交付」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'undo') { await undoSeg(); console.log('\n（UI_ONLY=undo：只跑了「撤销、↑ 取回上一句」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'gbal') { await geminiChipSeg(); console.log('\n（UI_ONLY=gbal：只跑了「顶栏 · Gemini API 余额」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'limpin') { await limitPinSeg(); console.log('\n（UI_ONLY=limpin：只跑了「顶栏 · 额度收起时钉住哪几条」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'limits') { await topbarLimitsSeg(); console.log('\n（UI_ONLY=limits：只跑了原有顶栏额度断言，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'strip') { await wallStripSeg(); console.log('\n（UI_ONLY=strip：只跑了「墙上降噪」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'jump') { await draftJumpSeg(); console.log('\n（UI_ONLY=jump：只跑了「草稿不丢 · ⌘K 跳到窗口」这一段，不是整套）'); throw ONLY_DONE; }
@@ -3322,6 +3454,7 @@ try {
   }
   await topbarLimitsSeg();        // 原有额度断言原样保留，另可 UI_ONLY=limits 定点复核
   await geminiChipSeg();         // Gemini API 余额那一格；UI_ONLY=gbal 单跑
+  await limitPinSeg();           // 额度收起时钉住哪几条（11/24 ng 车）；UI_ONLY=limpin 单跑
   }   // UI_ONLY=org：到这里为止的整段不跑
   // ── 架构（11/16 win-a0）：窗口之间谁归谁管，画成一张从上往下的架构图。上下级由服务端的 org 定（org.mjs），界面只照着画。
   //    夹具（test/CLAUDE.md「架构场景」）：总管 projC（第 3 代，总控台列，列里没有别人）；其他列：负责人 peerDone，下面 hint（它开的）、unfin（听它的）、

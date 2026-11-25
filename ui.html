@@ -132,7 +132,14 @@ svg{display:block}
 .lq.none .pc{color:var(--text-3);font-weight:500}
 .lq.stale{opacity:.7} .lq.stale .pc{color:var(--text-3);font-weight:500} .lq .ago{color:var(--text-3)}   /* 超过 1 小时没更新：整格淡下去，数字不加粗，后面写「N 小时前」 */
 @media (max-width:1180px){.lq .mtr,.lq .tg,.lq .ago{display:none}}   /* 窗口窄：先去掉进度条、账号后缀和「N 小时前」（过时的照样是灰的） */
-@media (max-width:1000px){.lim{display:none}}               /* 再窄顶栏本来就满了，整条让位给按钮 */
+/* 折叠（11/24：额度那一排多数时候只偶尔看一眼）：按钮常驻，点一下收起 / 展开，记在 localStorage 的 ccb_limoff（没点过就是收起）；收起时只留钉住的（limPins()：本机 ccb_limpin → 服务给的 limits.pin → 没标账号的 Claude 那条），其余收掉；被收掉的号用到 85% 以上，按钮上亮一个琥珀点，该留意的不会被一起收掉。 */
+.lim.off .lq:not([data-pin]){display:none}      /* 收起只收「不常看的」；钉住的一直在 */
+.limbtn{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;border-radius:var(--r-ctl);color:var(--text-3);font-size:12px;white-space:nowrap;flex:none;transition:background var(--d1) var(--ease),color var(--d1) var(--ease)}
+.limbtn:hover{background:var(--hover);color:var(--text)} .limbtn:active{background:var(--press)}
+.limbtn svg{transition:transform var(--d2) var(--ease)} .limbtn[aria-expanded=false] svg{transform:rotate(180deg)}
+.limbtn .wd{width:6px;height:6px;border-radius:50%;background:var(--attn)} .limbtn .wd[hidden]{display:none}
+.limbtn[hidden]{display:none}
+@media (max-width:1000px){.lim,.limbtn{display:none}}               /* 再窄顶栏本来就满了，整条让位给按钮 */
 
 main{position:absolute;inset:var(--bar-h) 0 0 0}
 .blank{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-3);text-align:center;pointer-events:none}
@@ -708,7 +715,7 @@ body.org main:has(#org.map){overflow:hidden}
 .omctl{position:absolute;right:16px;bottom:16px;z-index:20}
 .omctl button{min-width:28px;justify-content:center}
 @media (max-width:700px){body.org #org{padding-top:18px} .orow{flex-direction:column;align-items:stretch;width:auto;min-width:0;gap:24px;padding-top:0} .ocol{width:auto} .obus{display:none}}
-@media (max-width:700px){.hint,.brand,.lim{display:none} .bar{gap:8px;padding-left:10px;padding-right:10px} .seg button{padding:0 8px} :root{--cw:calc(100vw - 28px)} .arow{flex-wrap:wrap}.arow .t{flex-basis:100%}}
+@media (max-width:700px){.hint,.brand,.lim,.limbtn{display:none} .bar{gap:8px;padding-left:10px;padding-right:10px} .seg button{padding:0 8px} :root{--cw:calc(100vw - 28px)} .arow{flex-wrap:wrap}.arow .t{flex-basis:100%}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important} dialog,dialog[open]{transform:none} .card{transition-property:opacity,filter!important} .halo{transition-property:opacity!important}}
 </style>
 </head>
@@ -719,6 +726,7 @@ body.org main:has(#org.map){overflow:hidden}
   <nav class="seg" id="filters" aria-label="筛选"></nav>
   <div class="spacer" data-drag></div>
   <span class="hint" id="hint" data-drag></span>
+  <button class="limbtn" id="limBtn" hidden aria-expanded="true" aria-controls="limits" title="展开全部额度"><span class="wd" hidden></span><span class="lt">额度</span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 2l3 3-3 3"/></svg></button>
   <div class="lim" id="limits" role="group" aria-label="订阅额度"></div>
   <button class="tbtn upd" id="updBtn" hidden></button>
   <button class="tbtn" id="archBtn">归档</button>
@@ -819,6 +827,7 @@ const EN = {
   '正在出配对码…': 'Creating a pairing code…', '没出成配对码': 'Could not create a pairing code', 'config.json 的 remote.hosts 是空的': 'remote.hosts in config.json is empty', '配好了。要再配一台，关掉再点「手机」。': 'Paired. To pair another device, close this and click “Phone” again.',
   '这个码过期了。关掉再点「手机」出一个新的。': 'This code expired. Close this and click “Phone” for a new one.', '已复制配对链接（10 分钟内有效）': 'Pairing link copied (valid for 10 minutes)', '没复制成，长按链接手动复制': 'Could not copy. Select the link and copy it by hand',
   '已撤销：那台设备下一次请求就会被拒': 'Revoked: that device is refused from its next request', '没撤销成': 'Could not revoke', '没有这台设备': 'No such device', '只接受总控台自己的页面': 'Only accepted from cc-board itself',
+  '额度': 'Quota', '只留钉住的': 'Show pinned only', '展开全部额度': 'Show all quotas', '有号的额度已用到 85% 以上': 'A hidden account is at 85% or more of its quota',
   '总控台': 'cc-board', '打开了安装包：把 cc-board 拖进「应用程序」替换旧的，再重开': 'Installer opened: drag cc-board into Applications to replace the old one, then reopen it', '没打开安装包': 'Could not open the installer', '新版还没下好': 'The new version is not downloaded yet', '封面': 'Covers', '墙': 'Wall', '归档': 'Archive', '8 格': '8 up', '12 格': '12 up', '按项目': 'By project', '按状态': 'By status', '墙上怎么分列': 'Group the wall', '要你处理': 'Needs you', '新任务': 'New task',
   '全部': 'All', '要你': 'Your turn', '收成一条': 'Collapse to a row', '点一下展开成整卡': 'Click to expand',
   '没有要你处理的了。再点一下「要你」回到全部。': 'Nothing needs you right now. Click “Your turn” again to see everything.', '在做': 'Working', '新交付': 'Delivered', '等你选': 'Needs you', '待跟进': 'Follow up', '空闲': 'Idle', '停住了': 'Stopped', '启动中': 'Starting',
@@ -1122,6 +1131,12 @@ const ms = (t) => (t ? Date.parse(t) || 0 : 0);
 // 数据在 /api/state 的 limits（服务端 limits.mjs 汇总）：codex 一条或 null（config 没开 codex 就是 null）；claude 是数组，每个号一条，没人取数就是空；gemini 是 Gemini API 预付余额的估算一条，没锚点是 null（老服务没有这个键），见 geminiChip()。
 // 芯片上显示周额度（只有 5 小时窗口时显示那个）；鼠标停上去看每个窗口的已用、重置时间、数据多久前的。
 const WARN_AT = 85;
+// 钉在顶栏、收起时也不收的额度（11/24 Khalil：自己常看的号常驻，别的偶尔看），按额度条目的 id。先看本机 localStorage 的 ccb_limpin（数组）→ 服务给的 limits.pin
+// （config.json 的 limitsPin；没写时服务按「没标账号的那条 + defaultAccount 那条」算）→ 老服务没有 pin 时只钉没标账号的 Claude 那条。界面不写死任何账号 id（11/24 ng 车）。
+// 还没有任何 Claude 数据时那格灰的「Claude —」一直钉着：它的提示写怎么接入。
+const LIM_PIN_LOCAL = (() => { const v = store('ccb_limpin'); return Array.isArray(v) ? v : null; })();
+function limPins(lm) { return LIM_PIN_LOCAL || (lm && Array.isArray(lm.pin) ? lm.pin : null); }
+function pinned(it, pins) { return it.id === 'claude:none' || (pins ? pins.includes(it.id) : it.provider === 'claude' && !it.account); }
 // 数据超过 1 小时没更新（这个号最近没有窗口回过话），整格变灰、写上「N 小时前」：旧数字不当成现在的，也不再亮琥珀（额度用完以后，顶栏还写着前一天的旧数）
 const STALE_MS = 3600000;
 function agoShort(t, now) {
@@ -1138,7 +1153,7 @@ function resetAt(w) {          // 5 小时窗口当天就重置，只写钟点�
   if (w.key === 'five_hour') return hm(w.resetsAt);
   return new Date(w.resetsAt).toLocaleString(LANG === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 }
-function limitChip(it, now, many) {
+function limitChip(it, now, many, pins) {
   const codex = it.provider === 'codex', ws = it.windows || [];
   const main = ws.find((w) => w.key === 'week') || ws[0];
   const wk = ws.find((w) => w.key === 'week');
@@ -1158,7 +1173,7 @@ function limitChip(it, now, many) {
   const tip = lines.join('\n');
   const warn = !stale && ws.some((w) => w.used >= WARN_AT);
   const pc = main ? (main.key === 'five_hour' && !wk ? '5h ' : '') + Math.min(100, Math.round(main.used)) + '%' : '—';
-  return '<span class="lq' + (warn ? ' warn' : '') + (stale ? ' stale' : '') + (main ? '' : ' none') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="' + esc(it.id) + '" tabindex="0"><span>' + base + (tag ? '<span class="tg">' + esc(tag) + '</span>' : '') + '</span>'
+  return '<span class="lq' + (warn ? ' warn' : '') + (stale ? ' stale' : '') + (main ? '' : ' none') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="' + esc(it.id) + '"' + (pinned(it, pins) ? ' data-pin' : '') + ' tabindex="0"><span>' + base + (tag ? '<span class="tg">' + esc(tag) + '</span>' : '') + '</span>'
     + (main ? '<span class="mtr" aria-hidden="true"><i style="width:' + Math.min(100, main.used).toFixed(1) + '%"></i></span>' : '') + '<span class="pc">' + pc + '</span>' + (stale ? '<span class="ago">' + agoShort(it.at, now) + '</span>' : '') + '</span>';
 }
 // Gemini API 的预付余额（11/23）：不是周额度，是钱。服务端 limits.mjs 拿他在 AI Studio 读的一次余额（锚点）减掉账本里记到的花费，所以只是估算、而且是上限：
@@ -1169,7 +1184,7 @@ function money(v, cur) {
   try { return new Intl.NumberFormat(LANG === 'en' ? 'en-US' : 'zh-CN', { style: 'currency', currency: cur, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v); }
   catch { return cur + ' ' + v.toFixed(2); }
 }
-function geminiChip(it, now) {
+function geminiChip(it, now, pins) {
   const b = it.balance || {}, cur = b.currency, en = LANG === 'en';
   const used = b.start > 0 ? Math.min(100, Math.max(0, (b.start - b.remaining) / b.start * 100)) : 100;
   const warn = used >= WARN_AT || !(b.remaining > 0);
@@ -1186,19 +1201,34 @@ function geminiChip(it, now) {
   if (!(b.remaining > 0)) lines.push(en ? 'By the ledger it is used up.' : '按账本算已经用完了。');
   if (old) lines.push(en ? 'This reading is from ' + agoShort(b.anchorAt, now) + ' and the error keeps growing. Read it again in AI Studio.' : '锚点是 ' + agoShort(b.anchorAt, now) + '读的，误差越攒越大，去 AI Studio 再读一次。');
   const tip = lines.join('\n');
-  return '<span class="lq gm' + (warn ? ' warn' : '') + (stale ? ' stale' : '') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="gemini" tabindex="0"><span>Gemini</span>'
+  return '<span class="lq gm' + (warn ? ' warn' : '') + (stale ? ' stale' : '') + '" title="' + esc(tip) + '" aria-label="' + esc(tip.replace(/\n/g, '. ')) + '" data-lq="gemini"' + (pinned(it, pins) ? ' data-pin' : '') + ' tabindex="0"><span>Gemini</span>'
     + '<span class="mtr" aria-hidden="true"><i style="width:' + used.toFixed(1) + '%"></i></span><span class="pc">≈' + money(b.remaining, cur) + '</span>'
     + (stale ? '<span class="ago">' + agoShort(b.anchorAt, now) + '</span>' : '') + '</span>';
+}
+let limOff = store('ccb_limoff') !== false;     // 额度那一排默认收起（11/24：状态栏比额度更常看；点「额度」展开后记成 false）
+function paintLimBtn(items, now, pins) {
+  const b = $('#limBtn'), el = $('#limits'); if (!b || !el) return;
+  b.hidden = !items.length;
+  el.classList.toggle('off', limOff);
+  b.setAttribute('aria-expanded', String(!limOff));
+  const tip = T(limOff ? '展开全部额度' : '只留钉住的'); b.title = tip; b.setAttribute('aria-label', tip);
+  b.querySelector('.lt').textContent = T('额度');
+  // 收起时：和 limitChip 同一条线（没过时、有窗口用到 WARN_AT），有就亮点，别让该留意的被一起收掉
+  const warn = limOff && items.some((it) => !pinned(it, pins) && it.windows && it.windows.length && !(it.at && now - it.at > STALE_MS) && it.windows.some((w) => w.used >= WARN_AT));
+  b.querySelector('.wd').hidden = !warn;
+  if (warn) b.title = tip + '\n' + T('有号的额度已用到 ' + WARN_AT + '% 以上');
 }
 function paintLimits(st) {
   const el = $('#limits'), lm = st.limits; if (!el) return;
   const claude = lm && lm.claude && lm.claude.length ? lm.claude : [{ id: 'claude:none', provider: 'claude', windows: [] }];
   const gm = lm && lm.gemini && lm.gemini.balance ? lm.gemini : null;      // 老服务没有这个键；没锚点是 null：都不画
   const items = lm ? [...claude, ...(lm.codex ? [lm.codex] : []), ...(gm ? [gm] : [])] : [];
-  const key = JSON.stringify(items) + '|' + LANG + '|' + Math.floor(st.now / 60000);      // 提示里有「几天几小时后」，每分钟重画一次；其余时候数据没变就不动 DOM
+  const pins = limPins(lm);
+  paintLimBtn(items, st.now, pins);
+  const key = JSON.stringify(items) + '|' + JSON.stringify(pins) + '|' + LANG + '|' + Math.floor(st.now / 60000);      // 提示里有「几天几小时后」，每分钟重画一次；其余时候数据没变就不动 DOM
   if (el.dataset.k === key) return; el.dataset.k = key;
   const many = claude.length > 1;
-  el.innerHTML = items.map((it) => it.provider === 'gemini' ? geminiChip(it, st.now) : limitChip(it, st.now, it.provider === 'claude' && many)).join('');
+  el.innerHTML = items.map((it) => it.provider === 'gemini' ? geminiChip(it, st.now, pins) : limitChip(it, st.now, it.provider === 'claude' && many, pins)).join('');
 }
 
 // ── 一个会话现在算什么状态；排在第几档 ──
@@ -2241,6 +2271,7 @@ async function loadArchive() {
       '<div class="arow drop"><div class="t"><b>' + esc(x.title) + '</b><span>' + esc(cut(trWhy(x.why) + (noteLine(x) || x.prompt ? ' · ' + (noteLine(x) || x.prompt) : ''), 110)) + '</span></div><span class="w num">' + when(x.at, now) + '</span></div>').join('') : '');
   $('#aNote').textContent = T('点「归档」：没留下东西的直接删（对话在暂存处放 ' + (r.keepDays || 30) + ' 天），其余停掉会话、对话留着，能恢复。');
 }
+$('#limBtn').addEventListener('click', () => { limOff = !limOff; store('ccb_limoff', limOff); if (last) paintLimits(last); });
 $('#archBtn').addEventListener('click', () => { loadArchive(); $('#archDlg').showModal(); });
 $('#updBtn').addEventListener('click', async () => {        // 下好了：服务打开 dmg；没下好（自动下载关着、还在下）：浏览器下载
   const u = updInfo; if (!u) return;

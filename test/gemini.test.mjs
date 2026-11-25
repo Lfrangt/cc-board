@@ -33,6 +33,7 @@ const GEM = ['gemini-4-neon', 'gemini-4-carbon', 'gemini-4-hydrogen'];
 // 假 claude：把收到的参数、环境、工作目录写进 $T_OUT.*，最后写 .done，再睡着（像一个在等输入的窗口）
 fs.writeFileSync(path.join(BIN, 'claude'), [
   '#!/bin/sh',
+  'case "$1" in --help) echo "  -n, --name <name>  Set a display name for this session"; exit 0;; esac',   // 服务第一次开 Claude 会话前问一次认不认 --name（11/24 返修 S2）：答认，不当成一次启动
   ': > "$T_OUT.claudeargv"',
   'for a in "$@"; do printf \'%s\\0\' "$a" >> "$T_OUT.claudeargv"; done',
   'printf \'%s|%s\' "${CLAUDE_CODE_OAUTH_TOKEN-unset}" "${CCBOARD_ACCOUNT-unset}" > "$T_OUT.env"',
@@ -142,14 +143,14 @@ try {
   ok(g1.r.body.ok && g1.r.body.gemini === 'gemini-4-neon' && g1.r.body.account === null, '选 Gemini 开窗口：应答带 gemini、没有账号', JSON.stringify(g1.r.body));
   ok(g1.started && g1.wrap && g1.wrap.MODEL === 'gemini-4-neon', '外壳脚本被跑了，GEMINI_MODEL 是选的那个', JSON.stringify(g1.wrap));
   ok(g1.wrap && g1.wrap.CLAUDE === path.join(BIN, 'claude') && g1.wrap.PATH1 === BIN, '脚本里 command -v claude 找得到（PATH 最前面是 claude 所在的文件夹）', g1.wrap && g1.wrap.CLAUDE + ' ' + g1.wrap.PATH1);
-  ok(g1.wrapArgv && g1.wrapArgv.length === 1 && g1.wrapArgv[0].startsWith('做个小工具\n\n<system-reminder>') && /不想被问/.test(g1.wrapArgv[0]), '交给脚本的只有一个参数：任务原话 + 找项目文件夹的说明', JSON.stringify(g1.wrapArgv && g1.wrapArgv.map((x) => x.slice(0, 30))));
-  ok(g1.claudeArgv && same(g1.claudeArgv.slice(0, 2), ['--model', 'gemini-4-neon']) && g1.claudeArgv[2] === (g1.wrapArgv || [])[0] && g1.claudeArgv.length === 3, '脚本 exec 出来的 claude 收到 --model gemini-4-neon 和同一句提示、没有别的参数（没有 --effort）', JSON.stringify(g1.claudeArgv && g1.claudeArgv.map((x) => x.slice(0, 30))));
+  ok(g1.wrapArgv && g1.wrapArgv.length === 3 && g1.wrapArgv[0] === '--name' && g1.wrapArgv[1] === g1.r.body.claudeName && /^home-[0-9a-f]{2}$/.test(g1.wrapArgv[1]) && g1.wrapArgv[2].startsWith('做个小工具\n\n<system-reminder>') && /不想被问/.test(g1.wrapArgv[2]), '交给脚本的是 --name <目录名-十六进制>（和应答的 claudeName 一样）和一个任务参数：任务原话 + 找项目文件夹的说明', JSON.stringify(g1.wrapArgv && g1.wrapArgv.map((x) => x.slice(0, 30))));
+  ok(g1.claudeArgv && same(g1.claudeArgv.slice(0, 4), ['--model', 'gemini-4-neon', '--name', g1.r.body.claudeName]) && g1.claudeArgv[4] === (g1.wrapArgv || [])[2] && g1.claudeArgv.length === 5, '脚本 exec 出来的 claude 收到 --model gemini-4-neon、--name 和同一句提示、没有别的参数（没有 --effort）', JSON.stringify(g1.claudeArgv && g1.claudeArgv.map((x) => x.slice(0, 30))));
   ok(g1.wrap && g1.wrap.TOKEN === 'unset' && g1.wrap.ACCT === 'unset' && g1.env === 'unset|unset', '默认号（good）没有包上来：Claude 的登录 token 不会跑进 Gemini 窗口', JSON.stringify([g1.wrap && [g1.wrap.TOKEN, g1.wrap.ACCT], g1.env]));
   ok(g1.wrap && g1.wrap.CODEMODE === 'unset', '没有 Code Mode 的环境变量', g1.wrap && g1.wrap.CODEMODE);
   ok(/gemini \S+ \S+ new gemini-4-neon/.test(A.log()), '服务日志记了一行 gemini … new gemini-4-neon');
 
   const g2 = await A.run('/api/new', { prompt: '', cwd: '~', provider: 'claude', model: 'gemini-4-hydrogen' });
-  ok(g2.r.body.ok && g2.wrap && g2.wrap.MODEL === 'gemini-4-hydrogen' && g2.wrap.ARGC === '0' && g2.claudeArgv && same(g2.claudeArgv, ['--model', 'gemini-4-hydrogen']), '空提示（⌘T 那种）：脚本没收到参数，claude 只收到 --model', JSON.stringify([g2.r.body, g2.wrap, g2.claudeArgv]));
+  ok(g2.r.body.ok && g2.wrap && g2.wrap.MODEL === 'gemini-4-hydrogen' && g2.wrap.ARGC === '2' && g2.claudeArgv && same(g2.claudeArgv, ['--model', 'gemini-4-hydrogen', '--name', g2.r.body.claudeName]) && /^home-[0-9a-f]{2}$/.test(g2.r.body.claudeName || '') && g2.r.body.claudeName !== g1.r.body.claudeName, '空提示（⌘T 那种）：脚本只收到 --name 一对，claude 只收到 --model 和 --name（名字和上一个窗口不同）', JSON.stringify([g2.r.body, g2.wrap, g2.claudeArgv]));
 
   const c1 = await A.run('/api/new', { prompt: '做个小工具', cwd: '~', provider: 'claude', model: 'opus', effort: 'low' });
   ok(c1.r.body.ok && c1.r.body.gemini === undefined && c1.wrap === null && c1.claudeArgv && same(c1.claudeArgv.slice(0, 4), ['--model', 'opus', '--effort', 'low']), 'Claude 的模型照旧：直接起 claude、不经外壳、带强度、应答没有 gemini', JSON.stringify([c1.r.body, c1.wrap, c1.claudeArgv && c1.claudeArgv.slice(0, 4)]));
@@ -168,17 +169,17 @@ try {
   // 提示是模型 / 别的窗口写的文字，要原样当一个参数：tmux 收的是 argv、不过 shell
   const evil = '$(touch ' + CANARY + ') `touch ' + CANARY + '` "q" \'s\' ; touch ' + CANARY + ' #\n--resume x';
   const g3 = await A.run('/api/new', { prompt: evil, cwd: '~', provider: 'claude', model: 'gemini-4-carbon' });
-  ok(g3.wrapArgv && g3.wrapArgv.length === 1 && g3.wrapArgv[0].startsWith(evil), '提示里的 $() 反引号 引号 分号 换行 --resume 原样是一个参数', JSON.stringify(g3.wrapArgv && g3.wrapArgv.map((x) => x.slice(0, 60))));
+  ok(g3.wrapArgv && g3.wrapArgv.length === 3 && g3.wrapArgv[0] === '--name' && g3.wrapArgv[2].startsWith(evil), '提示里的 $() 反引号 引号 分号 换行 --resume 原样是一个参数', JSON.stringify(g3.wrapArgv && g3.wrapArgv.map((x) => x.slice(0, 60))));
   ok(!fs.existsSync(CANARY), '没有任何一段被当命令执行（canary 文件不存在）');
 
   // 接回：当初是 Gemini 开的，接回还走外壳；Claude 的归档照旧
   const rg = await A.run('/api/unarchive', { sid: SID_GEM });
   ok(rg.r.body.ok && rg.r.body.resumed === true, 'Gemini 的归档项接回成功', JSON.stringify(rg.r.body));
-  ok(rg.wrap && rg.wrap.MODEL === 'gemini-4-neon' && same(rg.wrapArgv, ['--resume', SID_GEM]) && same(rg.claudeArgv, ['--model', 'gemini-4-neon', '--resume', SID_GEM]), '接回走外壳：GEMINI_MODEL 对、参数是 --resume <sid>、claude 收到 --model gemini-4-neon --resume <sid>', JSON.stringify([rg.wrap, rg.wrapArgv, rg.claudeArgv]));
+  ok(rg.wrap && rg.wrap.MODEL === 'gemini-4-neon' && /^work-[0-9a-f]{2}$/.test(rg.r.body.claudeName || '') && same(rg.wrapArgv, ['--name', rg.r.body.claudeName, '--resume', SID_GEM]) && same(rg.claudeArgv, ['--model', 'gemini-4-neon', '--name', rg.r.body.claudeName, '--resume', SID_GEM]), '接回走外壳：GEMINI_MODEL 对、参数是 --name <名字> --resume <sid>、claude 收到 --model gemini-4-neon --name <名字> --resume <sid>', JSON.stringify([rg.wrap, rg.wrapArgv, rg.claudeArgv]));
   ok(rg.wrap && rg.wrap.TOKEN === 'unset' && rg.wrap.ACCT === 'unset' && rg.env === 'unset|unset', '接回也不包默认号（Claude 的 token 不进 Gemini 窗口）', JSON.stringify([rg.wrap && [rg.wrap.TOKEN, rg.wrap.ACCT], rg.env]));
   ok(new RegExp('gemini \\S+ \\S+ resume ' + SID_GEM.slice(0, 8) + ' gemini-4-neon').test(A.log()), '日志记了 gemini … resume <sid 前 8 位> gemini-4-neon');
   const rc = await A.run('/api/unarchive', { sid: SID_CL });
-  ok(rc.r.body.ok && rc.wrap === null && same(rc.claudeArgv, ['--resume', SID_CL]) && rc.env === 'tok-good|good', 'Claude 的归档项接回照旧：直接 claude --resume、不经外壳、默认号照包', JSON.stringify([rc.r.body, rc.wrap, rc.claudeArgv, rc.env]));
+  ok(rc.r.body.ok && rc.wrap === null && /^work-[0-9a-f]{2}$/.test(rc.r.body.claudeName || '') && same(rc.claudeArgv, ['--name', rc.r.body.claudeName, '--resume', SID_CL]) && rc.env === 'tok-good|good', 'Claude 的归档项接回照旧：直接 claude --name <名字> --resume、不经外壳、默认号照包', JSON.stringify([rc.r.body, rc.wrap, rc.claudeArgv, rc.env]));
 
   // 归档：活的 Gemini 会话（记录里最后一条回复的模型是 gemini-4-neon）归档时要记下 gemini，不然以后接回就悄悄变成 Claude
   const sidG = mkLive(A, 'livegem', 'gemini-4-neon'), sidO = mkLive(A, 'liveopus', 'claude-opus-5-5');
@@ -200,7 +201,7 @@ try {
   const ub = await B.run('/api/unarchive', { sid: SID_GEM }, false);
   ok(ub.r.body.ok === false && /Gemini/.test(ub.r.body.error || '') && ub.claudeArgv === null && ub.wrap === null, 'Gemini 的归档项接回被拒、说清原因，不悄悄变成 Claude 的模型', JSON.stringify([ub.r.body, ub.claudeArgv]));
   const uc = await B.run('/api/unarchive', { sid: SID_CL });
-  ok(uc.r.body.ok && same(uc.claudeArgv, ['--resume', SID_CL]), '同一份服务里 Claude 的归档项照常接回', JSON.stringify([uc.r.body, uc.claudeArgv]));
+  ok(uc.r.body.ok && /^work-[0-9a-f]{2}$/.test(uc.r.body.claudeName || '') && same(uc.claudeArgv, ['--name', uc.r.body.claudeName, '--resume', SID_CL]), '同一份服务里 Claude 的归档项照常接回', JSON.stringify([uc.r.body, uc.claudeArgv]));
 
   // ═══ [C] gemini 指的脚本不在 ═══
   console.log('\n[C] gemini 指的脚本不在');

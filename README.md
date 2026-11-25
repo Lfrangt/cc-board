@@ -86,6 +86,7 @@ One optional file: `config.json` in the data directory (`~/Library/Application S
 | `tidyJudge` | `false` | With `autoTidy` on: before any of those rules archives a session, one `claude -p --model haiku` call (no tools, no MCP servers, none of your settings files) reads that delivery, once per delivery, and a *no action needed* delivery is checked after 4 hours of quiet instead of 24. Only *done* archives it. *Waiting* (the session still has its own follow-up: it is waiting on another session or a set time, or it scheduled something itself) keeps it, and that follow-up is remembered until a later delivery is judged done. *Yours* keeps it and turns a *no action needed* card into *needs follow-up*. If the call fails or the answer is unclear, nothing is archived and it asks again an hour later. Answers are saved to `judged.json` in the data folder, so a restart keeps them. |
 | `codex` | `false` | Experimental: also list and start Codex CLI sessions. Everything else in this README is about Claude Code. |
 | `accounts` | `[]` | Extra Claude subscriptions a new task can run on: `{ "id", "name" }`. `id` is letters, digits, `_ . -`, up to 40 characters. Each one needs a long-lived token from `claude setup-token`, stored in your Keychain under the service `ccboard-account-<id>` (see below). Listed accounts appear as an **Account** menu in the new-task dialog; **Default** is whoever Claude Code is signed in as. |
+| `limitsPin` | `null` | Which usage pills stay visible while the **Quota** button is folded: an array of pill ids, `claude:<account>` (as set with `CCBOARD_ACCOUNT`), `codex` or `gemini`, up to 16. Left out, cc-board keeps the unlabelled Claude pill (whoever Claude Code is signed in as) plus your `defaultAccount`. A malformed value is ignored with one line in the log. |
 | `updateCheck` | `true` | Only for the app installed from the public dmg. Once a day, ask `github.com/Lfrangt/cc-board/releases/latest` (no API, no usage data) whether a newer release exists; if so the header shows a button for it. `false` turns the check off. |
 | `autoUpdate` | `true` | With `updateCheck` on, also download the newer dmg in the background into `updates/` in the data directory and verify it against the release's `cc-board.dmg.sha256`. The header button then reads **Install X.Y.Z** and opens the dmg; you drag the app over as usual. `false` only shows the button, which opens the download in your browser. It never replaces the installed app by itself. |
 
@@ -107,6 +108,8 @@ Claude Code does not write its 5-hour and weekly usage anywhere on disk. It only
 ```json
 { "statusLine": { "type": "command", "command": "node \"$HOME/Library/Application Support/cc-board/app/statusline-tap.mjs\"" } }
 ```
+
+The pills sit behind a **Quota** button in the top bar. It starts folded, showing only the pinned pills (see `limitsPin`); click it to show all of them, click again to fold. This browser remembers your choice. While folded, an amber dot on the button means a hidden Claude or Codex pill has reached 85%.
 
 Pills appear after any session replies. If you run several Claude accounts, set `CCBOARD_ACCOUNT=<short name>` in the environment a session is started with and its pill is labelled with that name; without it, accounts are told apart by their weekly reset time. A window that has passed its reset time is dropped rather than shown stale.
 

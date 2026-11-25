@@ -10,6 +10,9 @@
  *        11/22 修一（rp-fix）加 7 个：rp-dir-home-parent（只拿掉「主目录的上层」）、rp-canon-case / rp-canon-firm（真身不收大小写 / firmlink 别名）、
  *        rp-link-target-evidence（链接指去的地方也算写到）、rp-no-normalize（不先规整）、rp-log-key（日志不遮钥匙）、rp-pdf-inline（PDF 不按附件发）。
  *        11/23 PR #8 收紧加 3 个：digest-en-anyline（英文标签哪一行都认）、digest-en-fence（不跳过代码块）、digest-en-link（[Review](网址) 也当标签）。
+ *        11/24 ng 车：name-*（[7n] 新窗口的名字）、rp-gal-*（[10] 图集的固定竞态）、name-help-*（S2 --help 探 --name）、rp-gal-no-cwd（S1）、limits-pin-*（limits.pin 没接进 /api/state、不看 limitsPin、不看 defaultAccount、limitsPin 写错连累整份 config）。
+ *        11/24 brief-v2 加 6 个 brief-*（/api/new 的派活单接线，[7g-2] 抓）：该拒的两个（不核 brief、拒了还开窗口）、该过的两个（不给 briefNew 档位、原 prompt 拼到前面）、不带的两个（brief: null 当成带了、应答一律带 brief）。
+ *        FIX-1（11/24 返修）再加 2 个：brief-prompt-not-passed（不把 prompt 递给 briefNew：第二张派活单、超长都漏过去）、brief-truthy（brief 是 "" / false / 0 当成没带、照开窗口）。
  *        同时跑的几路各用自己的端口段（M_PORT + 第几路 × 2000）和自己的临时目录（test/.tmp/mutants-XXXXXX），互不撞、互不删。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -192,6 +195,15 @@ const MUTANTS = {
   'bad-tier-opens-window': ["      if (!rt.ok) return reply(res, 200, rt);\n", ""],
   'route-not-in-reply':  ["return reply(res, 200, r.ok && rt.tier ? { ...r, route: { tier: rt.tier, model: rt.model, effort: rt.effort, why: rt.why } } : r);", "return reply(res, 200, r);"],
   'route-not-logged':    ["if (rt.tier) console.log(`route ${new Date().toISOString()}", "if (false) console.log(`route ${new Date().toISOString()}"],
+  // 派活单 brief 接进 /api/new（11/24 brief-v2）：七栏本身的改坏对照在 route.test.mjs --mutants，这里只改坏接线；[7g-2] 三种各两个
+  'brief-not-checked':   ["      if (withBrief) {\n        const bf = briefNew(body.brief, rt, prompt);", "      if (false) {\n        const bf = briefNew(body.brief, rt, prompt);"],
+  'brief-reject-opens':  ["problems=${bf.problems.length}`); return reply(res, 200, bf); }", "problems=${bf.problems.length}`); }"],
+  'brief-no-rt':         ["const bf = briefNew(body.brief, rt, prompt);", "const bf = briefNew(body.brief, undefined, prompt);"],
+  'brief-prompt-not-passed': ["const bf = briefNew(body.brief, rt, prompt);", "const bf = briefNew(body.brief, rt);"],   // FIX-1：不递 prompt，第二张派活单和超长都漏过去
+  'brief-prompt-first':  ["prompt = bf.text + (prompt.trim() ? '\\n\\n' + prompt.trim() : '');", "prompt = (prompt.trim() ? prompt.trim() + '\\n\\n' : '') + bf.text;"],
+  'brief-null-is-brief': ["const withBrief = body.brief != null;", "const withBrief = body.brief !== undefined;"],
+  'brief-truthy':        ["const withBrief = body.brief != null;", "const withBrief = !!body.brief;"],   // FIX-1：brief 是 "" / false / 0 就当没带、照开空窗口
+  'brief-flag-always':   ["if (r.ok && withBrief) r.brief = true;", "if (r.ok) r.brief = true;"],
   // 内置预览：第三项是要改坏的文件（不写就是 server.mjs）
   'preview-dotdirs':     ["if (parts.some((s) => !s || s.startsWith('.') ||", "if (parts.some((s) => !s || s === '..' ||", 'preview.mjs'],
   'preview-symlink-out': ["    if (!inside(it.root, real)) return null;", "", 'preview.mjs'],
@@ -303,7 +315,7 @@ const MUTANTS = {
   'org-gone-dept-lost':  ["out.push({ sid: GONE + pid, name: names.join(' '), title: '', dept,", "out.push({ sid: GONE + pid, name: names.join(' '), title: '', dept: '',"],
   // 不改脑子（P0-2，[9]）：起会话时往说明里塞东西、恢复时限工具、往主目录写 CLAUDE.md，都要变红
   'harness-append-prompt': ["    if (text) cl.push(text);", "    cl.push('--append-system-prompt', '你是 worker'); if (text) cl.push(text);"],
-  'harness-resume-tools':  ["[await findClaude(), '--resume', sid]", "[await findClaude(), '--disallowedTools', 'Agent', '--resume', sid]"],
+  'harness-resume-tools':  ["[await findClaude(), ...tail]", "[await findClaude(), '--disallowedTools', 'Agent', ...tail]"],
   'harness-writes-claude-md': ["  launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider });", "  launches.set(name, { at: Date.now(), prompt: shown, cwd: dir, provider }); try { fs.appendFileSync(path.join(HOME, 'CLAUDE.md'), '\\n- 每轮写状态行\\n'); } catch {}"],
   // 这一轮改了哪些文件 / 撞车提示（[1d]）：他本人开新的一轮不清单子、一轮做到一半别的窗口发来消息也清、撞车不看时间、只认 .git 是文件夹的仓库（worktree 认不出）
   'wrote-human-no-clear': ["      newTurnWrites(st, off);                                     // 他本人开了新的一轮", "      // 他本人开了新的一轮"],
@@ -473,6 +485,26 @@ const MUTANTS = {
   // 11/22 检查新版本的接线（[8u]）：不看 config 的 updateCheck（update.mjs 的 tick 自己也看 conf.check，所以 [8u] 另核日志和 /api/update/check）；不看有没有 .bundle-version
   'update-check-gate-dropped': ["const updater = UPDATE_CUR && CONFIG.update.check && !READONLY", "const updater = UPDATE_CUR && !READONLY"],
   'update-stamp-gate-dropped': ["const updater = UPDATE_CUR && CONFIG.update.check", "const updater = CONFIG.update.check"],
+  // 11/24 新窗口的名字（[7n]）：不看 nameHold（两个同时进来的 /api/new 都拿到同一个空名字）；死掉的登记也算有人在用（256 个里空的那个被占，退到 4 位）
+  'name-no-hold':        ["  const used = liveNames(); for (const k of nameHold.keys()) used.add(k);", "  const used = liveNames();"],
+  'name-dead-counts':    ["Number.isInteger(d.pid) && alive(d.pid)) out.add(normName(d.name));", "Number.isInteger(d.pid)) out.add(normName(d.name));"],
+  // 11/24 远程图集列完再绑钥匙（[10] 的固定竞态 A / B）：绑钥匙按完整路径打开（chdir 了却不按相对路径，路径一换就绑到别处）；不核钉住的「.」是不是核过的那个文件夹；
+  // 只调顺序（还按路径逐张 lstat，把核文件夹挪到后面：test/known-red 留下的那句「只调顺序不算修好」）
+  'rp-gal-bind-path':    ["fd = fs.openSync(m.name, fs.constants.O_RDONLY", "fd = fs.openSync(path.join(dir, m.name), fs.constants.O_RDONLY", 'server.mjs'],
+  'rp-gal-no-pin':       ["    if (idOf('.') !== id) return null;\n", "", 'server.mjs'],
+  // 11/24 返修：不看 chdir 以后内核给的 cwd（[10] 的 P：rpResolve 查的几次之间换上一层）。rp-gal-no-pin 有了 cwd 这一道以后 A 也拦得住，靠 R（同一路径换成另一个真文件夹）抓
+  'rp-gal-no-cwd':       ["    if (here !== dir) return null;", "", 'server.mjs'],
+  // 11/24 返修 S2（[7n] 末尾）：--help 里有没有 --name 不看（不认也照传）；从来不传；不缓存（每次开窗口都问）；不认 --name 时接回丢了 --resume
+  'name-help-ignored':   [String.raw`const has = r.ok && /(^|[\s,])--name\b/m.test(r.out);`, 'const has = r.ok;', 'server.mjs'],
+  'name-help-never':     [String.raw`const has = r.ok && /(^|[\s,])--name\b/m.test(r.out);`, 'const has = false;', 'server.mjs'],
+  'name-help-no-cache':  ['  if (nameFlag.bin === bin) return nameFlag.has;\n', '', 'server.mjs'],
+  'name-resume-no-fallback': [": ['--resume', sid];   // --name 在 --resume 前面", ": [sid];   // --name 在 --resume 前面", 'server.mjs'],
+  // 11/24 收起时钉住哪几条（[7f] 末尾、[8c] 的 server8c3 / server8c4）：limits.pin 不进 /api/state；不看 config 的 limitsPin；默认不算 defaultAccount 那条；limitsPin 写错整份 config 不用
+  'limits-pin-unwired':  [', pin: limitPins(claude, { pin: CONFIG.limitsPin, defaultAccount: CONFIG.defaultAccount }) };', ' };'],
+  'limits-pin-config-dropped': ['pin: CONFIG.limitsPin, defaultAccount', 'pin: null, defaultAccount'],
+  'limits-pin-default-dropped': [', defaultAccount: CONFIG.defaultAccount }) }', ' }) }'],
+  'limits-pin-bad-kills-config': ['if (lp.error) console.log(', "if (lp.error) throw new Error('limitsPin'); if (lp.error) console.log("],
+  'rp-gal-order-only':   ["  if (idOf(dir) !== id) return { why: 'missing' };                    // 列的时候文件夹被换掉了：不给\n  const media = rpBind(dir, id, g.media);", "  const media = []; for (const m of g.media) { let s; try { s = fs.lstatSync(m.real, { bigint: true }); } catch { continue; } if (s.isFile()) media.push({ ...m, id: s.dev + ':' + s.ino }); }\n  if (idOf(dir) !== id) return { why: 'missing' };", 'server.mjs'],
 };
 for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 // 这一次运行自己的临时目录（11/22 修：原来几份同时跑共用 test/.tmp/mutants，先跑完的一份把别人的改坏版删了）。原文核对过了才建，核不过不留空目录
