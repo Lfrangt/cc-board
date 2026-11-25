@@ -6,7 +6,7 @@
  *          依赖 node:http2 发 APNs；remote.mjs 生成载荷和 JWT；生产在前台推送前异步读 HIDIdleTime，试验场只读空闲夹具文件；首次发送时异步读 cc-board-apns 钥匙串项，试验场改读显式密钥文件。
  * [OUTPUT]: APNs 设备登记与通知合批推送；前台空闲两分钟时额外放行手机推送，Mac 横幅门不变；密钥只在首次发送时异步读，试验场只连显式假地址。
  *           对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state（带 peek=1 只看不取提示；org = 架构视图的上下级）、turns、diff（只读这一轮逐笔补丁）、send、new、archive、unarchive、delete、ack、answer、open、preview…）；
- *           另起 preview.mjs 的只读预览端口（默认 4747 + 1000），/api/preview 给正文里的路径发预览网址和类型（网页、PDF、图、音视频、文本；多半是图 / 视频的文件夹、或 body.paths 里的一批图回 gallery）
+ *           另起 preview.mjs 的只读预览端口（默认 4747 + 1000），/api/preview 给正文里的路径发预览网址和类型（网页、PDF、图、音视频、文本；多半是图 / 视频的文件夹、或 body.paths 里的一批图回 gallery；第一层有 2 个以上网页的文件夹、或 body.paths + canvas: true 的一批网页回 canvas）
  * [POS]: 总控台唯一的服务进程，由 app/main.swift 启动和重启，ui.html 只通过 /api 和它说话。
  *        它把每个会话压成四样：你问了什么 / 它在干嘛 / 它交付了什么 / 它为什么停了（alertOf 是「要不要你跟进」的唯一判断处）。
  *        读记录时把每次工具调用交给 noteTool 记证据，每轮用 classify 给会话、启动中、进程退出的卡片都标上 project。
@@ -57,7 +57,7 @@ import { noteTool, classify, pinnable, useRules } from './projects.mjs';
 import { judgeArgs, judgeInput, parseJudge, failReason, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
 import { routeNew, briefNew } from './route.mjs';                               // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数；带了派活单（brief）的，七栏核过再拼进 prompt
 import { parseAccounts, parseFallback, pickDefault, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
-import { startPreview, kindOf, mimeOf, readText, serveFile, listGallery } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
+import { startPreview, kindOf, mimeOf, readText, serveFile, listGallery, canon, isTop, homeIds, idOf } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 import { buildOrg } from './org.mjs';
 import { pathsIn, RP_TTL, RP_KEEP, rpKeyOk, hiddenPath, parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
 import { parseUpdateConf, createUpdater } from './update.mjs';               // 公开安装包检查新版本、自动下载（只连 github.com，config 的 updateCheck / autoUpdate）
@@ -1992,22 +1992,14 @@ function findSession(sid) { return sessions.find((s) => s.sid === sid); }
 // 他本人说的话不算证据（远程能 /api/send，自己打一句路径就能自证）。手机自己编的路径、../、链接指到外面，真身都对不上。
 // 11/22 修（1b 验收）：一个路径只解析一次（rpResolve），之后每道判断、发出去的都是这同一份真身，中间不再按原来的写法解析第二次。
 // 真身收成一种写法：大小写不同的写法（/Users/Khalil）、firmlink 别名（/System/Volumes/Data/Users/khalil）都收成同一个；「是不是主目录 / 它的上层」按 dev+ino 比，不按字面
-const FIRM = '/System/Volumes/Data';               // macOS 的数据卷：/Users、/private、/Volumes 这些在它下面另有一份同一个东西的写法（firmlink）
-const idOf = (p) => { try { const s = fs.statSync(p, { bigint: true }); return s.dev + ':' + s.ino; } catch { return ''; } };
-function rpCanon(p) {                              // 真身：realpathSync.native 收掉链接和大小写；firmlink 别名它收不掉，去掉前缀后是同一个东西（dev+ino）就用去掉前缀的那个。不在就抛错
-  const r = fs.realpathSync.native(p);
-  if (!r.startsWith(FIRM + '/')) return r;
-  const id = idOf(r);
-  try { const t = fs.realpathSync.native(r.slice(FIRM.length)); if (id && idOf(t) === id) return t; } catch {}
-  return r;
-}
-const HOME_REAL = (() => { try { return rpCanon(HOME); } catch { return HOME; } })();
-const rpHomeIds = () => { const ids = []; for (let a = HOME_REAL; ; a = path.dirname(a)) { ids.push(idOf(a)); if (a === path.dirname(a)) return ids; } };   // [主目录, 上一级, …, /] 的 dev+ino，每次现查
+// 「真身怎么取」（canon）、「哪些算顶层」（isTop）、「主目录和上层」（homeIds，按 dev+ino）都在 preview.mjs，本机预览和这里共用一份（11/25 起；之前这里一份、preview.mjs 一份，
+// 本机那份没跟上 11/22 的修）。HOME_REAL 也传给 startPreview 当本机预览的主目录
+const HOME_REAL = (() => { try { return canon(HOME); } catch { return HOME; } })();
 // 一个完整路径 → 只解析这一次。先按字面规整（path.resolve：结尾的 /.、/..、重复的 / 都收掉），「它本身是不是链接」看的是规整后的这一级；
 // 再取真身。link：这一级本身是链接（lstat 到的和真身不是同一个东西）。取不到真身回 { n }
 function rpResolve(p) {
   const n = path.resolve(p); let ls, real, st;
-  try { ls = fs.lstatSync(n, { bigint: true }); real = rpCanon(n); st = fs.statSync(real, { bigint: true }); } catch { return { n }; }
+  try { ls = fs.lstatSync(n, { bigint: true }); real = canon(n); st = fs.statSync(real, { bigint: true }); } catch { return { n }; }
   return { n, real, st, id: st.dev + ':' + st.ino, link: ls.isSymbolicLink() || ls.dev !== st.dev || ls.ino !== st.ino };
 }
 const RP_MS = (SANDBOX && Number(process.env.CCBOARD_RP_TTL_MS)) || RP_TTL;   // 钥匙多久作废；试验场可调短，线上不认
@@ -2044,11 +2036,10 @@ function rpFile(raw, ev) {
 // 每张图的钥匙绑在真放在这个文件夹里的那个文件上（rpBind，11/24 ng 车修）：原来列完再逐张按路径 lstat，中间本机另一个进程把文件夹换成指到外面的链接，
 // 钥匙就绑到外面那张图（11/22 留的已知会红用例 preview-gallery-race）；只把核文件夹挪到 lstat 后面不算修好（换过去、核之前再换回来照样过）
 function rpGallery(dir, id) {
-  const home = rpHomeIds();
+  const home = homeIds(HOME_REAL);
   if (id === home[0]) return { why: 'shallow' };                      // 主目录本身（按 dev+ino 比：/Users/Khalil、firmlink 别名都认得出，11/22 修）
   if (home.slice(1).includes(id)) return { why: 'shallow' };          // 主目录的上层
-  const top = dir === FIRM ? '/' : dir.startsWith(FIRM + '/') ? dir.slice(FIRM.length) : dir;   // 数据卷下没有短写法的，按去掉前缀算层数（/System/Volumes/Data/mnt 也是顶层）
-  if (top.split(path.sep).length <= (/^\/(private|Volumes)\//.test(top) ? 3 : 2)) return { why: 'shallow' };   // 顶层（/tmp 的真身是 /private/tmp，外接盘根是 /Volumes/<盘>）
+  if (isTop(dir)) return { why: 'shallow' };                          // 顶层（/tmp 的真身是 /private/tmp，外接盘根是 /Volumes/<盘>）：和本机预览同一个 isTop
   const g = listGallery(dir, { direct: true });
   if (g.error) return { why: g.error === 'missing' ? 'missing' : 'not-gallery' };
   if (idOf(dir) !== id) return { why: 'missing' };                    // 列的时候文件夹被换掉了：不给
@@ -3794,13 +3785,15 @@ const handle = async (req, res, via) => {
       if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
       if (body.paths !== undefined) {               // 一条交付里写了好几个图片路径：合成一个图集（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」）
         if (!Array.isArray(body.paths)) return reply(res, 200, { ok: false, error: '不是路径列表' });
-        const many = preview.registerMany(body.paths.slice(0, 400).map((x) => localPath(x).p).filter(Boolean));     // 不是完整路径的直接丢掉
-        if (many.ok) console.log(`preview ${new Date().toISOString()} gallery ${many.items.length} 个文件（${new Set(many.items.map((i) => i.dir)).size} 个文件夹）`);
-        return reply(res, 200, many.ok ? many : { ok: false, reason: many.error, error: many.error === 'not-ready' ? '预览还没准备好，过一秒再点' : '这些图都打不开了' });
+        const list = body.paths.slice(0, 400).map((x) => localPath(x).p).filter(Boolean);                       // 不是完整路径的直接丢掉
+        const cv = body.canvas === true;           // 好几个网页路径（界面的「画布 · N 个」、vN.html 的「并排看全部版本」）：摆成一张画布（11/24 Khalil 批）
+        const many = cv ? preview.registerCanvas(list) : preview.registerMany(list);
+        if (many.ok) console.log(`preview ${new Date().toISOString()} ${many.kind} ${many.items.length} 个文件（${new Set(many.items.map((i) => i.dir)).size} 个文件夹${many.otherDirs ? `，别的文件夹另有 ${many.otherDirs} 个没摆` : ''}）`);
+        return reply(res, 200, many.ok ? many : { ok: false, reason: many.error, error: many.error === 'not-ready' ? '预览还没准备好，过一秒再点' : cv ? (many.split ? '这些网页不在同一个文件夹，画布只摆同一个文件夹里的' : '这些网页凑不齐两个能打开的') : '这些图都打不开了' });
       }
       const { p, error } = localPath(body.path); if (error) return reply(res, 200, { ok: false, error });
       const r = preview.register(p);
-      if (r.ok) console.log(r.kind === 'gallery' ? `preview ${new Date().toISOString()} gallery ${r.dir} ${r.items.length}/${r.total}` : `preview ${new Date().toISOString()} ${r.kind} ${r.dir}/${r.name}`);
+      if (r.ok) console.log(r.kind === 'gallery' || r.kind === 'canvas' ? `preview ${new Date().toISOString()} ${r.kind} ${r.dir} ${r.items.length}/${r.total}` : `preview ${new Date().toISOString()} ${r.kind} ${r.dir}/${r.name}`);
       return reply(res, 200, r.ok ? r : { ok: false, reason: r.error, error: r.error === 'missing' ? '这个文件不在了：' + p : r.error === 'not-ready' ? '预览还没准备好，过一秒再点' : '这个文件不能在这里预览' });   // reason 不是 not-ready 时界面改走 /api/open（no-preview：文件夹、Word 这类；missing：由 /api/open 报同一句错）
     }
     if (u.pathname === '/api/remote/preview') {     // 手机远程的预览（C1）：只给这个会话对话里出现过的文件，见 rpEvidence / rpFile
@@ -3873,7 +3866,7 @@ const handle = async (req, res, via) => {
 const server = http.createServer((req, res) => handle(req, res, 'local'));
 
 server.on('error', (e) => { console.error('listen', e.message); process.exit(1); });
-const preview = startPreview({ port: PREVIEW_PORT, home: HOME, log: (m) => console.log(`preview ${new Date().toISOString()} ${m}`) });
+const preview = startPreview({ port: PREVIEW_PORT, home: HOME_REAL, log: (m) => console.log(`preview ${new Date().toISOString()} ${m}`) });
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`cc-board ${new Date().toISOString()} http://127.0.0.1:${PORT}/?k=${TOKEN} pid=${process.pid}`);
   if (REMOTE.on && REMOTE_PORT_BAD) { remoteDown = 'bad port'; remoteLog(`listen 远程端口写错（${REMOTE_PORT_RAW.slice(0, 20)}），不听，手机连不上`); }

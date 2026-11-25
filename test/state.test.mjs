@@ -1,7 +1,7 @@
 /**
  * [INPUT]: [4p] 用 node:http2 起本机假 APNs，以独立 P-256 公钥验签；用 CCBOARD_IDLE_FILE 切换空闲值。依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
  * [OUTPUT]: 逐项打印 ok / FAIL，[4p] 输出假 APNs 接线、空闲放行与日志限流、墙钟；退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
- * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口：网页、PDF、图、音视频、文本，含 Esc 转发脚本）/ 「归档」自己定删还是留；
+ * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口：网页、PDF、图、音视频、文本，含 Esc 转发脚本；图集；画布：listCanvas 的规则、paths + canvas、vN.html 的 versions）/ 「归档」自己定删还是留；
  *        另测英文摘要状态标签（`--ui` 不放；英文标签只认代码块外的最后一个非空行：正文中间的、代码块里的、[Review](…) 链接都不算）。
  *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
  *        架构视图（谁归谁管）：在现有会话上补关系（别的窗口发来的消息、spawn.json、点名总管的文件；`--ui` 也有，卡片不变），再加 6 个专测认发信人的会话（`--ui` 不放）；
@@ -744,6 +744,151 @@ try {
   const mBad = await fetch('http://127.0.0.1:' + PORT + '/api/preview', { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://127.0.0.1:' + (PORT + 1000) }, body: JSON.stringify({ paths: [path.join(GD, 'shot1.png')] }) });
   ok(mBad.status === 403, 'gallery: paths 这条路也只接受总控台自己的页面（预览页的 Origin 调不了）', String(mBad.status));
   ok(/preview \S+ gallery .*截图集 5\/5/.test(log()) && /preview \S+ gallery 3 个文件（2 个文件夹）/.test(log()) && /preview \S+ gallery .*many 200\/205/.test(log()), 'gallery: 日志里记下图集（文件夹和张数、一批文件的个数）');
+  }
+
+  // 画布（11/24 定：默认摆成画布；网格版另放一个按钮）：
+  // 图集不成立、第一层网页过半（或有 2 个以上 vN.html）的文件夹 → canvas；{ paths, canvas: true } 的一批网页 → canvas，只摆同一个文件夹里最多的那组；
+  // 预览一个 vN.html 时带上同一层的 versions。界面的断言在 ui-check 的 UI_ONLY=canvas
+  {
+  const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
+  const mk = (dir, files) => { fs.mkdirSync(dir, { recursive: true }); for (const [n, b] of Object.entries(files)) fs.writeFileSync(path.join(dir, n), b); return dir; };
+  const page = (t, head = '') => '<!doctype html><html><head><meta charset="utf-8"><title>' + t + '</title>' + head + '</head><body><p>' + t + '</p></body></html>';
+  const names = (r) => JSON.stringify((r.items || []).map((i) => i.name));
+  const CD = mk(path.join(FH, 'Desktop', '画布'), {
+    'v10.html': page('第十版'), 'v2.html': page('第二版', '<meta content="改了配色" name="description">'),
+    'v1.html': page('第一版 &amp; 起点&#8212;', '<meta name="description" content="最早那版"><meta name="ccb:frame" content="phone">'),
+    'ios-card.htm': page('手机卡片'), 'wide-phone.html': page('宽屏', "<meta name='ccb:frame' content='browser'>"),
+    '.draft.html': page('草稿'), 'notes.md': '# x', 'logo.png': PNG,
+  });
+  fs.mkdirSync(path.join(CD, 'sub')); fs.writeFileSync(path.join(CD, 'sub', 'deep.html'), page('子文件夹'));
+  fs.writeFileSync(path.join(FH, 'out.html'), page('外面')); fs.symlinkSync(path.join(FH, 'out.html'), path.join(CD, 'leak.html'));   // 链到文件夹外面：不算
+  fs.symlinkSync(path.join(CD, 'v1.html'), path.join(CD, 'same.html'));                                                                // 链到文件夹里面：算
+  const c = await pv(CD);
+  ok(c.ok && c.kind === 'canvas' && c.name === '画布' && c.dir === fs.realpathSync(CD) && c.total === 6 && c.more === 0, 'canvas: 第一层 6 个网页、1 张图 → kind canvas，带文件夹名、真身路径、总数和 more', JSON.stringify({ ...c, items: undefined }));
+  ok(names(c) === JSON.stringify(['ios-card.htm', 'same.html', 'v1.html', 'v2.html', 'v10.html', 'wide-phone.html']), 'canvas: 按数字排（v2 在 v10 前面）；.htm 也算；点开头的、子文件夹里的、指到外面的符号链接不算，指到里面的算', names(c));
+  const ci = Object.fromEntries((c.items || []).map((i) => [i.name, i]));
+  ok(ci['v1.html'] && ci['v1.html'].title === '第一版 & 起点—' && ci['v1.html'].note === '最早那版' && ci['v2.html'].note === '改了配色' && ci['v10.html'].title === '第十版' && ci['v10.html'].note === '',
+    'canvas: 每页带 <title> 和 <meta name="description">（属性先后都认，&amp; 和数字实体解开），没写说明是空串', JSON.stringify(ci['v1.html'] && [ci['v1.html'].title, ci['v1.html'].note, ci['v2.html'].note]));
+  ok((c.items || []).map((i) => i.frame).join() === 'phone,phone,phone,browser,browser,browser', 'canvas: 框：写了 ccb:frame 听它的（wide-phone 写了 browser）；没写时文件名里有 ios / phone 当手机，其余当浏览器', (c.items || []).map((i) => i.frame).join());
+  const cBase = (c.items || [{ url: 'http://127.0.0.1:1/x/' }])[0].url.replace(/[^/]*$/, '');
+  const cGet = await Promise.all((c.items || []).map((i) => raw(i.url)));
+  ok(cGet.length === 6 && cGet.every((x) => x.code === 200 && /^text\/html/.test(x.h['content-type'] || '') && /preview-esc/.test(x.body)) && (c.items || []).every((i) => i.url.startsWith(cBase) && Number(new URL(i.url).port) === PORT + 1000 && i.dir === c.dir),
+    'canvas: 一个文件夹一把钥匙；每页的网址在预览端口上能取，HTML 都带着 Esc 转发脚本', cGet.map((x) => x.code).join(','));
+  ok([(await raw(cBase + 'leak.html')).code, (await raw(cBase + '.draft.html')).code].join() === '404,404', 'canvas: 钥匙不开指到外面的链接和点开头的网页', '');
+  // 什么样的文件夹才算画布
+  const many = mk(path.join(FH, 'Desktop', '画布-14'), Object.fromEntries(Array.from({ length: 14 }, (_, i) => ['p' + (i + 1) + '.html', page('第 ' + (i + 1) + ' 页')])));
+  const c14 = await pv(many);
+  ok(c14.ok && c14.kind === 'canvas' && (c14.items || []).length === 12 && c14.total === 14 && c14.more === 2 && c14.items[0].name === 'p1.html' && c14.items[1].name === 'p2.html' && c14.items[11].name === 'p12.html',
+    'canvas: 最多 12 个，按数字排的前 12 个（p1、p2、…、p12，不是 p1、p10、p11），多出来的写进 more', JSON.stringify([c14.total, c14.more, names(c14)]));
+  const BIG = 'x'.repeat(70 * 1024);
+  const cBig = await pv(mk(path.join(FH, 'Desktop', '画布-大'), { 'a-late.html': '<!doctype html><!--' + BIG + '--><title>太靠后</title><meta name="description" content="也太靠后">', 'b-early.html': '<!doctype html><title>开头就有</title><meta name="ccb:frame" content="phone"><body>' + BIG.repeat(3) + '</body>',
+    'c-60k.html': '<!doctype html><!--' + 'y'.repeat(60 * 1024) + '--><title>六十 K 处</title>' }));
+  const bi = Object.fromEntries((cBig.items || []).map((i) => [i.name, i]));
+  ok(cBig.ok && bi['a-late.html'] && bi['a-late.html'].title === '' && bi['a-late.html'].note === '' && bi['b-early.html'].title === '开头就有' && bi['b-early.html'].frame === 'phone',
+    'canvas: 每页只读开头 64 KiB：标题写在 70 KiB 以后的读不到（空串），开头就写了的 210 KiB 网页照样读到', JSON.stringify(cBig.items && cBig.items.map((i) => [i.name, i.title, i.frame])));
+  ok(bi['c-60k.html'] && bi['c-60k.html'].title === '六十 K 处', 'canvas: 标题在 60 KiB 处（64 KiB 以内）照样读到', JSON.stringify(bi['c-60k.html']));
+  const wPkg = mk(path.join(FH, 'Desktop', 'web-pkg'), { 'a.html': page('a'), 'b.html': page('b'), 'package.json': '{}' });
+  const wGit = mk(path.join(FH, 'Desktop', 'web-git'), { 'a.html': page('a'), 'b.html': page('b') }); fs.mkdirSync(path.join(wGit, '.git'));
+  const wWt = mk(path.join(FH, 'Desktop', 'web-wt'), { 'a.html': page('a'), 'b.html': page('b'), '.git': 'gitdir: /x' });     // worktree 里 .git 是个文件
+  const wOne = mk(path.join(FH, 'Desktop', 'web-one'), { 'a.html': page('a'), 'notes.md': 'x' });
+  // 主目录的上一级 ROOT：没有 .git、没有 package.json，网页叫 v1、v2（版本例外，比例拦不住），只有「主目录和上层不摊开」那一道拦得住（主目录 FH 自己有 .git，先被上面那条拦下）
+  mk(ROOT, { 'v1.html': page('上一级 一'), 'v2.html': page('上一级 二') });
+  const nope = [await pv(wPkg), await pv(wGit), await pv(wWt), await pv(wOne), await pv(FH), await pv(ROOT)];
+  ok(nope.every((r) => !r.ok && r.reason === 'no-preview'), 'canvas: 有 package.json、有 .git（文件夹或文件）的、只有 1 个网页的、主目录本身、主目录的上一级（第一层有 v1、v2、没有 .git）→ 都回 no-preview，照旧交给访达', JSON.stringify(nope.map((r) => r.kind || r.reason)));
+  // 图和网页混放：图集的规则成立时图集赢，不成立时才是画布
+  const mImg = await pv(mk(path.join(FH, 'Desktop', 'mix-img'), { '1.png': PNG, '2.png': PNG, '3.png': PNG, 'v1.html': page('a'), 'v2.html': page('b') }));   // v1、v2：画布的规矩（版本例外）也成立，才看得出先问的是图集
+  const mWeb = await pv(mk(path.join(FH, 'Desktop', 'mix-web'), { '1.png': PNG, '2.png': PNG, 'a.html': page('a'), 'b.html': page('b'), 'c.html': page('c') }));
+  ok(mImg.ok && mImg.kind === 'gallery' && mImg.items.length === 3 && mWeb.ok && mWeb.kind === 'canvas' && names(mWeb) === JSON.stringify(['a.html', 'b.html', 'c.html']),
+    'canvas: 3 张图 + v1、v2（图占 60%，画布的版本例外也成立）→ 图集先问、图集赢；2 张图 + 3 个网页（图占 40%、网页过半）→ 画布，画布里只有网页', JSON.stringify([mImg.kind, mWeb.kind, names(mWeb)]));
+  // 网页要占第一层文件（不算点开头的、不算文件夹）的一半以上；同一层有 2 个以上 vN.html 的是版本文件夹，不看比例（vN 的判断和 versionsOf 是同一个）
+  const S1 = (n, files) => mk(path.join(FH, 'Desktop', 's1-' + n), files);
+  const sCoss = S1('coss', { 'v1.html': page('一'), 'v2.html': page('二'), 'STATE.md': 'x', 'shot.sh': 'x', 'check.py': 'x', 'run.mjs': 'x' }); fs.mkdirSync(path.join(sCoss, 'shots')); fs.writeFileSync(path.join(sCoss, 'shots', '1.png'), PNG);
+  const sDesk = S1('desk', Object.fromEntries([...['a', 'b', 'c', 'd'].map((n) => [n + '.html', page(n)]), ...Array.from({ length: 8 }, (_, i) => ['s' + i + '.png', PNG]), ...Array.from({ length: 12 }, (_, i) => ['n' + i + '.md', 'x'])]));
+  const sCard = S1('card', { 'v1.html': page('一'), 'v2.html': page('二'), 'SPEC.md': 'x', 'STATE.md': 'x' });
+  const sHalf = S1('half', { 'a.html': page('a'), 'b.html': page('b'), 'x.md': 'x', 'y.md': 'x' });
+  const sLink = S1('vlink', { 'v1.html': page('一'), 'a.html': page('a'), 'SPEC.md': 'x', 'STATE.md': 'x', 'x.md': 'x' }); fs.symlinkSync(path.join(FH, 'out.html'), path.join(sLink, 'v2.html'));   // v2 指到外面：不算版本
+  const s1 = [await pv(sCoss), await pv(sDesk), await pv(sCard), await pv(sHalf), await pv(sLink)];
+  ok(s1[0].ok && s1[0].kind === 'canvas' && names(s1[0]) === JSON.stringify(['v1.html', 'v2.html']), 'canvas: 版本文件夹 v1、v2 + STATE.md + 3 个脚本（网页 2 / 6，没过半）→ 照样是画布', JSON.stringify(s1[0].kind || s1[0].reason));
+  ok(!s1[1].ok && s1[1].reason === 'no-preview', 'canvas: 4 个网页放在 24 个文件里、没有 vN（桌面那样）→ no-preview，照旧交给访达', JSON.stringify(s1[1].kind || s1[1].reason));
+  ok(s1[2].ok && s1[2].kind === 'canvas' && names(s1[2]) === JSON.stringify(['v1.html', 'v2.html']), 'canvas: v1、v2 + SPEC.md + STATE.md（正好一半，有 vN）→ 画布', JSON.stringify(s1[2].kind || s1[2].reason));
+  ok(!s1[3].ok && s1[3].reason === 'no-preview', 'canvas: a.html、b.html、x.md、y.md（正好一半，没有 vN）→ no-preview：要过半，一半不算', JSON.stringify(s1[3].kind || s1[3].reason));
+  ok(!s1[4].ok && s1[4].reason === 'no-preview', 'canvas: v2.html 指到文件夹外面时不算版本（和 versionsOf 同一个判断）：只剩 v1 一个版本，网页 2 / 6 没过半 → no-preview', JSON.stringify(s1[4].kind || s1[4].reason));
+  // 版本只认真身是网页的、按真身去重（versionsOf 共用）：v1、v2 链到 .txt 不算；v2 链到 v1 只算一个
+  const sTxt = S1('vtxt', { 'a.txt': 'x', 'b.txt': 'y', 'p.html': page('p'), 'q.html': page('q'), 'SPEC.md': 'x', 'STATE.md': 'x', 'x.md': 'x' });
+  fs.symlinkSync(path.join(sTxt, 'a.txt'), path.join(sTxt, 'v1.html')); fs.symlinkSync(path.join(sTxt, 'b.txt'), path.join(sTxt, 'v2.html'));
+  const sDup = S1('vdup', { 'v1.html': page('一'), 'a.html': page('a'), 'SPEC.md': 'x', 'STATE.md': 'x', 'x.md': 'x' }); fs.symlinkSync(path.join(sDup, 'v1.html'), path.join(sDup, 'v2.html'));
+  const r3 = [await pv(sTxt), await pv(sDup), await pv(path.join(sDup, 'v1.html'))];
+  ok(!r3[0].ok && r3[0].reason === 'no-preview', 'canvas: v1.html、v2.html 链到 .txt 不算版本（真身不是网页）：网页 2 / 9 没过半 → no-preview', JSON.stringify(r3[0].kind || r3[0].reason));
+  ok(!r3[1].ok && r3[1].reason === 'no-preview' && r3[2].ok && !('versions' in r3[2]), 'canvas: v2.html 链到 v1.html 只算一个版本（按真身去重）：文件夹不当版本文件夹（网页 3 / 6 没过半 → no-preview），预览 v1.html 也不带 versions', JSON.stringify([r3[1].kind || r3[1].reason, r3[2].versions]));
+  // 比例的分母只数第一层的文件：子文件夹、点开头的不算（3 个网页 + 2 个 .md，旁边一个子文件夹、一个 .DS_Store：分母是 5，3 / 5 过半；多数一个就是 3 / 6，正好一半，不算）
+  const sDen = S1('den', { 'a.html': page('a'), 'b.html': page('b'), 'c.html': page('c'), 'x.md': 'x', 'y.md': 'y', '.DS_Store': 'x' }); mk(path.join(sDen, 'sub'), { 'z.md': 'z' });
+  const rDen = await pv(sDen);
+  ok(rDen.ok && rDen.kind === 'canvas' && names(rDen) === JSON.stringify(['a.html', 'b.html', 'c.html']), 'canvas: 比例的分母不数子文件夹和点开头的文件：3 个网页、2 个 .md，旁边一个子文件夹、一个 .DS_Store → 3 / 5 过半，是画布', JSON.stringify(rDen.kind || rDen.reason));
+  // 标题：&constructor; 这种原型上的名字不查表；160 字按字符截，不切半个 emoji；文件名里 ios 只认整词
+  const cTit = await pv(mk(path.join(FH, 'Desktop', '画布-标题'), { 'a.html': page('a &constructor; &AMP; b'), 'b.html': page('b'.repeat(159) + '😀尾巴') }));
+  const ti = Object.fromEntries((cTit.items || []).map((i) => [i.name, i.title]));
+  ok(ti['a.html'] === 'a &constructor; & b' && ti['b.html'] === 'b'.repeat(159) + '😀', 'canvas: &constructor; 照原样留着（只认实体表自己的名字）；标题按字符截到 160 个，emoji 不切半', JSON.stringify([ti['a.html'], ti['b.html'] && Array.from(ti['b.html']).slice(-2)]));
+  const cIos = await pv(mk(path.join(FH, 'Desktop', '画布-ios'), { 'scenarios.html': page('s'), 'portfolios.html': page('p'), 'iOS-demo.html': page('i'), 'my_ios.html': page('m') }));
+  ok(names(cIos) === JSON.stringify(['iOS-demo.html', 'my_ios.html', 'portfolios.html', 'scenarios.html']) && (cIos.items || []).map((i) => i.frame).join() === 'phone,phone,browser,browser', 'canvas: 文件名里 ios 是整词才当手机（iOS-demo、my_ios），scenarios、portfolios 里夹着的不算', (cIos.items || []).map((i) => i.name + ':' + i.frame).join());
+  // 一条交付里写了好几个网页：{ paths, canvas: true }。按给的顺序；同一个文件只放一次；不在的、不是网页的、点开头的、文件夹跳过；最多 12 个
+  const pc = async (paths, canvas = true) => (await post('/api/preview', { paths, canvas })).body;
+  const k1 = await pc([path.join(CD, 'v2.html'), '~/Desktop/画布/v2.html', path.join(CD, 'v1.html'), path.join(CD, 'notes.md'), path.join(CD, '没有.html'), path.join(CD, '.draft.html'), path.join(CD, 'sub'), 'Desktop/x.html', path.join(FH, 'out.html')]);
+  ok(k1.ok && k1.kind === 'canvas' && names(k1) === JSON.stringify(['v2.html', 'v1.html']) && k1.total === 2 && k1.more === 0 && k1.otherDirs === 1 && k1.skipped === 4 && k1.items[1].title === '第一版 & 起点—' && k1.items[1].frame === 'phone',
+    'canvas: paths + canvas → 按正文里的顺序；~ 和完整路径写法算同一个；Markdown、不在的、点开头的、文件夹跳过（skipped 4）；每页一样带标题和框；别的文件夹的 out.html 不摆，记进 otherDirs', JSON.stringify({ n: names(k1), t: k1.total, o: k1.otherDirs, s: k1.skipped }));
+  const kg = await Promise.all((k1.items || []).map((i) => raw(i.url))), kKeys = new Set((k1.items || []).map((i) => i.url.split('/')[3]));
+  ok(kg.length === 2 && kg.every((x) => x.code === 200 && /preview-esc/.test(x.body)) && kKeys.size === 1 && (k1.items || []).every((i) => i.dir === fs.realpathSync(CD)),
+    'canvas: 一张画布 = 一个文件夹 = 一把钥匙：摆上的网页都在 CD、共用一把钥匙，都取得到、都带 Esc 转发脚本（另一个文件夹没发钥匙）', kg.map((x) => x.code).join(',') + ' 钥匙 ' + kKeys.size);
+  const TA = mk(path.join(FH, 'Desktop', 'tie-a'), { 'a1.html': page('a1'), 'a2.html': page('a2') }), TB2 = mk(path.join(FH, 'Desktop', 'tie-b'), { 'b1.html': page('b1'), 'b2.html': page('b2') });
+  const kTie = await pc([path.join(TB2, 'b1.html'), path.join(TA, 'a1.html'), path.join(TA, 'a2.html'), path.join(TB2, 'b2.html')]), kSplit = await pc([path.join(TA, 'a1.html'), path.join(TB2, 'b1.html')]);
+  ok(kTie.ok && names(kTie) === JSON.stringify(['b1.html', 'b2.html']) && kTie.otherDirs === 2 && kTie.total === 2, 'canvas: 两个文件夹一样多（各 2 个）→ 摆正文里先出现的那组（tie-b），另一组 2 个记进 otherDirs', JSON.stringify([names(kTie), kTie.otherDirs]));
+  ok(!kSplit.ok && kSplit.reason === 'no-preview' && kSplit.error === '这些网页不在同一个文件夹，画布只摆同一个文件夹里的', 'canvas: 2 个网页分在两个文件夹 → no-preview，说明是「不在同一个文件夹」', JSON.stringify(kSplit));
+  const kLate = await pc([path.join(TA, 'a1.html'), path.join(TB2, 'b1.html'), path.join(TB2, 'b2.html')]);
+  ok(kLate.ok && names(kLate) === JSON.stringify(['b1.html', 'b2.html']) && kLate.otherDirs === 1, 'canvas: 最多的那组排在后面（tie-a 1 个在前，tie-b 2 个在后）→ 摆 tie-b，不是先出现的那组', JSON.stringify([names(kLate), kLate.otherDirs, kLate.reason]));
+  // 页面在主目录里：给主目录的钥匙只开同一层（和单页一样），不往下钻
+  mk(FH, { 'hp-a.html': page('主目录 a'), 'hp-b.html': page('主目录 b') }); mk(path.join(FH, 'hp-sub'), { 'n.css': 'p{}' });
+  const kHome = await pc(['~/hp-a.html', '~/hp-b.html']), HB = ((kHome.items || [])[0] || { url: 'http://127.0.0.1:1/x/y' }).url.replace(/\/[^/]*$/, '');
+  const hGet = [(await raw(HB + '/hp-b.html')).code, (await raw(HB + '/hp-sub/n.css')).code];
+  ok(kHome.ok && names(kHome) === JSON.stringify(['hp-a.html', 'hp-b.html']) && hGet.join() === '200,404', 'canvas: 主目录里的两个网页照样摆；给主目录的钥匙只开同一层，子文件夹里的取不到', JSON.stringify(names(kHome)) + ' ' + hGet.join(','));
+  // 主目录换个写法（大小写不同、/System/Volumes/Data 的 firmlink 别名）：真身收成同一个（canon，和远程预览共用一份），钥匙照样只开同一层。
+  // 大小写那例靠 APFS 不分大小写（远程那几例也这样写）；这台机器没有 firmlink 那条路径时那例跳过，写在断言里
+  const SVD = '/System/Volumes/Data', FIRM_OK = fs.existsSync(SVD + FH), FHR = fs.realpathSync(FH);
+  const hAlt = [];
+  for (const [why, H] of [['大小写', FH.toUpperCase()], ...(FIRM_OK ? [['firmlink', SVD + FH]] : [])]) {
+    const a = await pv(path.join(H, 'hp-a.html')), AB = (a.url || 'http://127.0.0.1:1/x/y').replace(/\/[^/]*$/, '');
+    const g = [(await raw(AB + '/hp-b.html')).code, (await raw(AB + '/hp-sub/n.css')).code].join();
+    if (!(a.ok && a.dir === FHR && g === '200,404')) hAlt.push([why, a.dir, g]);
+  }
+  ok(hAlt.length === 0, 'preview: 主目录换个写法（大小写不同' + (FIRM_OK ? '、firmlink 别名' : '；这台机器没有 /System/Volumes/Data，别名没测') + '）的页：dir 收成真身，钥匙只开同一层，子文件夹取不到', JSON.stringify(hAlt));
+  const kAlt = await pc([path.join(CD, 'v1.html'), path.join(CD.toUpperCase(), 'v2.html'), ...(FIRM_OK ? [SVD + path.join(CD, 'v10.html')] : [])]);
+  ok(kAlt.ok && names(kAlt) === JSON.stringify(['v1.html', 'v2.html', ...(FIRM_OK ? ['v10.html'] : [])]) && kAlt.otherDirs === 0 && new Set((kAlt.items || []).map((i) => i.url.split('/')[3])).size === 1 && (kAlt.items || []).every((i) => i.dir === fs.realpathSync(CD)),
+    'canvas: 同一个文件夹换写法（大小写不同' + (FIRM_OK ? '、firmlink 别名' : '') + '）进一批网页 → 收成一组、一把钥匙，不拆成两组', JSON.stringify([names(kAlt), kAlt.otherDirs, kAlt.reason]));
+  const k14 = await pc(Array.from({ length: 14 }, (_, i) => path.join(many, 'p' + (14 - i) + '.html')));
+  const k0 = await pc([path.join(CD, 'v2.html'), path.join(CD, 'notes.md')]), kImg = await pc([path.join(CD, 'v2.html'), path.join(CD, 'v1.html')], false);
+  ok(k14.ok && (k14.items || []).length === 12 && k14.more === 2 && k14.items[0].name === 'p14.html' && !k0.ok && k0.reason === 'no-preview' && k0.error === '这些网页凑不齐两个能打开的' && !kImg.ok && kImg.reason === 'no-preview',
+    'canvas: paths 最多 12 个（按给的顺序取前 12 个，more 2）；只有 1 个网页 → no-preview；不带 canvas: true 的还是图集那条路（网页不进图集）', JSON.stringify([k14.more, k14.items && k14.items[0].name, k0, kImg.reason]));
+  // vN.html：同一层还有别的 vK.html 时带上 versions（界面顶栏的「并排看全部版本」）
+  const vv = await pv(path.join(CD, 'v2.html')), vo = await pv(path.join(CD, 'ios-card.htm'));
+  const vs1 = mk(path.join(FH, 'Desktop', 'ver-one'), { 'v1.html': page('只有一版'), 'v1-notes.html': page('不是版本') }); const v1only = await pv(path.join(vs1, 'v1.html'));
+  ok(vv.ok && vv.kind === 'page' && JSON.stringify(vv.versions) === JSON.stringify(['v1.html', 'v2.html', 'v10.html']) && vo.ok && !('versions' in vo) && v1only.ok && !('versions' in v1only),
+    'canvas: 预览 v2.html → versions 是同一层的 v1、v2、v10（按数字排）；不叫 vN 的、只有一版的不带', JSON.stringify([vv.versions, vo.versions, v1only.versions]));
+  const v14 = mk(path.join(FH, 'Desktop', 'ver-14'), Object.fromEntries(Array.from({ length: 14 }, (_, i) => ['v' + (i + 1) + '.html', page('第 ' + (i + 1) + ' 版')])));
+  const vv14 = await pv(path.join(v14, 'v3.html'));
+  ok(vv14.ok && JSON.stringify(vv14.versions) === JSON.stringify(Array.from({ length: 12 }, (_, i) => 'v' + (i + 3) + '.html')), 'canvas: 14 个版本时 versions 留最新的 12 个（v3…v14，丢掉最早的 v1、v2）', JSON.stringify(vv14.versions));
+  // 「哪些算顶层」是一个纯函数 isTop（本机预览和远程预览共用），只看字符串：外接盘根 /Volumes/<盘> 算（盘根上的一个页不能读整块盘），再往下一层不算。不在真 /Volumes 下建文件
+  const PVM = await import((await import('node:url')).pathToFileURL(path.join(path.dirname(SERVER), 'preview.mjs')).href);
+  const TOPS = [['/Volumes/T7', true], ['/Volumes/T7/x', false], ['/private/tmp', true], ['/private/tmp/x', false], ['/System/Volumes/Data/Volumes/T7', true], ['/System/Volumes/Data/private/tmp', true],
+    ['/System/Volumes/Data/Volumes/T7/x', false], ['/tmp', true], ['/Users', true], ['/', true], [fs.realpathSync(FH), false]];
+  const topBad = typeof PVM.isTop === 'function' ? TOPS.filter(([p, want]) => PVM.isTop(p) !== want) : TOPS;
+  ok(topBad.length === 0, 'preview: isTop（纯函数）：/Volumes/T7、/System/Volumes/Data/Volumes/T7、/private/tmp 是顶层，再往下一层（/Volumes/T7/x、/private/tmp/x）不是；/tmp、/Users、/ 是；假主目录不是', JSON.stringify(topBad));
+  // /tmp 的真身是 /private/tmp（3 段，isTop 认它是顶层）：/tmp 里直接放的页和主目录一样只开同一层。文件名带进程号，测完删掉
+  const TT = '/tmp/ccb-cv-' + process.pid, TTD = TT + '-d';
+  try {
+    fs.writeFileSync(TT + '-top.html', page('tmp 顶层')); fs.writeFileSync(TT + '-top.css', 'p{}'); mk(TTD, { 'n.css': 'p{}' });
+    const vT = await pv(TT + '-top.html'), TU = (vT.url || 'http://127.0.0.1:1/x/y').replace(/\/[^/]*$/, '');
+    const tGet = [(await raw(TU + '/' + path.basename(TT) + '-top.css')).code, (await raw(TU + '/' + path.basename(TTD) + '/n.css')).code];
+    ok(vT.ok && vT.dir === fs.realpathSync('/tmp') && tGet.join() === '200,404', 'preview: /tmp 里直接放的页（真身 /private/tmp）只开同一层，/tmp 下的子文件夹取不到', JSON.stringify([vT.dir, tGet]));
+  } finally { for (const p of [TT + '-top.html', TT + '-top.css']) fs.rmSync(p, { force: true }); fs.rmSync(TTD, { recursive: true, force: true }); }
+  ok(/preview \S+ canvas .*画布 6\/6/.test(log()) && /preview \S+ canvas 2 个文件（1 个文件夹，别的文件夹另有 1 个没摆）/.test(log()) && /preview \S+ canvas .*画布-14 12\/14/.test(log()), 'canvas: 日志里记下画布（文件夹和个数、一批网页的个数）');
   }
 
   console.log('\n[1b] 每个会话用的模型和强度：取主线上最近一条真回复，报错和子 agent 的不算（卡片右上角的胶囊读它）');

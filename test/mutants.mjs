@@ -13,6 +13,13 @@
  *        11/24 ng 车：name-*（[7n] 新窗口的名字）、rp-gal-*（[10] 图集的固定竞态）、name-help-*（S2 --help 探 --name）、rp-gal-no-cwd（S1）、limits-pin-*（limits.pin 没接进 /api/state、不看 limitsPin、不看 defaultAccount、limitsPin 写错连累整份 config）。
  *        11/24 brief-v2 加 6 个 brief-*（/api/new 的派活单接线，[7g-2] 抓）：该拒的两个（不核 brief、拒了还开窗口）、该过的两个（不给 briefNew 档位、原 prompt 拼到前面）、不带的两个（brief: null 当成带了、应答一律带 brief）。
  *        FIX-1（11/24 返修）再加 2 个：brief-prompt-not-passed（不把 prompt 递给 briefNew：第二张派活单、超长都漏过去）、brief-truthy（brief 是 "" / false / 0 当成没带、照开窗口）。
+ *        11/24 canvas 车加 14 个 canvas-*（内置预览的画布，[画布] 那一块抓）：上限 12、至少 2 个、数字排序、有 package.json / .git、指到外面的链接、点开头的、只读 64 KiB、
+ *        ccb:frame、文件夹先问图集、主目录不摊开、paths 去重和点开头的、vN.html 的 versions、server 不认 canvas: true。
+ *        11/25 画布第二轮再加 11 个 canvas-*：一批网页不分文件夹（拿到别的文件夹的钥匙）、分开时的说明、版本文件夹的比例例外、过半改成一半、/tmp 不去 /private、
+ *        主目录钥匙往下钻、versions 留最早的、只读 32 KiB、实体查到原型、按 UTF-16 截、ios 不认整词。
+ *        11/25 真身和顶层挪进 preview.mjs 共用（canon、isTop、homeIds）：rp-canon-case、rp-canon-firm、rp-dir-private-top 跟着挪到 preview.mjs（本机和远程一起红），
+ *        preview-deep-home、canvas-tmp-private 换了原文；再加 7 个 canvas-*：外接盘根不算顶层、register 绕过 canon、版本不看是不是网页、版本不去重、取第一组、
+ *        分母数子文件夹、分母数点开头的。
  *        同时跑的几路各用自己的端口段（M_PORT + 第几路 × 2000）和自己的临时目录（test/.tmp/mutants-XXXXXX），互不撞、互不删。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -208,7 +215,7 @@ const MUTANTS = {
   'preview-dotdirs':     ["if (parts.some((s) => !s || s.startsWith('.') ||", "if (parts.some((s) => !s || s === '..' ||", 'preview.mjs'],
   'preview-symlink-out': ["    if (!inside(it.root, real)) return null;", "", 'preview.mjs'],
   'preview-any-type':    ["const type = MIME[path.extname(real).slice(1).toLowerCase()];", "const type = MIME[path.extname(real).slice(1).toLowerCase()] || 'application/octet-stream';", 'preview.mjs'],
-  'preview-deep-home':   ["const isShallow = (root) => inside(root, home) ||", "const isShallow = (root) => false ||", 'preview.mjs'],
+  'preview-deep-home':   ["const isShallow = (root) => homeIds(home).includes(idOf(root)) ||", "const isShallow = (root) => false ||", 'preview.mjs'],   // 11/25 起主目录和上层按 dev+ino 比（homeIds），拿掉这一半
   // 图集：文件夹里列哪些文件、什么样的文件夹才算图集、一批文件怎么合
   'gallery-symlink-out': [": inside(dir, real))) media.push", ": true)) media.push", 'preview.mjs'],
   'gallery-dotfiles':    ["    if (name.startsWith('.')) continue;\n", "", 'preview.mjs'],
@@ -220,6 +227,39 @@ const MUTANTS = {
   'gallery-many-dup':    ["if (seen.has(real)) continue; seen.add(real);", "seen.add(real);", 'preview.mjs'],
   'gallery-many-hidden': ["if (!st.isFile() || !isMedia(kind) || name.startsWith('.')) {", "if (!st.isFile() || !isMedia(kind)) {", 'preview.mjs'],
   'gallery-many-nokey':  ["items.push({ name, kind, url: mediaUrl(claimDir(path.dirname(real)), name), dir: path.dirname(real) });", "items.push({ name, kind, url: mediaUrl(crypto.randomBytes(16).toString('hex'), name), dir: path.dirname(real) });", 'preview.mjs'],
+  // 画布（11/24 canvas 车）：listCanvas 的规则（SPEC「服务端」五条）、文件夹先问图集、paths + canvas、vN.html 的 versions。[画布] 那一块抓
+  'canvas-no-cap':       ['const CANVAS_MIN = 2, CANVAS_MAX = 12;', 'const CANVAS_MIN = 2, CANVAS_MAX = 100000;', 'preview.mjs'],
+  'canvas-min-one':      ['const CANVAS_MIN = 2, CANVAS_MAX = 12;', 'const CANVAS_MIN = 1, CANVAS_MAX = 12;', 'preview.mjs'],
+  'canvas-alpha-sort':   ["{ sensitivity: 'base', numeric: true }", "{ sensitivity: 'base' }", 'preview.mjs'],
+  'canvas-repo':         ["  if (names.includes('package.json') || names.includes('.git')) return { error: 'no-preview' };\n", '', 'preview.mjs'],
+  'canvas-symlink-out':  ['&& inside(dir, real)) pages.push', '&& true) pages.push', 'preview.mjs'],
+  'canvas-dotfiles':     ["    if (name[0] === '.') continue;", '    if (false) continue;', 'preview.mjs'],
+  'canvas-head-all':     ['const CANVAS_HEAD = 64 * 1024;', 'const CANVAS_HEAD = 1024 * 1024;', 'preview.mjs'],
+  'canvas-frame-ignored': ["frame: fr === 'phone' || fr === 'browser' ? fr : PHONE_NAME.test(name)", 'frame: false ? fr : PHONE_NAME.test(name)', 'preview.mjs'],
+  'canvas-before-gallery': ["const folder = (dir) => { const g = gallery(dir); return g.ok || g.error !== 'no-preview' ? g : canvas(dir); };", "const folder = (dir) => { const c = canvas(dir); return c.ok || c.error !== 'no-preview' ? c : gallery(dir); };", 'preview.mjs'],
+  'canvas-home':         ["    if (isShallow(dir)) return { ok: false, error: 'no-preview' };   // 主目录、/tmp 不摊开\n", '', 'preview.mjs'],
+  'canvas-many-dup':     ['      if (seen.has(real)) continue;                                  // 同一个文件只放一次\n', '', 'preview.mjs'],
+  'canvas-many-hidden':  ["|| !isPage(kindOf(path.extname(real).slice(1))) || name.startsWith('.')) { skipped++; continue; }", '|| !isPage(kindOf(path.extname(real).slice(1)))) { skipped++; continue; }', 'preview.mjs'],
+  'canvas-no-versions':  ['const vs = versionsOf(it.root, it.entry); if (vs) r.versions = vs;', 'const vs = null; if (vs) r.versions = vs;', 'preview.mjs'],
+  'canvas-flag-ignored': ['const cv = body.canvas === true;', 'const cv = false;'],
+  'canvas-one-dir':        ['let g = groups.get(dir); if (!g) groups.set(dir, (g = []));', 'let g = groups.get(\'\'); if (!g) groups.set(\'\', (g = []));', 'preview.mjs'],
+  'canvas-split-msg':      ['(many.split ? \'这些网页不在同一个文件夹', '(false ? \'这些网页不在同一个文件夹'],
+  'canvas-no-ver-exempt':  [' || versions >= CANVAS_MIN)) return', ')) return', 'preview.mjs'],
+  'canvas-half-eq':        ['pages.length * 2 > files ||', 'pages.length * 2 >= files ||', 'preview.mjs'],
+  'canvas-tmp-private':    ['(private|Volumes)', '(Volumes)', 'preview.mjs'],   // 11/25 起顶层是共用的 isTop：/private 下面不按 3 段算，/tmp 就不是顶层
+  'canvas-home-key-deep':  ['byId.set(id, { root, entry: \'\', shallow: isShallow(root) });', 'byId.set(id, { root, entry: \'\', shallow: false });', 'preview.mjs'],
+  'canvas-ver-oldest':     ['vs.slice(-CANVAS_MAX)', 'vs.slice(0, CANVAS_MAX)', 'preview.mjs'],
+  'canvas-head-small':     ['const CANVAS_HEAD = 64 * 1024;', 'const CANVAS_HEAD = 32 * 1024;', 'preview.mjs'],
+  'canvas-named-proto':    ['Object.hasOwn(NAMED, w.toLowerCase())', 'w.toLowerCase() in NAMED', 'preview.mjs'],
+  'canvas-cut-units':      ['Array.from(unent(String(t || \'\')).replace(/\\s+/g, \' \').trim()).slice(0, n).join(\'\')', 'unent(String(t || \'\')).replace(/\\s+/g, \' \').trim().slice(0, n)', 'preview.mjs'],
+  'canvas-ios-substr':     ['(?<![a-z])ios(?![a-z])', 'ios', 'preview.mjs'],
+  'canvas-top-volumes':    ['(private|Volumes)', '(private)', 'preview.mjs'],
+  'canvas-reg-js-realpath': ['    try { real = canon(file); st = fs.statSync(real); }', '    try { real = fs.realpathSync(file); st = fs.statSync(real); }', 'preview.mjs'],
+  'canvas-ver-any-kind':   ['inside(root, r) && isPage(kindOf(path.extname(r).slice(1))) &&', 'inside(root, r) &&', 'preview.mjs'],
+  'canvas-ver-no-dedupe':  ['&& !seen.has(r)) { seen.add(r); out.push(n); }', ') { seen.add(r); out.push(n); }', 'preview.mjs'],
+  'canvas-first-group':    ['for (const g of groups.values()) if (g.length > pick.length) pick = g;', 'for (const g of groups.values()) { pick = g; break; }', 'preview.mjs'],
+  'canvas-den-dirs':       ['    if (!st.isFile()) continue;\n    files++;\n    if (isPage(', '    files++;\n    if (!st.isFile()) continue;\n    if (isPage(', 'preview.mjs'],
+  'canvas-den-dots':       ['    if (name[0] === \'.\') continue;', '    if (name[0] === \'.\') { files++; continue; }', 'preview.mjs'],
   'preview-any-host':    ["if (req.headers.host !== '127.0.0.1:' + bound && req.headers.host !== 'localhost:' + bound) return nope(403);", "", 'preview.mjs'],
   'preview-no-range':    ["if (m && (m[1] || m[2])) {", "if (false) {", 'preview.mjs'],
   'preview-any-entry':   ["export const kindOf = (ext) => KIND_OF[String(ext).toLowerCase()] || null;", "export const kindOf = (ext) => KIND_OF[String(ext).toLowerCase()] || 'text';", 'preview.mjs'],
@@ -469,14 +509,14 @@ const MUTANTS = {
   'rp-ttl-ignored':        ["const RP_MS = (SANDBOX && Number(process.env.CCBOARD_RP_TTL_MS)) || RP_TTL;", "const RP_MS = RP_TTL;"],
   // C1.1 文件夹图集（11/21）
   'rp-dir-home':           ["  if (id === home[0]) return { why: 'shallow' };", "", 'server.mjs'],
-  'rp-dir-private-top':    ["(/^\\/(private|Volumes)\\//.test(top) ? 3 : 2)", "2", 'server.mjs'],
+  'rp-dir-private-top':    ["(/^\\/(private|Volumes)\\//.test(top) ? 3 : 2)", "2", 'preview.mjs'],   // 11/25 这一行挪进 preview.mjs 的 isTop（本机和远程共用）
   'rp-dir-links':          ["listGallery(dir, { direct: true })", "listGallery(dir)", 'server.mjs'],
   'rp-dir-parent-evidence':["if (x.real) (x.link ? linked : real).add(x.real); }", "if (x.real) { (x.link ? linked : real).add(x.real); real.add(path.dirname(x.real)); } }", 'server.mjs'],
   'rp-dir-no-log':         ["remoteLog(`rpreview ${rem.dev.id} ${sid8} ok folder ${items.length}`);", "", 'server.mjs'],
   // 11/22 修一（rp-fix，1b 验收的五处）：每道新的闸一个，各由 state.test [10] 里守它的那条抓
   'rp-dir-home-parent':    ["  if (home.slice(1).includes(id)) return { why: 'shallow' };", "", 'server.mjs'],                              // 只拿掉「主目录的上层」那一句（rp-dir-home 只拿掉主目录本身）
-  'rp-canon-case':         ["  const r = fs.realpathSync.native(p);", "  const r = fs.realpathSync(p);", 'server.mjs'],                                // 真身不收大小写：写到的图换大小写要就对不上
-  'rp-canon-firm':         ["  if (!r.startsWith(FIRM + '/')) return r;", "  return r;", 'server.mjs'],                                             // firmlink 别名不收成短写法
+  'rp-canon-case':         ["  const r = fs.realpathSync.native(p);", "  const r = fs.realpathSync(p);", 'preview.mjs'],                                // 真身不收大小写：写到的图换大小写要就对不上
+  'rp-canon-firm':         ["  if (!r.startsWith(FIRM + '/')) return r;", "  return r;", 'preview.mjs'],                                             // firmlink 别名不收成短写法
   'rp-link-target-evidence': ["if (x.real) (x.link ? linked : real).add(x.real); }", "if (x.real) real.add(x.real); }", 'server.mjs'],         // 写到的链接，把它指去的地方也算写到（修之前的样子）
   'rp-no-normalize':       ["  const n = path.resolve(p); let ls, real, st;", "  const n = p; let ls, real, st;", 'server.mjs'],                   // 不先按字面规整：结尾 /. 绕过「本身是链接」
   'rp-log-key':            [".replace(/(?:[0-9a-f]|%(?:3[0-9]|[46][1-6])){16,}/gi, '<key>')", "", 'server.mjs'],                                // 日志路径不遮钥匙

@@ -13,6 +13,9 @@
  *        limitPinSeg() 验顶栏额度收起时钉住哪几条（11/24 ng 车）：界面不写死账号 id、服务给的 limits.pin、老服务退回没标账号那条、「Claude —」一直钉着、琥珀点只看收掉的、中英文提示、本机 ccb_limpin；UI_ONLY=limpin 单跑，PN_HTML 换整页做红阶段与改坏对照。
  *        额度那一排 11/24 起默认收起：老的段默认 ccb_limoff=false（展开），照旧核每一格；只有 limitPinSeg 看默认收起的样子。
  *        wallStripSeg() 独立核窄条、要你筛选、展开与回话、自动续跑、2 秒宽限（含两拍相隔 1.3 秒）和重复绘制；UI_ONLY=strip / ST_HTML 支持红阶段与改坏对照。老的段默认 ccb_strip='off'，保留整格断言。
+ *        canvasSeg() 验画布（11/24 canvas 车，从 ui-workbench/canvas-preview/check/check.mjs 移来，B 的项删掉）：文件夹摆成 A 全景、推近只有它能点、Esc 两级（网页里经 ESC_HOOK / 外层）、← → 0、拖动、ctrl + 滚轮、
+ *        「提示条不挡任何框」在 A 全景 / 推近 / C 上各查一次（C 另用 2 台手机 + 窗口高 700）、顶栏「并排看全部版本」A ↔ C、正文「画布 · N 个」、vN.html 的入口、关掉时 iframe 置空再拆、英文；
+ *        UI_ONLY=canvas 单跑时 Chromium、WebKit 都跑（CV_ENGINES 可改），整套里只跑 Chromium；CV_HTML 换整页做改坏对照；截图放 <OUT>/canvas/。
  *        只读页面 + 点「先不管」和筛选，不往任何会话里发话；新段的发送与自动续跑请求拦在浏览器里。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -752,6 +755,386 @@ async function deltaCheck() {
 }
 
 
+// ── 画布（11/24 canvas 车）：一次交付里 2 个以上网页按真尺寸活着摆在一张画布上（A 全景 → 点一个推近），顶栏「并排看全部版本」切 C 并排、再按回 A ──
+// 从 ui-workbench/canvas-preview/check/check.mjs 移过来，B（主屏 + 缩略条）的项删掉；「提示条不挡任何框」在 A 全景、推近、C 上各查一次，C 另用 2 台手机 + 窗口高 700 的一组
+// （C 的格子不扣提示条高度时一定压上）。样本页是这里自己写的假页面（FX.home/Desktop 下），不用真交付。
+// UI_ONLY=canvas 单跑：Chromium、WebKit 都跑（CV_ENGINES=chromium 只跑一个）；整套里只跑 Chromium。CV_HTML=<另一份 ui.html> 换页面做改坏对照。截图放 <OUT>/canvas/
+async function canvasSeg() {
+  const SH = path.join(OUT, 'canvas'); fs.mkdirSync(SH, { recursive: true });
+  // CV_HTML 换页（page.route 直接回 HTML）时，Chromium 把这份页面当成公网来的，本地网络访问检查（Local Network Access）挡掉连 127.0.0.1 预览端口的 iframe
+  // （net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS；11/24 22:4x 排查：原样的 ui.html 换上去也红 8 条）。换页时另起一个关掉这道检查的 Chromium；
+  // 真版本照旧用共用的 browser（页面从 127.0.0.1 来，检查放行）
+  const cvBrowser = process.env.CV_HTML ? await launch({ args: ['--disable-features=LocalNetworkAccessChecks'] }) : browser;
+  const D6 = path.join(FX.home, 'Desktop', 'canvas-demo'), D2 = path.join(FX.home, 'Desktop', 'canvas-phones'), DV = path.join(FX.home, 'Desktop', 'canvas-versions');
+  for (const d of [D6, D2, DV]) { fs.rmSync(d, { recursive: true, force: true }); fs.mkdirSync(d, { recursive: true }); }
+  const pg = (title, note, css, body, phone = false) => '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + title + '</title><meta name="description" content="' + note + '">' +
+    (phone ? '<meta name="ccb:frame" content="phone">' : '') + '<style>:root{color-scheme:light dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;font:15px/1.5 -apple-system,"PingFang SC",sans-serif;background:light-dark(#f7f6f2,#141416);color:light-dark(#1b1b1f,#ececef)}' +
+    'button{font:inherit;padding:8px 14px;border-radius:8px;border:0;background:#0a7d7d;color:#fff}input{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid light-dark(#ccc,#444);background:transparent;color:inherit}' + css + '</style></head><body>' + body + '</body></html>';
+  const card = (t, c) => '<div class="c"><b>' + t + '</b><p>' + c + '</p></div>';
+  const SIX = [
+    ['01-checkin.html', '晨跑打卡', '手机：今天的步数和连续天数', '.w{padding:48px 24px;text-align:center}.ring{width:220px;height:220px;margin:24px auto;border-radius:50%;background:conic-gradient(#0a7d7d 0 72%,light-dark(#e2e1db,#2b2b2e) 0);display:grid;place-items:center}.ring i{width:176px;height:176px;border-radius:50%;background:light-dark(#f7f6f2,#141416);display:grid;place-items:center;font:600 40px/1 ui-monospace,monospace;font-style:normal}',
+      '<div class="w"><h1>早上好</h1><p>连续 12 天</p><div class="ring"><i>7,240</i></div><p>今天目标 10,000 步</p><button>打卡</button></div>', true],
+    ['02-landing.html', '落地页 · 首屏', '大标题 + 两个按钮', '.h{padding:120px 96px}.h h1{font-size:64px;line-height:1.1;margin:0 0 24px;max-width:800px}.h p{font-size:20px;opacity:.7;max-width:640px}.h button+button{margin-left:12px;background:transparent;color:inherit;box-shadow:inset 0 0 0 1px currentColor}',
+      '<div class="h"><h1>把一周的事摊在一张纸上</h1><p>所有交付活着摆在一起，点哪个看哪个。</p><button>开始用</button><button>看演示</button></div>'],
+    ['03-pricing.html', '定价表', '三档价格并排', '.g{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;padding:96px}.c{padding:32px;border-radius:16px;background:light-dark(#fff,#1c1c1f);box-shadow:0 0 0 1px light-dark(#ddd,#333)}.c b{font-size:22px}.c p{font-size:40px;margin:16px 0}',
+      '<div class="g">' + card('基础', '¥0') + card('专业', '¥48') + card('团队', '¥198') + '</div>'],
+    ['04-board.html', '任务看板', '三列卡片', '.g{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding:48px}.col{display:grid;gap:12px;align-content:start}.col h2{margin:0;font-size:16px;opacity:.6}.c{padding:16px;border-radius:10px;background:light-dark(#fff,#1c1c1f);box-shadow:0 0 0 1px light-dark(#ddd,#333)}.c p{margin:4px 0 0;opacity:.7}',
+      '<div class="g"><div class="col"><h2>要做</h2>' + card('写规格', '画布入口两个') + card('补测试', '六类规则') + '</div><div class="col"><h2>在做</h2>' + card('搬原型', '布局和镜头') + '</div><div class="col"><h2>做完</h2>' + card('原型', '62 项检查') + '</div></div>'],
+    ['05-settings.html', '设置页', '开关和输入框', '.f{max-width:640px;margin:72px auto;display:grid;gap:20px}.r{display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid light-dark(#ddd,#333)}',
+      '<div class="f"><h1>设置</h1><div class="r">深色模式<input type="checkbox" checked></div><div class="r">名字<input id="in" placeholder="在这里打字"></div><div class="r">通知<input type="checkbox"></div><button>保存</button></div>'],
+    ['06-长文.html', '长文阅读', '窄栏正文、行距 1.7', '.a{max-width:640px;margin:64px auto;line-height:1.7;font-size:17px}.a h1{font-size:34px;line-height:1.25}',
+      '<div class="a"><h1>为什么要把交付摊开看</h1><p>' + '一个一个点开，看完第三个就忘了第一个长什么样。摊在一张画布上，比起来一眼就清楚。'.repeat(4) + '</p><p>' + '点一个推近，它就能直接用；Esc 回到全景，再按一次关掉。'.repeat(3) + '</p></div>'],
+  ];
+  for (const [n, t, d, css, body, phone] of SIX) fs.writeFileSync(path.join(D6, n), pg(t, d, css, body, phone));
+  for (const [n, t] of [['a-phone.html', '手机 A'], ['b-phone.html', '手机 B']]) fs.writeFileSync(path.join(D2, n), pg(t, '文件名里有 phone，当手机', '.w{padding:64px 24px}', '<div class="w"><h1>' + t + '</h1><button>按钮</button></div>'));
+  for (const [n, t] of [['v1.html', '版本 1 · 卡片'], ['v2.html', '版本 2 · 列表'], ['v10.html', '版本 10 · 时间线']]) fs.writeFileSync(path.join(DV, n), pg(t, '同一个界面的第 ' + n.slice(1, -5) + ' 版', '.w{padding:64px}', '<div class="w"><h1>' + t + '</h1></div>'));
+  const NAMES = SIX.map((x) => x[0]), TITLES = SIX.map((x) => x[1]);
+  const inside = (a, b, tol = 1) => a.l >= b.l - tol && a.t >= b.t - tol && a.r <= b.r + tol && a.b <= b.b + tol;
+  const overlap = (a, b) => a.l < b.r - 1 && b.l < a.r - 1 && a.t < b.b - 1 && b.t < a.b - 1;
+  const noneOverlap = (rs) => rs.every((a, i) => rs.every((b, j) => i === j || !overlap(a, b)));
+  const openCv = async (br, { scheme = 'dark', lang = 'zh', w = 1440, h = 900 } = {}) => {
+    const ctx = await br.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await ctx.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('wall')); localStorage.setItem('ccb_strip', 'off'); } catch (e) {} });
+    const page = await ctx.newPage(), errs = [];
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    if (process.env.CV_HTML) {      // 改坏对照：换一份 ui.html（口令照服务的做法填进去）
+      const html = fs.readFileSync(process.env.CV_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+      await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+    }
+    await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector('.card'); await sleep(1200);
+    return { ctx, page, errs };
+  };
+  const frameOf = (page, name) => page.frames().find((f) => f !== page.mainFrame() && decodeURIComponent(f.url()).endsWith('/' + name));
+  const waitFrames = async (page, names) => {      // 每个框都从预览端口载完
+    const t0 = Date.now();
+    while (Date.now() - t0 < 10000) {
+      let done = 0;
+      for (const n of names) { const f = frameOf(page, n); if (f && await f.evaluate(() => document.readyState === 'complete').catch(() => false)) done++; }
+      if (done === names.length) return true; await sleep(150);
+    }
+    return false;
+  };
+  const clickPath = (page, p) => ev(page, (p) => { let a = document.querySelector('#tCv'); if (!a) { a = document.createElement('a'); a.id = 'tCv'; a.className = 'file'; a.textContent = 'cv'; document.body.append(a); } a.dataset.path = p; a.click(); }, p);
+  const cvOpen = async (page, dir, names) => {
+    await clickPath(page, dir + '/');
+    await page.waitForFunction((k) => document.querySelector('#pBody').dataset.kind === 'canvas' && document.querySelectorAll('#pCan iframe').length === k, names.length, { timeout: 8000 }).catch(() => {});
+    await waitFrames(page, names); await sleep(700);
+  };
+  const st = (page) => ev(page, () => {
+    const q = (x) => document.querySelector(x), c = q('#pCmp'), b = q('#pCvBack'), w = q('#pCan .cv-world');
+    return { open: q('#preview').open, kind: q('#pBody').dataset.kind, hidden: q('#pCan').hidden, crumb: (q('#pCan .cv-crumb') || {}).textContent || '', n: document.querySelectorAll('#pCan iframe').length,
+      live: [...document.querySelectorAll('#pCan .cv-fr')].map((f) => f.classList.contains('live')), frames: [...document.querySelectorAll('#pCan .cv-fr')].map((f) => f.dataset.frame),
+      cur: [...document.querySelectorAll('#pCan .cv-row')].findIndex((r) => r.getAttribute('aria-current') === 'true'),
+      cmp: { hidden: c.hidden, pressed: c.getAttribute('aria-pressed'), text: c.textContent.trim(), title: c.title }, back: { hidden: b.hidden, text: b.textContent.trim(), title: b.title },
+      title: q('#pTitle').textContent, dir: q('#pDir').textContent, k: w ? new DOMMatrix(getComputedStyle(w).transform).a : 0,
+      tags: [...document.querySelectorAll('#pCan .cv-tag .cv-nm')].map((x) => x.textContent) };
+  });
+  // 画布不在（改坏的 Esc 把整个预览关了、或者页面出错）时 ev() 回 {err}：换成一份一定不过的几何，断言照常记红、不崩，也不会因为空数组 every() 为真而假装过
+  const FAR = { l: 1e6, t: 1e6, r: 1e6 + 100, b: 1e6 + 100 }, ALL = { l: -1e7, t: -1e7, r: 1e7, b: 1e7 };
+  const GONE = { st: { l: 0, t: 0, r: 0, b: 0 }, fr: Array(12).fill(FAR), tg: Array(12).fill(ALL), cr: ALL, gone: true };
+  const geo = (page) => ev(page, () => {
+    const R = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; };
+    return { st: R(document.querySelector('#pCan .cv-stage')), fr: [...document.querySelectorAll('#pCan .cv-dev')].map(R), tg: [...document.querySelectorAll('#pCan .cv-tag')].map(R), cr: R(document.querySelector('#pCan .cv-crumb')) };
+  }).then((g) => (g && Array.isArray(g.fr) ? g : GONE));
+  const focusStage = (page) => ev(page, () => document.querySelector('#pCan .cv-stage').focus());
+  const shot = (page, name) => page.screenshot({ path: path.join(SH, name) }).catch((e) => console.log('  (截图没成：' + name + ' ' + String(e).slice(0, 80) + ')'));
+
+  // 一整轮：全景 → 推近 → 网页里 Esc → 外层 Esc → 键盘 → C → 回 A → 拖动 → 缩放 → 关掉
+  const run = async (br, eng, scheme) => {
+    const tag = '画布（' + eng + (scheme === 'light' ? '、浅色' : '') + '）：', pre = eng + '-' + scheme + '-';
+    const { ctx, page, errs } = await openCv(br, { scheme });
+    try {
+      await cvOpen(page, D6, NAMES);
+      let s = await st(page), g = await geo(page);
+      ok(s.open && s.kind === 'canvas' && !s.hidden && s.n === 6 && s.title === 'canvas-demo' && /6 个网页/.test(s.dir), tag + '点文件夹 → 6 个网页摆成画布，顶栏写文件夹和「6 个网页」', JSON.stringify([s.kind, s.n, s.title, s.dir]));
+      same(s.frames, ['phone', 'browser', 'browser', 'browser', 'browser', 'browser'], tag + '写了 ccb:frame=phone 的套手机框，其余是浏览器框');
+      same(s.tags, TITLES, tag + '标签是每页的 <title>，按文件名的数字顺序');
+      ok(s.live.every((x) => !x) && s.crumb.startsWith('全景'), tag + '全景：一个都不能点，提示条写「全景」', JSON.stringify([s.live, s.crumb]));
+      ok(!s.cmp.hidden && s.cmp.pressed === 'false' && s.cmp.text === '并排看全部版本' && s.back.hidden, tag + '顶栏有「并排看全部版本」（没按下），「全景」藏着', JSON.stringify([s.cmp, s.back]));
+      ok(g.fr.length === 6 && g.fr.every((r) => inside(r, g.st)), tag + '全景：框都在画布里', JSON.stringify([g.st, g.fr]));
+      ok(noneOverlap(g.fr), tag + '全景：框不互相压', JSON.stringify(g.fr));
+      ok(g.tg.every((t, i) => t.b <= g.fr[i].t + 1 && g.fr.every((f) => !overlap(t, f))) && noneOverlap(g.tg), tag + '全景：标签在自己的框上面，不压框、不互相压', JSON.stringify(g.tg));
+      ok(g.fr.every((f) => !overlap(g.cr, f)), tag + '全景：左下角提示条不挡任何框', JSON.stringify(g.cr));
+      const nm = await ev(page, () => { const n = document.querySelector('#pCan .cv-tag .cv-nm'); return { full: n.scrollWidth <= n.clientWidth + 1, w: n.clientWidth }; });
+      ok(nm.full, tag + '全景：手机那张的标签名字没被截', JSON.stringify(nm));
+      const hooked = await Promise.all(NAMES.map(async (n) => { const f = frameOf(page, n); return f ? f.evaluate(() => /preview-esc/.test(document.documentElement.innerHTML)).catch(() => 'err') : 'none'; }));
+      ok(hooked.every((x) => x === true), tag + '每个框都从预览端口载入，页面里带着 ESC_HOOK', JSON.stringify(hooked));
+      const bar = await ev(page, () => ({ open: !document.querySelector('#pOpen').hidden, reload: !document.querySelector('#pReload').hidden }));
+      ok(bar.open === true && bar.reload === true, tag + '文件夹画布：顶栏有「在访达中显示」和「重新载入」', JSON.stringify(bar));
+      await shot(page, pre + '1-A全景.png');
+      // 点第 2 个：点击层收得到点击，推近
+      const c1 = g.fr[1]; await page.mouse.click((c1.l + c1.r) / 2, (c1.t + c1.b) / 2); await sleep(850);
+      s = await st(page); g = await geo(page);
+      same(s.live, [false, true, false, false, false, false], tag + '点第 2 个：推近，只有它能点');
+      ok(s.cur === 1 && !s.back.hidden && /^02 \/ 06/.test(s.crumb), tag + '点第 2 个：清单跟着亮，顶栏出「全景」，提示写 02 / 06', JSON.stringify([s.cur, s.back, s.crumb]));
+      ok(inside(g.fr[1], g.st) && g.fr[1].r - g.fr[1].l > 0.5 * (g.st.r - g.st.l), tag + '推近：第 2 个整个在画布里，占画布宽一半以上', JSON.stringify([g.fr[1], g.st]));
+      ok(!overlap(g.cr, g.fr[1]), tag + '推近：提示条不挡推近的框', JSON.stringify([g.cr, g.fr[1]]));
+      await shot(page, pre + '2-A推近网页.png');
+      // 焦点进到里面那个网页，按 Esc：先回全景、不关预览；再按一次才关
+      await page.mouse.click(g.fr[1].r - 8, g.fr[1].b - 8);
+      const inner = frameOf(page, NAMES[1]), fo = inner ? await inner.evaluate(() => document.hasFocus()).catch(() => false) : false;
+      ok(fo === true, tag + '点进去以后焦点在里面那个网页', String(fo));
+      await page.keyboard.press('Escape'); await sleep(850); s = await st(page);
+      ok(s.open && s.cur === -1 && s.crumb.startsWith('全景'), tag + '网页里按 Esc（ESC_HOOK 转上来）：回全景、没关预览', JSON.stringify([s.open, s.cur, s.crumb]));
+      await page.keyboard.press('Escape'); await sleep(300); s = await st(page);
+      ok(!s.open, tag + '全景再按 Esc：关预览', JSON.stringify([s.open, s.crumb]));
+      // 键盘：→ 推近第 1 个（手机框），再 →，外层 Esc 回全景、不关；← 从全景倒着进最后一个，0 回全景
+      await cvOpen(page, D6, NAMES); await focusStage(page);
+      await page.keyboard.press('ArrowRight'); await sleep(850); s = await st(page); g = await geo(page);
+      ok(s.cur === 0 && s.live[0] && inside(g.fr[0], g.st) && !overlap(g.cr, g.fr[0]), tag + '→ 推近第 1 个（手机框）：整个在画布里，提示条不挡它', JSON.stringify([s.cur, s.live, g.fr[0], g.cr]));
+      await shot(page, pre + '3-A推近手机框.png');
+      await page.keyboard.press('ArrowRight'); await sleep(750); s = await st(page);
+      ok(s.cur === 1 && s.live[1] && !s.live[0], tag + '再 →：换到第 2 个', JSON.stringify([s.cur, s.live]));
+      await page.keyboard.press('Escape'); await sleep(850); s = await st(page);
+      ok(s.open && s.cur === -1 && s.crumb.startsWith('全景'), tag + '外层按 Esc：回全景、没关预览', JSON.stringify([s.open, s.cur, s.crumb]));
+      await page.keyboard.press('ArrowLeft'); await sleep(750); s = await st(page);
+      const lastIn = s.cur === 5 && s.live[5];
+      await page.keyboard.press('0'); await sleep(750); s = await st(page);
+      ok(lastIn && s.open && s.cur === -1 && s.crumb.startsWith('全景'), tag + '全景按 ← 进最后一个，按 0 回全景', JSON.stringify([lastIn, s.cur, s.crumb]));
+      // C：顶栏开关切并排，再按一次回 A
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(850); s = await st(page); g = await geo(page);
+      ok(s.live.every(Boolean) && s.cmp.pressed === 'true' && s.crumb.startsWith('并排') && s.back.hidden, tag + 'C 并排：开关按下，6 个都能直接点', JSON.stringify([s.live, s.cmp, s.crumb]));
+      ok(g.fr.every((r) => inside(r, g.st)) && noneOverlap(g.fr), tag + 'C 并排：都在画布里、不互相压', JSON.stringify(g.fr));
+      ok(g.tg.every((t) => g.fr.every((f) => !overlap(t, f))), tag + 'C 并排：标签不压框', JSON.stringify(g.tg));
+      ok(g.fr.every((f) => !overlap(g.cr, f)), tag + 'C 并排：左下角提示条不挡任何框', JSON.stringify([g.cr, g.fr]));
+      await shot(page, pre + '4-C并排.png');
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(850); s = await st(page);
+      ok(s.cmp.pressed === 'false' && s.crumb.startsWith('全景') && s.live.every((x) => !x), tag + '开关再按一次：回到 A 全景', JSON.stringify([s.cmp, s.crumb, s.live]));
+      // 拖动平移 → 自由视角 → Esc 回全景；ctrl + 滚轮放大；顶栏「全景」回全景
+      g = await geo(page); const sx = (g.st.l + g.st.r) / 2, sy = g.st.b - 30;
+      await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx - 120, sy - 60, { steps: 6 }); await page.mouse.up(); await sleep(100);
+      s = await st(page);
+      ok(s.crumb.startsWith('自由视角') && !s.back.hidden, tag + '拖动：变自由视角，顶栏出「全景」', JSON.stringify([s.crumb, s.back]));
+      await focusStage(page); await page.keyboard.press('Escape'); await sleep(850); s = await st(page);
+      ok(s.open && s.crumb.startsWith('全景'), tag + '自由视角按 Esc：回全景、没关预览', JSON.stringify([s.open, s.crumb]));
+      await page.mouse.move(sx, (g.st.t + g.st.b) / 2); const k0 = (await st(page)).k;
+      await page.keyboard.down('Control'); await page.mouse.wheel(0, -120); await page.keyboard.up('Control'); await sleep(200);
+      s = await st(page);
+      ok(s.k > k0 * 1.5 && s.crumb.startsWith('自由视角'), tag + 'ctrl + 滚轮：放大，变自由视角', k0.toFixed(3) + ' → ' + s.k.toFixed(3));
+      await page.click('#pCvBack', { timeout: 3000 }).catch(() => {}); await sleep(850); s = await st(page);
+      ok(s.open && s.crumb.startsWith('全景') && s.back.hidden && Math.abs(s.k - k0) < 1e-3, tag + '点顶栏「全景」：回全景', JSON.stringify([s.crumb, s.back, s.k, k0]));
+      // 关掉：画布里每个 iframe 先置空再拆，开关一起收掉
+      await ev(page, () => { window.__cvIf = [...document.querySelectorAll('#pCan iframe')]; });
+      await page.click('#preview [data-close]', { timeout: 3000 }).catch(() => {}); await sleep(300);
+      const gone = await ev(page, () => ({ src: window.__cvIf.map((f) => f.getAttribute('src')), conn: window.__cvIf.filter((f) => f.isConnected).length, hidden: document.querySelector('#pCan').hidden, kids: document.querySelector('#pCan').children.length, cmp: document.querySelector('#pCmp').hidden, back: document.querySelector('#pCvBack').hidden }));
+      ok(gone.src.length === 6 && gone.src.every((x) => x === 'about:blank') && gone.conn === 0 && gone.hidden && gone.kids === 0 && gone.cmp && gone.back, tag + '关掉：6 个 iframe 先置空再拆，画布、开关、「全景」都收掉', JSON.stringify(gone));
+      ok(errs.length === 0, tag + '页面没有报错', errs.join(' | '));
+    } finally { await ctx.close(); }
+  };
+  // C 的提示条：2 台手机、窗口高 700。格子不扣提示条高度时，左边那台的底边一定压在提示条上
+  const phones = async (br, eng) => {
+    const tag = '画布 · C 两台手机（' + eng + '，窗口高 700）：';
+    const { ctx, page, errs } = await openCv(br, { w: 1440, h: 700 });
+    try {
+      await cvOpen(page, D2, ['a-phone.html', 'b-phone.html']);
+      let s = await st(page);
+      same(s.frames, ['phone', 'phone'], tag + '文件名里有 phone、没写 ccb:frame 的也套手机框');
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(850); s = await st(page); const g = await geo(page);
+      ok(s.live.every(Boolean) && s.live.length === 2 && g.fr.every((r) => inside(r, g.st)), tag + '两台都能点、都在画布里', JSON.stringify([s.live, g.fr]));
+      ok(g.fr.every((f) => !overlap(g.cr, f)), tag + '左下角提示条不挡任何框（格子底下扣掉了提示条的高度）', JSON.stringify([g.cr, g.fr]));
+      ok(errs.length === 0, tag + '页面没有报错', errs.join(' | '));
+    } finally { await ctx.close(); }
+  };
+  // 入口：正文「画布 · N 个」、vN.html 的「并排看全部版本」；英文
+  const entries = async () => {
+    const tag = '画布 · 入口：';
+    const { ctx, page, errs } = await openCv(cvBrowser);
+    try {
+      const P = NAMES.slice(0, 3).map((n) => path.join(D6, n));
+      const r = await ev(page, (P) => {
+        const one = md('只有一个 ' + P[0]), dup = md('改了 ' + P[0] + ' 和 ' + P[0]), mix = md(P[0] + '，' + P[1] + ' 还有 ~/Desktop/a.png ~/Desktop/b.png');   // 用「，」分：PATH_RE 不认顿号后面的路径（现有规矩，那样的路径本来也不是链接）
+        document.body.insertAdjacentHTML('beforeend', '<div id="tChipCv">' + L(md('三个版本：' + P[2] + '，' + P[0] + '，' + P[1])) + '</div>');
+        const b = document.querySelector('#tChipCv [data-canvas]');
+        return { one: /data-canvas/.test(one), dup: /data-canvas/.test(dup), mix: [/data-canvas/.test(mix), /data-gallery/.test(mix)], text: b && b.textContent, title: b && b.title, paths: b && JSON.parse(b.dataset.canvas) };
+      }, P);
+      ok(r.one === false && r.dup === false, tag + '正文里只有 1 个不同的网页路径时不放「画布」按钮', JSON.stringify(r));
+      ok(r.mix[0] === true && r.mix[1] === true, tag + '网页和图混着写时「图集」「画布」两个按钮都放', JSON.stringify(r.mix));
+      ok(r.text === '画布 · 3 个' && /3 个网页/.test(r.title || ''), tag + '按钮写「画布 · 3 个」', JSON.stringify([r.text, r.title]));
+      same(r.paths, [P[2], P[0], P[1]], tag + '按钮按正文里出现的顺序带上路径');
+      let asked = null; page.on('request', (q) => { if (new URL(q.url()).pathname === '/api/preview') asked = JSON.parse(q.postData() || '{}'); });
+      await ev(page, () => document.querySelector('#tChipCv [data-canvas]').click());
+      await page.waitForFunction(() => document.querySelector('#pBody').dataset.kind === 'canvas', null, { timeout: 8000 }).catch(() => {});
+      await waitFrames(page, NAMES.slice(0, 3)); await sleep(700);
+      let s = await st(page);
+      ok(asked && asked.canvas === true && JSON.stringify(asked.paths) === JSON.stringify([P[2], P[0], P[1]]), tag + '点了把这些路径带 canvas: true 交给 /api/preview', JSON.stringify(asked));
+      ok(s.open && s.n === 3 && s.title === '画布' && /canvas-demo/.test(s.dir) && /3 个网页/.test(s.dir) && s.crumb.startsWith('全景') && s.cmp.pressed === 'false', tag + '打开就是 A 全景，顶栏写文件夹和「3 个网页」', JSON.stringify([s.n, s.title, s.dir, s.crumb, s.cmp]));
+      same(s.tags, [TITLES[2], TITLES[0], TITLES[1]], tag + '框的先后 = 正文里的先后');
+      const hd = await ev(page, () => ({ open: document.querySelector('#pOpen').hidden, reload: document.querySelector('#pReload').hidden }));
+      ok(hd.open && hd.reload, tag + '一批路径拼成的画布没有对应的文件夹：「在访达中显示」「重新载入」都不给', JSON.stringify(hd));
+      await page.click('#preview [data-close]', { timeout: 3000 }).catch(() => {}); await sleep(200);
+      // 单个 vN.html：顶栏「并排看全部版本」直接开 C
+      await clickPath(page, path.join(DV, 'v2.html'));
+      await page.waitForFunction(() => document.querySelector('#pBody').dataset.kind === 'page' && document.querySelector('#preview').open, null, { timeout: 8000 }).catch(() => {}); await sleep(300);
+      s = await st(page);
+      ok(s.kind === 'page' && !s.cmp.hidden && s.cmp.pressed === 'false' && s.hidden && s.n === 0, tag + '看 v2.html（同一层有 v1、v2、v10）：顶栏有「并排看全部版本」', JSON.stringify([s.kind, s.cmp, s.hidden]));
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {});
+      await page.waitForFunction(() => document.querySelector('#pBody').dataset.kind === 'canvas', null, { timeout: 8000 }).catch(() => {});
+      await waitFrames(page, ['v1.html', 'v2.html', 'v10.html']); await sleep(850); s = await st(page);
+      ok(s.n === 3 && s.live.every(Boolean) && s.cmp.pressed === 'true' && s.crumb.startsWith('并排'), tag + '点了直接开 C 并排，3 个版本都能点', JSON.stringify([s.n, s.live, s.cmp, s.crumb]));
+      same(s.tags, ['版本 1 · 卡片', '版本 2 · 列表', '版本 10 · 时间线'], tag + '版本按数字排（v2 在 v10 前面）');
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(850); s = await st(page);
+      ok(s.cmp.pressed === 'false' && s.crumb.startsWith('全景'), tag + '再按一次回到 A 全景', JSON.stringify([s.cmp, s.crumb]));
+      // 不是 vN 的网页没有这个按钮；画布换成网页以后不残留
+      await clickPath(page, path.join(D6, NAMES[1]));
+      await page.waitForFunction(() => document.querySelector('#pBody').dataset.kind === 'page', null, { timeout: 8000 }).catch(() => {}); await sleep(300);
+      s = await st(page);
+      ok(s.kind === 'page' && s.cmp.hidden && s.back.hidden && s.hidden && s.n === 0, tag + '不是 vN.html 的网页没有「并排看全部版本」，画布不残留', JSON.stringify([s.kind, s.cmp, s.hidden, s.n]));
+      await page.click('#preview [data-close]', { timeout: 3000 }).catch(() => {}); await sleep(200);
+      ok(errs.length === 0, tag + '页面没有报错', errs.join(' | '));
+    } finally { await ctx.close(); }
+    // 英文
+    const en = await openCv(cvBrowser, { lang: 'en' });
+    try {
+      const { page, errs } = en, cjk = (x) => /[一-鿿]/.test(x || '');
+      const chip = await ev(page, (P) => { const d = document.createElement('div'); d.innerHTML = L(md(P.join(' 和 '))); const b = d.querySelector('[data-canvas]'); return b ? [b.textContent, b.title] : null; }, NAMES.slice(0, 2).map((n) => path.join(D6, n)));
+      ok(chip && chip[0] === 'Canvas · 2' && chip[1] === 'Lay these 2 pages out on one canvas', '画布（英文）：正文按钮写「Canvas · 2」', JSON.stringify(chip));
+      await cvOpen(page, D6, NAMES);
+      let s = await st(page);
+      const t = await ev(page, () => ({ hint: document.querySelector('#pCan .cv-hint').textContent, h2: document.querySelector('#pCan .cv-rail h2').textContent, mt: [...document.querySelectorAll('#pCan .cv-mt')].map((x) => x.textContent.split(' · ')[0]),
+        aria: [...document.querySelectorAll('#pCan [aria-label]')].map((x) => x.getAttribute('aria-label')).join('|'), ext: (document.querySelector('#pCan .cv-ext') || {}).title }));
+      ok(s.cmp.text === 'Compare all versions' && !cjk(s.cmp.title) && s.back.title === 'Back to overview (Esc)' && s.back.text === 'Overview', '画布（英文）：顶栏开关、「全景」按钮和它的提示', JSON.stringify([s.cmp, s.back]));
+      ok(/^Overview · 6 pages · /.test(s.crumb) && !cjk(s.crumb) && /6 pages$/.test(s.dir), '画布（英文）：全景提示条、顶栏的个数', JSON.stringify([s.crumb, s.dir]));
+      ok(!cjk(t.hint) && t.h2 === '6 pages' && t.mt[0] === 'Phone' && t.mt[1] === 'Page' && !cjk(t.aria) && t.ext === 'Open in browser', '画布（英文）：左边清单的标题、类型、快捷键提示、读屏名', JSON.stringify(t));
+      await focusStage(page); await page.keyboard.press('ArrowRight'); await sleep(800); s = await st(page);
+      const zoom = s.crumb;
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(800); s = await st(page);
+      const grid = s.crumb;
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(800);
+      const g = await geo(page), sx = (g.st.l + g.st.r) / 2, sy = g.st.b - 30;
+      await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx - 120, sy - 60, { steps: 6 }); await page.mouse.up(); await sleep(100);
+      const free = (await st(page)).crumb;
+      ok(/^01 \/ 06 · live now/.test(zoom) && /^Side by side · all 6 are live/.test(grid) && free === 'Free view · Esc for overview' && ![zoom, grid, free].some(cjk), '画布（英文）：推近、并排、自由视角的提示条', JSON.stringify([zoom, grid, free]));
+      await shot(page, 'chromium-dark-5-英文自由视角.png');
+      ok(errs.length === 0, '画布（英文）：页面没有报错', errs.join(' | '));
+    } finally { await en.ctx.close(); }
+  };
+
+  // 第二轮补的几条（只跑 Chromium）：正文按钮按文件夹分组、别的文件夹没摆上的个数、长标题不把全景挤小、多出来的个数、从卡片里点开时回话框露出来、
+  // 拖动中途松手没收到 pointerup、C 并排里 ctrl + 滚轮、远程（K 为空）不出画布的两个入口
+  const extras = async () => {
+    const tag = '画布 · 补：';
+    const DL = path.join(FX.home, 'Desktop', 'canvas-long'), DS = path.join(FX.home, 'Desktop', 'canvas-short'), D13 = path.join(FX.home, 'Desktop', 'canvas-13');
+    for (const d of [DL, DS, D13]) { fs.rmSync(d, { recursive: true, force: true }); fs.mkdirSync(d, { recursive: true }); }
+    const LONG = '一个特别长的标题'.repeat(20);                    // 160 个字
+    for (const [d, t] of [[DL, LONG], [DS, '短标题']]) { fs.writeFileSync(path.join(d, 'a.html'), pg(t, '', '', '<h1>a</h1>')); fs.writeFileSync(path.join(d, 'b.html'), pg('第二页', '', '', '<h1>b</h1>')); }
+    const N13 = Array.from({ length: 13 }, (_, i) => 'p' + (i + 1) + '.html');
+    for (const n of N13) fs.writeFileSync(path.join(D13, n), pg(n, '', '', '<h1>' + n + '</h1>'));
+    const A = path.join(D6, NAMES[0]), B = path.join(D6, NAMES[1]), C = path.join(DV, 'v1.html');
+    const chipOf = (page) => ev(page, ([A, B, C]) => {
+      document.querySelector('#tChipM1')?.remove();
+      const host = document.createElement('div'); host.id = 'tChipM1'; host.innerHTML = L(md('两个文件夹：' + A + '，' + B + '，' + C)); document.body.append(host);
+      const b = host.querySelector('[data-canvas]');
+      return { text: b && b.textContent, title: b && b.title, paths: b && JSON.parse(b.dataset.canvas), split: /data-canvas/.test(md('各一个：' + A + '，' + C)) };
+    }, [A, B, C]);
+    const clickChip = async (page) => {
+      await ev(page, () => document.querySelector('#tChipM1 [data-canvas]').click());
+      await page.waitForFunction(() => document.querySelector('#pBody').dataset.kind === 'canvas', null, { timeout: 8000 }).catch(() => {});
+      await waitFrames(page, [NAMES[0], NAMES[1]]); await sleep(700);
+    };
+    const close = async (page) => { await page.click('#preview [data-close]', { timeout: 3000 }).catch(() => {}); await sleep(250); };
+    const inCard = (page, p) => ev(page, ([sid, p]) => {          // 往 links 卡的正文里临时放一条路径、点它、拿掉（同 remotePreviewCheck 的 clickIn）
+      const host = document.querySelector('.card[data-sid="' + sid + '"] .body'); if (!host) return false;
+      const a = document.createElement('a'); a.className = 'file'; a.dataset.path = p; a.textContent = p; host.appendChild(a); a.click(); a.remove(); return true; }, [FX.sids.links, p]);
+    let { ctx, page, errs } = await openCv(cvBrowser);
+    try {
+      // 正文里的网页分在两个文件夹：按钮数的是最多的那组；两个文件夹各一个时不放按钮；点了只摆那一组，顶栏写别的文件夹还有几个
+      const r = await chipOf(page);
+      ok(r.text === '画布 · 2 个' && /这 2 个网页/.test(r.title || '') && r.split === false, tag + '正文里 canvas-demo 两个 + 别的文件夹一个：按钮写「画布 · 2 个」；两个文件夹各一个时不放按钮', JSON.stringify(r));
+      same(r.paths, [A, B, C], tag + '按钮照旧带上全部路径（服务按真身再分一次组）');
+      await clickChip(page); let s = await st(page);
+      ok(s.n === 2 && /另有 1 个在别的文件夹，没摆上$/.test(s.dir), tag + '点了只摆 canvas-demo 那 2 个，顶栏写「另有 1 个在别的文件夹，没摆上」', JSON.stringify([s.n, s.dir]));
+      await shot(page, 'chromium-dark-6-别的文件夹没摆上.png'); await close(page);
+      // 160 字的标题：标签量宽封顶 CV_TAG_MAX，全景里的框不比短标题时小
+      const wOf = async (d, name) => { await cvOpen(page, d, ['a.html', 'b.html']); const g = await geo(page); if (name) await shot(page, name); await close(page); return g.fr.map((x) => Math.round(x.r - x.l)); };
+      const wS = await wOf(DS), wL = await wOf(DL, 'chromium-dark-8-长标题全景.png');
+      ok(wS.length === 2 && wL.length === 2 && wL.every((x, i) => x >= wS[i] - 1), tag + '160 字的长标题：全景里框的屏幕宽度不比短标题时小', JSON.stringify({ short: wS, long: wL }));
+      // 超过 12 个：顶栏写多出来的个数
+      await cvOpen(page, D13, N13.slice(0, 12)); s = await st(page);
+      ok(s.n === 12 && /12 个网页 · 另有 1 个没摆上$/.test(s.dir), tag + '13 个网页的文件夹：摆 12 个，顶栏写「另有 1 个没摆上」', JSON.stringify([s.n, s.dir]));
+      await close(page);
+      // 从卡片里点文件夹路径：预览底下露出那张卡的回话框，画布按扣掉回话框以后的大小摆
+      const clicked = await inCard(page, D6 + '/');
+      await page.waitForFunction((k) => document.querySelector('#pBody').dataset.kind === 'canvas' && document.querySelectorAll('#pCan iframe').length === k, 6, { timeout: 8000 }).catch(() => {});
+      await waitFrames(page, NAMES); await sleep(900);
+      const dk = await ev(page, () => { const d = document.querySelector('#pDock'), b = d.getBoundingClientRect(); return { shown: !d.hidden && d.children.length > 0 && b.height > 0, t: Math.round(b.top), h: Math.round(b.height) }; });
+      let g = await geo(page);
+      ok(clicked === true && dk.shown === true, tag + '从卡片里点开文件夹：预览底下露出回话框', JSON.stringify([clicked, dk]));
+      ok(g.fr.length === 6 && g.fr.every((x) => inside(x, g.st)) && noneOverlap(g.fr) && g.st.b <= dk.t + 1, tag + '回话框露出来时（全景）：框都在画布里、不互相压，画布整个在回话框上面', JSON.stringify([g.st, dk]));
+      ok(g.tg.every((t, i) => t.b <= g.fr[i].t + 1 && g.fr.every((x) => !overlap(t, x))) && noneOverlap(g.tg) && g.fr.every((x) => !overlap(g.cr, x)), tag + '回话框露出来时（全景）：标签在自己的框上面、不压框，提示条不挡框', JSON.stringify([g.tg, g.cr]));
+      await shot(page, 'chromium-dark-7-回话框露出来.png');
+      await focusStage(page); await page.keyboard.press('ArrowRight'); await sleep(850); g = await geo(page);
+      ok(inside(g.fr[0], g.st) && !overlap(g.cr, g.fr[0]) && g.st.b <= dk.t + 1, tag + '回话框露出来时（推近第 1 个）：整个在画布里，提示条不挡它', JSON.stringify([g.fr[0], g.st]));
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(850); g = await geo(page);
+      ok(g.fr.every((x) => inside(x, g.st)) && noneOverlap(g.fr) && g.fr.every((x) => !overlap(g.cr, x)), tag + '回话框露出来时（C 并排）：都在画布里、不互相压，提示条不挡框', JSON.stringify([g.st, g.fr, g.cr]));
+      // C 并排：ctrl + 滚轮拦下（不然 Chromium 缩放整个总控台），普通滚轮不拦（框里的网页照常滚）
+      const wh = await ev(page, () => { const el = document.querySelector('#pCan .cv-stage'), b = el.getBoundingClientRect(), fire = (ctrlKey) => { const e = new WheelEvent('wheel', { ctrlKey, deltaY: -100, clientX: b.left + 4, clientY: b.top + 4, bubbles: true, cancelable: true }); el.dispatchEvent(e); return e.defaultPrevented; }; return [fire(true), fire(false)]; });
+      ok(JSON.stringify(wh) === '[true,false]', tag + 'C 并排里 ctrl + 滚轮被拦下，普通滚轮不拦', JSON.stringify(wh));
+      await page.click('#pCmp', { timeout: 3000 }).catch(() => {}); await sleep(850);
+      // 拖动中途松手的 pointerup 没送到：下一次移动看到没按着（buttons 为 0），拖动结束
+      g = await geo(page); const sx = (g.st.l + g.st.r) / 2, sy = g.st.b - 30;
+      await ev(page, () => { window.__pid = null; document.querySelector('#pCan .cv-stage').addEventListener('pointerdown', (e) => { window.__pid = e.pointerId; }, { once: true, capture: true }); });
+      await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx - 80, sy - 40, { steps: 5 });
+      const mid = await ev(page, () => document.querySelector('#pCan .cv-stage').classList.contains('grabbing'));
+      const after = await ev(page, ([x, y]) => { const el = document.querySelector('#pCan .cv-stage'); el.dispatchEvent(new PointerEvent('pointermove', { pointerId: window.__pid, buttons: 0, clientX: x, clientY: y, bubbles: true })); return el.classList.contains('grabbing'); }, [sx - 90, sy - 45]);
+      await page.mouse.up(); await sleep(100);
+      ok(mid === true && after === false, tag + '拖动中途松手没收到 pointerup：下一次移动看到没按着，拖动就结束', JSON.stringify([mid, after]));
+      await close(page);
+      ok(errs.length === 0, tag + '页面没有报错', errs.join(' | '));
+    } finally { await ctx.close(); }
+    // 英文：别的文件夹没摆上、多出来的个数
+    const en = await openCv(cvBrowser, { lang: 'en' });
+    try {
+      const { page, errs } = en;
+      const r = await chipOf(page);
+      ok(r.text === 'Canvas · 2' && r.split === false, tag + '英文：两个文件夹混着写时按钮写「Canvas · 2」', JSON.stringify(r));
+      await clickChip(page); let s = await st(page);
+      ok(s.n === 2 && /2 pages · 1 more in other folders, not shown$/.test(s.dir), tag + '英文：顶栏写「1 more in other folders, not shown」', JSON.stringify([s.n, s.dir]));
+      await close(page);
+      await cvOpen(page, D13, N13.slice(0, 12)); s = await st(page);
+      ok(s.n === 12 && /12 pages · 1 more not shown$/.test(s.dir), tag + '英文：13 个网页的文件夹，顶栏写「1 more not shown」', JSON.stringify([s.n, s.dir]));
+      await close(page);
+      ok(errs.length === 0, tag + '英文：页面没有报错', errs.join(' | '));
+    } finally { await en.ctx.close(); }
+    // 远程（K 为空，手机远程那份页面）：正文不放「画布」按钮；看 vN.html 时服务给了 versions，顶栏也不出「并排看全部版本」（远程还没有画布）
+    {
+      const TOK = new URL(FX.url).searchParams.get('k'), ORIGIN = new URL(FX.url).origin, CRED = 'fedcba9876543210.' + 'C'.repeat(43);
+      const ctx = await cvBrowser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark', deviceScaleFactor: 2 });
+      await ctx.addInitScript((c) => { try { localStorage.setItem('ccb_device', JSON.stringify(c)); localStorage.setItem('ccb_mode', JSON.stringify('wall')); localStorage.setItem('ccb_strip', 'off'); } catch (e) {} }, CRED);
+      const page = await ctx.newPage(), errs = [], seen = [];
+      page.on('pageerror', (e) => errs.push(String(e)));
+      await page.route((u) => u.pathname === '/', async (route) => { const r = await route.fetch(), src = process.env.CV_HTML ? fs.readFileSync(process.env.CV_HTML, 'utf8') : await r.text();
+        await route.fulfill({ response: r, body: src.replace(/const K = '[^']*';/, "const K = '';") }); });
+      await page.route('**/api/**', (route) => route.continue({ headers: { ...route.request().headers(), 'x-ccboard': TOK } }));
+      await page.route('**/api/remote/preview', async (route) => {      // 后注册的先匹配：照真服务回 /api/preview 的应答（带 versions）
+        let b = {}; try { b = route.request().postDataJSON() || {}; } catch {}
+        const r = await (await fetch(ORIGIN + '/api/preview', { method: 'POST', headers: { 'x-ccboard': TOK, 'content-type': 'application/json' }, body: JSON.stringify({ path: b.path }) })).json();
+        seen.push(r.versions || null); return route.fulfill({ json: r });
+      });
+      try {
+        await page.goto(FX.url + '&lang=zh'); await page.waitForSelector('.card'); await sleep(1200);
+        const chip = await ev(page, (P) => /data-canvas/.test(md('两个网页：' + P.join('，'))), [A, B]);
+        const clicked = await inCard(page, path.join(DV, 'v2.html'));
+        await page.waitForFunction(() => document.querySelector('#pBody').dataset.kind === 'page' && document.querySelector('#preview').open, null, { timeout: 8000 }).catch(() => {}); await sleep(300);
+        const s = await st(page);
+        ok(chip === false, tag + '远程（K 为空）：正文里 2 个网页也不放「画布」按钮', String(chip));
+        ok(clicked === true && seen.length === 1 && Array.isArray(seen[0]) && seen[0].length === 3 && s.kind === 'page' && s.cmp.hidden === true, tag + '远程（K 为空）看 v2.html：服务给了 3 个 versions，顶栏也不出「并排看全部版本」', JSON.stringify([clicked, seen, s.kind, s.cmp]));
+        ok(errs.length === 0, tag + '远程（K 为空）：页面没有报错', errs.join(' | '));
+      } finally { await ctx.close(); }
+    }
+  };
+
+  const engines = (process.env.CV_ENGINES || (process.env.UI_ONLY === 'canvas' ? 'chromium,webkit' : 'chromium')).split(',').map((x) => x.trim()).filter(Boolean);
+  for (const eng of engines) {
+    let br = cvBrowser;
+    if (eng !== 'chromium') { const pw = await import('playwright-core'); br = await pw[eng].launch({ headless: true }); }
+    try {
+      console.log('\n[画布 · ' + eng + ']');
+      await run(br, eng, 'dark'); await run(br, eng, 'light'); await phones(br, eng);
+      if (eng === 'chromium') { await entries(); await extras(); }
+    } finally { if (br !== cvBrowser) await br.close(); }
+  }
+  if (cvBrowser !== browser) await cvBrowser.close();
+}
 // ── 图集 · 视频在格子里播（11/17 作者：「我想直接播放……不用把它放到全屏」「甚至你可以加入这个同时播放」，win-35）──
 // 夹具：假主目录 Desktop/galv/ 放三段没有声音的 VP8（a、b 6 秒，c 4 秒，test/clips.mjs）；Desktop/galone/ 一段视频 + 一张图。/api/preview 把夹具路径换成真文件，走真的预览端口。
 // 核：点格子就地播 / 停、不进放大层；一次只播一个；⤢ 才放大且格子里的停下；「同时播放」全播、只有一格出声、出声的跟着鼠标走、被拉开的会对回去；
@@ -2387,6 +2770,7 @@ try {
   if (process.env.UI_ONLY !== 'org') {
   if (process.env.UI_ONLY === 'dock') { await dockCheck(); console.log('\n（UI_ONLY=dock：只跑了「弹层里回话」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'galv') { await galVideoCheck(); console.log('\n（UI_ONLY=galv：只跑了「图集 · 视频」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'canvas') { await canvasSeg(); console.log('\n（UI_ONLY=canvas：只跑了「画布」这一段，不是整套）'); throw ONLY_DONE; }
   // ── 性能（11/17 win-1f）：作者「窗口多了之后有点卡卡的……新窗口交付完，它弹到上面的时候，动画不是很流畅」。
   // 页面里停掉轮询，拿当前这份数据改一张卡（挪到 sessions 最前、改成等你选 = 排位最前）再 paint()，核：
   // ① 墙上的列不换位（以前那个项目整列跑到最左，WebKit 要把整列拔出来重建，弹到顶那一下停 0.3 秒）；② 从列底下（看不见的地方）升到顶的卡就地浮现，不从两三千像素外飞上来；
@@ -3124,6 +3508,7 @@ try {
     ok(errs.length === 0, '图集（' + lang + '）：页面没有报错', errs.join(' | ')); await ctx.close();
   }
   console.log('\n[图集 · 视频]'); await galVideoCheck();
+  await canvasSeg();       // 画布（11/24）：整套里只跑 Chromium；WebKit 在 UI_ONLY=canvas 里跑
 
   // 放大看：⌘O、双击封面；再按 ⌘O / 双击标题栏收回；双击正文里的字照旧选词（11/13 作者）
   ({ ctx, page, errs } = await open({ mode: 'wall' }));

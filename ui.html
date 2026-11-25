@@ -10,6 +10,9 @@
         点了先走 openPreview()：向 /api/preview 要网址和类型，在 #preview 弹层里按类型显示（网页 / PDF 用 iframe，图和音视频用自己的元素，文本和 Markdown 排版显示）；不能预览的、⌘ 点照旧 /api/open。
         文件夹也先问服务：多半是图 / 视频的回 kind: gallery，排成格子墙（renderGallery），点一张放大、← → 翻页、Esc 先回格子墙；其余文件夹服务回 no-preview，照旧交给访达。
         md() 发现正文里提到 2 张以上不同的图 / 视频路径时，在正文最上面放一个「图集」小按钮（data-gallery），点了把这些路径一起交给 /api/preview 的 paths（openGallery）。
+        画布（11/24）：多半是网页的文件夹服务回 kind: canvas，renderCanvas() 经 makeCanvas() 把网页按真尺寸活着摆在一张画布上（A 全景，点一个推近，只有它能点）；顶栏「并排看全部版本」（#pCmp）切 C 并排、再按回 A。
+        md() 正文里有 2 个以上不同的 .html 路径时再放一个「画布 · N 个」（data-canvas → openCanvas，paths + canvas: true）；看单个 vN.html、服务给了 versions 时 #pCmp 直接开 C。
+        Esc 两级：推近 / 拖过时先回全景，全景时再关预览；画布里每个 iframe 经 ESC_HOOK 发来的 preview-esc 都认（cv.owns）。clearPreview() 先把画布 iframe 置空再拆。远程预览里没有画布。
         顶栏右上角的额度（paintLimits）：Claude 各号、Codex 的周额度胶囊（limitChip），最后一格是 Gemini API 余额（geminiChip，11/23）：服务给的是估算的上限（锚点 − 账本花费），这里写「≈」、提示里写明是上限，锚点 7 天以上没重读就变灰。
         待审阅的卡正文最上面一行「这一轮改了 N 个文件 ▸」（服务给的 wrote，wroteHTML()），默认收起，点开才列，每行是 data-path，点了和正文里的路径同一条路；
         服务给了 collide 的卡在封面里多一行琥珀「和 <短名> 同时在写 <仓库>」（clashOf() / paintClash()，短名用架构视图的 shortName()）。
@@ -489,7 +492,7 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .pbody{position:relative;flex:1;min-height:0;background:#fff}
 #pFrame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
 /* 图、音视频和逐笔改动留在总控台页面。底色跟主题走，文本按卡片正文排版。 */
-.pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"],.pbody[data-kind="gallery"],.pbody[data-kind="diff"]{background:var(--bg)}
+.pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"],.pbody[data-kind="gallery"],.pbody[data-kind="diff"],.pbody[data-kind="canvas"]{background:var(--bg)}
 #pImg,#pVid{position:absolute;inset:0;margin:auto;max-width:calc(100% - 32px);max-height:calc(100% - 32px)}
 #pImg{object-fit:contain} #pVid{width:calc(100% - 32px);height:calc(100% - 32px);background:#000}
 #pAud{position:absolute;inset:0;margin:auto;width:min(560px,calc(100% - 32px))}
@@ -509,6 +512,56 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 #pText:has(>.rpdf){background:var(--bg)} #pText .rpdf{margin:48px auto 0;max-width:520px;text-align:center} #pText .rpdf p{margin:0 0 16px;color:var(--text-2)}
 #pText .rpdf a{display:inline-flex;align-items:center;height:32px;padding:0 14px;border-radius:var(--r-ctl);color:var(--text);text-decoration:none;box-shadow:inset 0 0 0 var(--ink-w) var(--ink)} #pText .rpdf a:hover{background:var(--hover)}
 #pImg[hidden],#pVid[hidden],#pAud[hidden],#pText[hidden],#pFrame[hidden],#pGal[hidden]{display:none}
+/* 画布（11/24 定：默认摆成画布；网格版另放一个按钮）：一次交付里的几个网页按真尺寸活着摆在一张画布上，点一个推近。
+   版式照搬 ui-workbench/canvas-preview/v1.html；颜色都走 :root，只有手机机身、点阵、框的投影三样是画布自己的。左边清单在窄窗口（≤ 900 px）里收起。
+   点击层 .cv-hit 在框后面放（后放的盖在上面）；左下角提示条 .cv-crumb 约 40 px，C 并排和推近都从底下扣掉它（CV_CRUMB） */
+#pCan{position:absolute;inset:0;display:flex;--device:light-dark(#1d1d1f,#2c2c2f);--dot:light-dark(rgba(0,0,0,.10),rgba(255,255,255,.08));--shadow-frame:0 30px 90px light-dark(rgba(0,0,0,.14),rgba(0,0,0,.6))}
+#pCan[hidden]{display:none}
+.cv-rail{width:248px;flex:none;display:flex;flex-direction:column;border-right:var(--ink-w) solid var(--ink);background:var(--surface)}
+.cv-rail h2{margin:14px 16px 6px;font-size:11px;font-weight:500;color:var(--text-3)}
+.cv-rail ol{list-style:none;margin:0;padding:0 8px;overflow:auto;flex:1}
+.cv-rail li{display:flex;align-items:center;border-radius:var(--r-ctl)}
+.cv-row{flex:1;min-width:0;display:flex;gap:10px;padding:8px;border-radius:var(--r-ctl);text-align:left}
+.cv-row:hover{background:var(--hover)}
+.cv-row[aria-current="true"]{background:color-mix(in srgb,var(--accent) 13%,transparent)}
+.cv-no{font:12px/19px var(--mono);color:var(--text-3);font-variant-numeric:tabular-nums}
+.cv-row[aria-current="true"] .cv-no{color:var(--accent)}
+.cv-tx{min-width:0}
+.cv-row .cv-nm,.cv-mt{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cv-mt{font-size:11px;color:var(--text-3)}
+.cv-ext{color:var(--text-3);padding:6px 8px;border-radius:var(--r-badge);opacity:0}
+.cv-rail li:hover .cv-ext,.cv-ext:focus-visible{opacity:1}
+.cv-ext:hover{background:var(--hover);color:var(--text)}
+.cv-hint{padding:12px 16px;border-top:var(--ink-w) solid var(--ink);font-size:11px;line-height:1.8;color:var(--text-3)}
+.cv-hint kbd{font:11px var(--mono);padding:0 4px;border-radius:3px;box-shadow:inset 0 0 0 var(--ink-w) var(--ink)}
+.cv-stage{position:relative;flex:1;min-width:0;overflow:hidden;outline:none;background-color:var(--bg);touch-action:none}
+.cv-stage.dots{background-image:radial-gradient(circle,var(--dot) 1px,transparent 1.6px)}
+.cv-stage.grabbing,.cv-stage.grabbing *{cursor:grabbing!important}
+.cv-world{position:absolute;left:0;top:0;transform-origin:0 0}
+.cv-fr{position:absolute;left:0;top:0;transform-origin:0 0;transition:opacity var(--d3) var(--ease-out)}
+.cv-fr.dim{opacity:.62}
+.cv-dev{position:relative;overflow:hidden;background:var(--surface);box-shadow:0 0 0 calc(1px / var(--ks,1)) var(--hair),var(--shadow-frame)}
+.cv-fr[data-frame="browser"] .cv-dev{border-radius:12px}
+.cv-tb{height:34px;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--fill);border-bottom:1px solid var(--hair)}
+.cv-tb i{width:12px;height:12px;border-radius:50%;background:var(--fill-2)}
+.cv-tb span{margin:0 auto;padding-right:60px;font:13px var(--mono);color:var(--text-3)}
+.cv-fr[data-frame="phone"] .cv-dev{border-radius:60px;padding:12px;background:var(--device)}
+.cv-fr[data-frame="phone"] iframe{border-radius:48px}
+.cv-fr iframe{display:block;border:0;pointer-events:none}
+.cv-fr.live iframe{pointer-events:auto}
+.cv-hit{position:absolute;inset:0;cursor:zoom-in}
+.cv-fr.live .cv-hit{display:none}
+.cv-fr:not(.live):hover .cv-dev{box-shadow:0 0 0 calc(2px / var(--ks,1)) var(--accent),var(--shadow-frame)}
+.cv-tags{position:absolute;inset:0;pointer-events:none}
+.cv-tag{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:baseline;gap:8px;height:22px;line-height:22px;white-space:nowrap;overflow:hidden;font-size:13px;text-align:left}
+.cv-tag b{font:600 11px var(--mono);color:var(--text-3);font-variant-numeric:tabular-nums}
+.cv-tag .cv-nm{font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;flex:none;max-width:100%}
+.cv-tag .cv-nt{color:var(--text-3);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cv-tag.cur b,.cv-tag.cur .cv-nm{color:var(--accent)}
+.cv-crumb{position:absolute;left:16px;bottom:14px;padding:4px 12px;border-radius:var(--r-pill);font-size:12px;color:var(--text-2);background:color-mix(in srgb,var(--surface) 88%,transparent);box-shadow:0 0 0 var(--ink-w) var(--ink);pointer-events:none;white-space:nowrap}
+.cv-row:focus-visible,.cv-tag:focus-visible,.cv-ext:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+#pCmp[aria-pressed="true"]{background:var(--fill);color:var(--text)}
+@media (max-width:900px){.cv-rail{display:none}}
 /* 图集（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」）：格子墙 + 点一张放大。
    每张图按自己的比例排（高度统一、宽度随图，一行放满再换行），不裁切：手机截图是竖的，裁成方的就看不到字了。读的顺序是从左到右、一行行往下。 */
 #pGal{position:absolute;inset:0;overflow:hidden}
@@ -551,6 +604,7 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .gchip-row{margin:0 0 10px}
 .gchip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px 0 8px;border-radius:var(--r-badge);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);color:var(--text-2);font-size:12px;white-space:nowrap;transition:background var(--d1) var(--ease)}
 .gchip:hover{background:var(--hover);color:var(--text)} .gchip:active{background:var(--press)}
+.gchip+.gchip{margin-left:8px}
 .pwait{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-3);font-size:13px;pointer-events:none} .pwait[hidden]{display:none}
 .dbody{padding:18px 20px 20px;overflow:auto}
 .dfoot{display:flex;align-items:center;gap:8px;padding:12px 16px 14px 20px;border-top:1px solid var(--hair);flex:none}
@@ -746,7 +800,7 @@ body.org main:has(#org.map){overflow:hidden}
 <div id="toast" role="status"><span></span><button hidden></button></div>
 
 <dialog id="detail"><div class="dhead"><h1 id="dTitle"></h1><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="dbody" id="dBody"></div><div class="dock" id="dDock" hidden></div></dialog>
-<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="tbtn" id="pSync" hidden title="所有视频从头一起播；鼠标停在哪一格，就听哪一格的声音">同时播放</button><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody" id="pBody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><img id="pImg" alt="" hidden><video id="pVid" controls playsinline preload="metadata" hidden></video><audio id="pAud" controls preload="metadata" hidden></audio><div id="pText" class="md" hidden></div><div id="pGal" hidden></div><div class="pwait" id="pWait">读取中…</div></div><div class="dock" id="pDock" hidden><div class="dto"><span>回给</span><b></b></div></div></dialog>
+<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="tbtn" id="pSync" hidden title="所有视频从头一起播；鼠标停在哪一格，就听哪一格的声音">同时播放</button><button class="tbtn" id="pCvBack" hidden title="回到全景（Esc）">全景</button><button class="tbtn" id="pCmp" hidden aria-pressed="false" title="所有版本同时摆出来，每个都能直接点；再按一下回到画布">并排看全部版本</button><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody" id="pBody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><img id="pImg" alt="" hidden><video id="pVid" controls playsinline preload="metadata" hidden></video><audio id="pAud" controls preload="metadata" hidden></audio><div id="pText" class="md" hidden></div><div id="pGal" hidden></div><div id="pCan" hidden></div><div class="pwait" id="pWait">读取中…</div></div><div class="dock" id="pDock" hidden><div class="dto"><span>回给</span><b></b></div></div></dialog>
 
 <dialog id="newDlg" style="--w:580px"><div class="dhead"><h1 id="nTitle">新任务</h1></div>
   <div class="dbody">
@@ -875,6 +929,9 @@ const EN = {
   '你点过「审完了」': 'you marked it reviewed', '无需处理的交付': 'a no-action delivery', '待审阅的交付': 'a delivery to review', '几十秒': 'under a minute', '要你：': 'Needs you: ',
   '重新载入': 'Reload', '在浏览器打开': 'Open in browser', '在默认浏览器里打开（也可以 ⌘ 点链接）': 'Open in your default browser (or ⌘-click the link)', '预览': 'Preview',
   '图集': 'Gallery', '在访达中显示': 'Show in Finder', '在访达里打开这个文件夹': 'Open this folder in Finder', '回到图集（Esc）': 'Back to gallery (Esc)',
+  '并排看全部版本': 'Compare all versions', '回到全景（Esc）': 'Back to overview (Esc)', '全景': 'Overview', '网页': 'Page', '这一次的网页': 'Pages in this delivery', '换一个': 'next', '回全景': 'overview',
+  '拖动平移 · ctrl + 滚轮缩放': 'Drag to pan · ctrl + scroll to zoom', '自由视角 · Esc 回全景': 'Free view · Esc for overview', '所有版本同时摆出来，每个都能直接点；再按一下回到画布': 'Lay all versions side by side, each one live; click again to go back to the canvas',
+  '这些网页凑不齐两个能打开的': 'Fewer than two of these pages can be opened', '这些网页不在同一个文件夹，画布只摆同一个文件夹里的': 'These pages are in different folders; a canvas only shows pages from one folder', '画布还不能在远程预览里打开': 'The canvas is not available in remote preview yet',
   '同时播放': 'Play all', '全部暂停': 'Pause all', '全部继续': 'Resume all', '鼠标停在哪一格，就听哪一格': 'sound follows the pointer',
   '所有视频从头一起播；鼠标停在哪一格，就听哪一格的声音': 'Play every video together from the start; you hear the one under the pointer',
   '播放': 'Play', '点一下在这里播放 / 暂停': 'Click to play / pause here', '放大看': 'Enlarge',
@@ -909,6 +966,9 @@ const RULES = [
   [/^新版 (\S+) 已经下好、核过 sha256（本机 (\S+)），点了打开安装包$/, 'Version $1 is downloaded and its sha256 checked (you have $2). Click to open the installer'],
   [/^有新版 (\S+)（本机 (\S+)），点了用浏览器下载安装包$/, 'Version $1 is out (you have $2). Click to download the installer in your browser'],
   [/^(\d+) 秒后发$/, 'in $1s'], [/^已经自动接着做了 (\d+) 轮，等你说一句$/, 'Auto-continued $1 times — waiting for you'], [/^这个号周额度用了 (\d+)%$/, 'This account is at $1% of its weekly limit'], [/^这个号 5 小时额度用了 (\d+)%$/, 'This account is at $1% of its 5-hour limit'],
+  [/^画布 · (\d+) 个$/, 'Canvas · $1'], [/^在总控台里把这 (\d+) 个网页摆在一张画布上$/, 'Lay these $1 pages out on one canvas'], [/^(\d+) 个网页$/, '$1 pages'], [/^另有 (\d+) 个没摆上$/, '$1 more not shown'], [/^另有 (\d+) 个在别的文件夹，没摆上$/, '$1 more in other folders, not shown'],
+  [/^并排 · (\d+) 个都能直接点 · 点标题推近$/, 'Side by side · all $1 are live · click a title to zoom in'], [/^全景 · (\d+) 个网页 · 点一个推近，拖动平移，ctrl \+ 滚轮缩放$/, 'Overview · $1 pages · click one to zoom in, drag to pan, ctrl + scroll to zoom'],
+  [/^(\d+) \/ (\d+) · 现在可以直接点它 · ← → 换一个 · Esc 回全景$/, '$1 / $2 · live now · ← → next · Esc for overview'],
   [/^图集 · (\d+) 张$/, 'Gallery · $1'], [/^在总控台里一起看这 (\d+) 张图$/, 'View these $1 images together'], [/^共 (\d+) 个$/, '$1 items'], [/^只显示了前 (\d+) 个$/, 'Showing the first $1'],
   [/^运行中 · (\d+) 分钟没动静$/, 'Running · no activity for $1 min'], [/^运行中 · (.+)$/, 'Running · $1'],
   [/^预计 明天 (\d+:\d+) 交$/, 'ETA tomorrow $1'], [/^预计 (\d+:\d+) 交$/, 'ETA $1'], [/^比预计晚 (.+)$/, '$1 past ETA'], [/^窗口在 (\d+:\d+) 报的：还要 (\d+) 分钟$/, 'The window estimated at $1: $2 more min'],
@@ -1043,12 +1103,18 @@ function trimUrl(u) { let t = ''; while (/[.,;:!?'\])]$/.test(u) && !(u.endsWith
 // 正文里提到 2 张以上不同的图 / 视频时，正文最上面放一个「图集」小按钮（11/15 Khalil：「直接把这些照片做成一个合集，我就不要一个一个去点开」）。
 // 放最上面：卡片的正文区是滚动的，放在末尾要滚到底才看得到。路径是 inline() 认出来的那些，不另写一套识别规则；点一个文件夹的图集走服务的 /api/preview（见 openPreview）。
 const MEDIA_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|heic|heif|tiff?|svg|mp4|m4v|mov|webm)$/i;
+const PAGE_EXT = /\.html?$/i;       // 画布（11/24）：正文里 2 个以上不同的网页路径 → 「画布 · N 个」。只在本机：远程预览里没有画布
+const ICON_CANVAS = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1.5" y="2" width="6" height="5" rx=".8"/><rect x="8.5" y="2" width="2" height="5" rx=".6"/><rect x="1.5" y="8.5" width="9" height="1.6" rx=".6"/></svg>';
 const ICON_GRID = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1.5" y="1.5" width="4" height="4" rx=".8"/><rect x="6.5" y="1.5" width="4" height="4" rx=".8"/><rect x="1.5" y="6.5" width="4" height="4" rx=".8"/><rect x="6.5" y="6.5" width="4" height="4" rx=".8"/></svg>';
+// 画布只摆同一个文件夹里的网页（服务按真身再分一次组，只摆最多的那组）：这里按字面路径的文件夹分组，回最多的那一组有几个
+function cvGroup(pages) { const n = new Map(); for (const p of pages) { const d = p.slice(0, p.lastIndexOf('/') + 1); n.set(d, (n.get(d) || 0) + 1); } return Math.max(0, ...n.values()); }
 function md(src) {
   const outer = fileSink, mine = fileSink = [];
   try {
-    const html = mdBody(src), media = [...new Set(mine.filter((p) => MEDIA_EXT.test(p)))];
-    return media.length < 2 ? html : '<div class="gchip-row"><button type="button" class="gchip" data-gallery="' + esc(JSON.stringify(media)) + '" title="在总控台里一起看这 ' + media.length + ' 张图">' + ICON_GRID + '图集 · ' + media.length + ' 张</button></div>' + html;
+    const html = mdBody(src), media = [...new Set(mine.filter((p) => MEDIA_EXT.test(p)))], pages = K ? [...new Set(mine.filter((p) => PAGE_EXT.test(p)))] : [], cvN = cvGroup(pages);
+    const chips = (media.length < 2 ? '' : '<button type="button" class="gchip" data-gallery="' + esc(JSON.stringify(media)) + '" title="在总控台里一起看这 ' + media.length + ' 张图">' + ICON_GRID + '图集 · ' + media.length + ' 张</button>') +
+      (cvN < 2 ? '' : '<button type="button" class="gchip" data-canvas="' + esc(JSON.stringify(pages)) + '" title="在总控台里把这 ' + cvN + ' 个网页摆在一张画布上">' + ICON_CANVAS + '画布 · ' + cvN + ' 个</button>');   // 路径照旧全发，服务挑那一组
+    return chips ? '<div class="gchip-row">' + chips + '</div>' + html : html;
   } finally { fileSink = outer; }
 }
 function mdBody(src) {
@@ -2590,6 +2656,8 @@ function clearPreview() {
   $('#pImg').removeAttribute('src'); $('#pText').textContent = '';
   if (gal) galStopAll(); gal = null; $('#pGal').hidden = true; $('#pGal').textContent = '';      // 图集整个拆掉：格子里、放大里的视频跟着没了，不在背后接着放
   $('#pSync').hidden = true;
+  if (cv) { cv.destroy(); cv = null; }                       // 画布：每个 iframe 先置空再拆，12 个页面的声音、定时器不在后台接着跑
+  pVersions = null; $('#pCmp').hidden = $('#pCvBack').hidden = true;
 }
 // 顶栏右边两个按钮跟着内容走：网页等是「在浏览器打开」；文件夹的图集改成「在访达中显示」；一批图拼成的图集没有对应的文件夹，两个都不要
 function setChrome(isGal, folder) {
@@ -2638,8 +2706,10 @@ async function openPreview(p) {
   if (!r.ok) { if (r.reason === 'not-ready' || !K) toast(r.error || '这种文件远程预览不了'); else openPath(p); return; }
   clearPreview(); previewAt = p;
   if (r.kind === 'gallery') { renderGallery(r, p); return; }       // 文件夹里多半是图 / 视频：排成格子墙，不跳去访达
+  if (r.kind === 'canvas') { renderCanvas(r, p); return; }         // 文件夹里多半是网页：摆在一张画布上（A 全景）
   setChrome(false);
   $('#pTitle').textContent = r.name; $('#pDir').textContent = tilde(r.dir); $('#pDir').title = r.dir; $('#pBody').dataset.kind = r.kind;
+  if (K && r.kind === 'page' && Array.isArray(r.versions) && r.versions.length >= 2) { pVersions = r.versions.map((n) => r.dir + '/' + n); $('#pCmp').hidden = false; $('#pCmp').setAttribute('aria-pressed', 'false'); }   // 单个 vN.html，同一层有 v1…vN
   if (!K && r.kind === 'pdf') {   // 手机远程（11/22 Khalil 定）：PDF 在沙盒 iframe 里哪个浏览器都画不出来，不硬画。说清楚，给一个下载链接（同一把钥匙，服务按附件发）
     for (const id of ['#pFrame', '#pImg', '#pVid', '#pAud']) $(id).hidden = true;
     $('#pWait').hidden = true; $('#pText').hidden = false; $('#pText').scrollTop = 0;
@@ -2799,8 +2869,259 @@ $('#preview').addEventListener('cancel', (e) => { if (gal && (gal.i >= 0 || galE
 $('#pReload').addEventListener('click', () => { if (previewAt) openPreview(previewAt); });
 $('#pOpen').addEventListener('click', () => openPath(previewAt));
 $('#preview').addEventListener('close', () => { clearPreview(); syncDock(); });   // 关掉就卸载：里面的音视频、动画不在背后接着放；回话框还给大窗口或卡片
-// 焦点在预览页里时 Esc 到不了这里：预览端口发 HTML 时加了一小段脚本，把页面没用掉的 Esc 发过来。只认这个 iframe 发的
-addEventListener('message', (e) => { if (e.source === $('#pFrame').contentWindow && e.data && e.data.ccb === 'preview-esc' && $('#preview').open) $('#preview').close(); });
+// 焦点在预览页里时 Esc 到不了这里：预览端口发 HTML 时加了一小段脚本，把页面没用掉的 Esc 发过来。只认 #pFrame 和画布里的 iframe 发的
+// 画布里的网页发来的（Esc 两级）：推近 / 拖过时先回全景，已经在全景时再关预览
+addEventListener('message', (e) => {
+  if (!e.data || e.data.ccb !== 'preview-esc' || !$('#preview').open) return;
+  if (e.source === $('#pFrame').contentWindow) $('#preview').close();
+  else if (cv && cv.owns(e.source)) { if (cv.zoomedIn()) cv.overview(); else $('#preview').close(); }
+});
+
+// ── 画布（11/24 定：默认摆成画布；网格版另放一个按钮）──
+// 一次交付里有 2 个以上网页时，所有网页按真尺寸活着摆在一张画布上（A 全景），点一个镜头推近，只有它能点；顶栏「并排看全部版本」切 C（每个框同时能点），再按一下回 A。
+// 摆法和镜头照搬 ui-workbench/canvas-preview/v1.html（canvasPack / layoutCanvas / layoutGrid / draw / go / finishNow / setLive），B 的 layoutStage 不搬，数字键 1 / 2 / 3 换成顶栏开关。
+// 三条路进来：点一个多半是网页的文件夹（openPreview 收到 kind: canvas）；正文最上面的「画布 · N 个」（openCanvas，paths + canvas: true）；看单个 vN.html 时顶栏的「并排看全部版本」（openCanvas(…, true) 直接开 C）。
+// 原型里的变量名（mode / cur / drag / step / layout）和总控台顶层的撞名，所以整段关在 makeCanvas() 里，外面只拿句柄 cv
+let cv = null, cvEsc = false, pVersions = null;      // cvEsc 同 galEsc：只在这一次按键所在的任务里为真；pVersions：正在看的 vN.html 的全部版本（服务给的 versions）
+const CV_SIZE = { phone: { w: 390, h: 844 }, browser: { w: 1280, h: 800 } }, CV_CHROME = { phone: { x: 12, y: 12, top: 0 }, browser: { x: 0, y: 0, top: 34 } };   // 网页按真尺寸排版，再整体缩小
+const CV_LABEL = 30, CV_PAD = 56, CV_GAP = 28, CV_MOVE = 520, CV_CRUMB = 40, CV_TAG_MAX = 420;     // CV_CRUMB：左下角提示条占的高度（离底 14 + 条高 22 + 余量）；CV_TAG_MAX：标签最宽多少，量宽和画标签都用它（长标题不把全景挤小）
+function cvBezier(x1, y1, x2, y2) {       // 和 --ease-out 同一条曲线：cubic-bezier(.25,.1,.3,1)
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx, cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const X = (t) => ((ax * t + bx) * t + cx) * t, Y = (t) => ((ay * t + by) * t + cy) * t, dX = (t) => (3 * ax * t + 2 * bx) * t + cx;
+  return (x) => { let t = x; for (let n = 0; n < 6; n++) { const d = dX(t); if (Math.abs(d) < 1e-6) break; t -= (X(t) - x) / d; } return Y(Math.min(1, Math.max(0, t))); };
+}
+const cvEase = cvBezier(.25, .1, .3, 1);
+// items：服务给的 [{ name, title, note, frame, url, dir }]；startGrid：直接开 C；onUi(grid, zoomed)：顶栏两个按钮跟着变
+function makeCanvas(items, startGrid, onUi) {
+  const host = $('#pCan'), N = items.length;
+  host.innerHTML = '<nav class="cv-rail" aria-label="' + esc(T('这一次的网页')) + '"><h2></h2><ol></ol><div class="cv-hint"><kbd>←</kbd> <kbd>→</kbd> ' + esc(T('换一个')) + ' · <kbd>Esc</kbd> / <kbd>0</kbd> ' + esc(T('回全景')) + '<br>' + esc(T('拖动平移 · ctrl + 滚轮缩放')) + '</div></nav>' +
+    '<section class="cv-stage dots" tabindex="-1" aria-label="' + esc(T('画布')) + '"><div class="cv-world"></div><div class="cv-tags"></div><div class="cv-crumb" aria-live="polite"></div></section>';
+  host.hidden = false;
+  const stage = host.querySelector('.cv-stage'), world = host.querySelector('.cv-world'), tagsEl = host.querySelector('.cv-tags'), crumb = host.querySelector('.cv-crumb'), list = host.querySelector('ol');
+  host.querySelector('h2').textContent = T(N + ' 个网页');
+  const no = (i) => String(i + 1).padStart(2, '0');
+  const outer = (i) => { const f = items[i].frame, s = CV_SIZE[f], c = CV_CHROME[f]; return { w: s.w + 2 * c.x, h: s.h + 2 * c.y + c.top }; };
+  const size = () => ({ W: stage.clientWidth, H: stage.clientHeight });
+  let mode = startGrid ? 'grid' : 'canvas', cur = -1, free = false, dead = false, stageW = 0, drag = null, dragMoved = false;
+  let cam = { x: 0, y: 0, k: 1 }, pos = items.map(() => ({ x: 0, y: 0, s: 1 })), target = null, anim = 0, need = [];
+  const frames = [], tags = [], rows = [];
+  items.forEach((it, i) => {
+    const sz = CV_SIZE[it.frame], name = it.title || it.name, note = it.note || (it.title ? it.name : '');
+    const fr = document.createElement('div'); fr.className = 'cv-fr'; fr.dataset.frame = it.frame;
+    const hit = document.createElement('div'); hit.className = 'cv-hit'; hit.addEventListener('click', () => { if (!dragMoved) focusOn(i); });
+    const dev = document.createElement('div'); dev.className = 'cv-dev';
+    if (it.frame === 'browser') { const tb = document.createElement('div'); tb.className = 'cv-tb'; tb.innerHTML = '<i></i><i></i><i></i><span></span>'; tb.querySelector('span').textContent = it.name; dev.append(tb); }
+    const ifr = document.createElement('iframe'); ifr.width = sz.w; ifr.height = sz.h; ifr.title = name; ifr.tabIndex = -1; ifr.referrerPolicy = 'no-referrer'; ifr.src = it.url;
+    dev.append(ifr);
+    fr.append(dev, hit);       // 点击层后放，盖在框上面（原型第一版反过来，点击被框吃掉，点不动）
+    world.append(fr); frames.push(fr);
+    const tag = document.createElement('button'); tag.type = 'button'; tag.className = 'cv-tag';
+    tag.innerHTML = '<b></b><span class="cv-nm"></span><span class="cv-nt"></span>';
+    tag.children[0].textContent = no(i); tag.children[1].textContent = name; tag.children[2].textContent = note; tag.title = [name, note].filter(Boolean).join(' · ');
+    tag.addEventListener('click', () => focusOn(i)); tagsEl.append(tag); tags.push(tag);
+    const li = document.createElement('li');
+    li.innerHTML = '<button type="button" class="cv-row"><span class="cv-no"></span><span class="cv-tx"><span class="cv-nm"></span><span class="cv-mt"></span></span></button>' +
+      (K && it.dir ? '<button type="button" class="cv-ext" title="' + esc(T('在浏览器打开')) + '" aria-label="' + esc(T('在浏览器打开')) + '">↗</button>' : '');
+    li.querySelector('.cv-no').textContent = no(i); li.querySelector('.cv-nm').textContent = name;
+    li.querySelector('.cv-mt').textContent = T(it.frame === 'phone' ? '手机' : '网页') + ' · ' + it.name;
+    li.querySelector('.cv-row').addEventListener('click', () => focusOn(i));
+    const ext = li.querySelector('.cv-ext'); if (ext) ext.addEventListener('click', () => openPath(it.dir + '/' + it.name));
+    list.append(li); rows.push(li.querySelector('.cv-row'));
+  });
+  // 每个标签「编号 + 名字」在屏幕上要多宽：弹层打开、量得到尺寸以后才准，所以在 ResizeObserver 的回调里量
+  const measure = () => { if (stage.clientWidth > 0) need = tags.map((t) => Math.min(t.querySelector('b').offsetWidth + 8 + t.querySelector('.cv-nm').scrollWidth + 14, CV_TAG_MAX)); };
+
+  // A 画布：所有框按真尺寸排在一张大画布上。试 41 种行宽，挑整体缩放最大（看得最清楚）的那种排法。
+  // 每个框横向占的位置 = 框宽和「编号 + 名字」宽里大的那个。标签在屏幕上一直一样宽，换到画布上要除以缩放比例 k
+  const foot = (i, k) => Math.max(outer(i).w, (need[i] || 0) / k);
+  function pack(rowW, gx, gy, k) {
+    const lines = []; let line = [], lw = 0;
+    for (let i = 0; i < N; i++) {
+      const w = foot(i, k), add = line.length ? gx + w : w;
+      if (line.length && lw + add > rowW) { lines.push({ line, lw }); line = []; lw = 0; }
+      lw += line.length ? gx + w : w; line.push(i);
+    }
+    if (line.length) lines.push({ line, lw });
+    const bw = Math.max(...lines.map((l) => l.lw)), rects = []; let y = 0;
+    for (const l of lines) {
+      const rh = Math.max(...l.line.map((i) => outer(i).h)); let x = (bw - l.lw) / 2;
+      for (const i of l.line) { const o = outer(i); rects[i] = { x, y: y + (rh - o.h) / 2, s: 1 }; x += foot(i, k) + gx; }
+      y += rh + gy;
+    }
+    return { rects, bw, bh: y - gy };
+  }
+  function canvasPack() {
+    const { W, H } = size();
+    const best = (gx, gy, k0) => {
+      const ws = items.map((_, i) => foot(i, k0)), maxW = Math.max(...ws), sum = ws.reduce((a, b) => a + b, 0) + gx * (N - 1); let b = null;
+      for (let t = 0; t <= 40; t++) {
+        const p = pack(maxW + (sum - maxW) * t / 40, gx, gy, k0), k = Math.min((W - 2 * CV_PAD) / p.bw, (H - 2 * CV_PAD - CV_LABEL) / p.bh);
+        if (!b || k > b.k + 1e-9) b = { ...p, k, k0 };
+      }
+      return b;
+    };
+    // k 取决于怎么排，怎么排又取决于 k（标签换到画布上的宽度）：排三遍，每遍用上一遍的 k
+    let b = best(160, 160, Infinity);
+    for (let n = 0; n < 3; n++) b = best(160, Math.max(160, (CV_LABEL + 14) / b.k), Math.min(b.k, 1));   // 行距至少放得下一行标签（标签在屏幕上一直是 22px 高）
+    b.k = Math.min(b.k, b.k0);      // 最后一遍是按 k0 排的，真缩放比 k0 小一点时标签会差几像素：取小的那个，保证放得下
+    return b;
+  }
+  function layoutCanvas() {
+    const { W, H } = size(), p = canvasPack(); let c;
+    if (cur < 0) { const k = Math.min(p.k, 1); c = { k, x: (W - p.bw * k) / 2, y: (H - p.bh * k + CV_LABEL) / 2 }; }
+    else {     // 推近：上面留标签，下面扣掉提示条（原型底下只留 32，提示条会压住框底几像素）
+      const r = p.rects[cur], o = outer(cur), top = 32 + CV_LABEL, bot = CV_CRUMB + 4, k = Math.min((W - 80) / o.w, (H - top - bot) / o.h, 1);
+      c = { k, x: W / 2 - (r.x + o.w / 2) * k, y: top + (H - top - bot) / 2 - (r.y + o.h / 2) * k };
+    }
+    return { pos: p.rects, cam: c };
+  }
+  // C 并排：等大的格子，挑一个让最小那格也尽量大的列数；每个都能直接点。高度扣掉左下角提示条（原型没扣，6 个样本碰巧没压上）
+  function layoutGrid() {
+    const { W, H: H0 } = size(), H = H0 - CV_CRUMB; let b = null;
+    for (let cols = 1; cols <= N; cols++) {
+      const rowsN = Math.ceil(N / cols), cw = (W - CV_GAP * (cols + 1)) / cols, ch = (H - CV_GAP * (rowsN + 1) - rowsN * CV_LABEL) / rowsN;
+      const s = Math.min(...items.map((_, i) => Math.min(cw / outer(i).w, ch / outer(i).h)));
+      if (!b || s > b.s) b = { cols, cw, ch, s };
+    }
+    const out = items.map((_, i) => {
+      const c = i % b.cols, r = Math.floor(i / b.cols), o = outer(i), s = Math.min(b.cw / o.w, b.ch / o.h, 1);
+      return { x: CV_GAP + c * (b.cw + CV_GAP) + (b.cw - o.w * s) / 2, y: CV_GAP + r * (b.ch + CV_LABEL + CV_GAP) + CV_LABEL, s };   // 顶部对齐：一行里标签在同一条线上
+    });
+    return { pos: out, cam: { x: 0, y: 0, k: 1 } };
+  }
+  const layout = () => (mode === 'grid' ? layoutGrid() : layoutCanvas());
+
+  function draw() {
+    world.style.transform = `translate(${cam.x}px,${cam.y}px) scale(${cam.k})`;
+    frames.forEach((f, i) => { const p = pos[i]; f.style.transform = `translate(${p.x}px,${p.y}px) scale(${p.s})`; f.style.setProperty('--ks', cam.k * p.s); });
+    // 标签最宽到同一行下一个框的左边（手机框窄，只给框宽会把名字截掉）
+    const R = pos.map((p, i) => { const o = outer(i), k = cam.k * p.s; return { x: cam.x + p.x * cam.k, y: cam.y + p.y * cam.k, w: o.w * k, h: o.h * k }; });
+    tags.forEach((t, i) => {
+      const r = R[i]; let next = stageW;
+      R.forEach((q, j) => { if (j !== i && q.x > r.x + 1 && q.y < r.y + r.h && r.y < q.y + q.h) next = Math.min(next, q.x); });
+      t.style.transform = `translate(${Math.round(r.x)}px,${Math.round(r.y - 27)}px)`;
+      t.style.maxWidth = Math.max(110, r.w, Math.min(next - r.x - 14, CV_TAG_MAX)) + 'px';
+    });
+    if (mode === 'canvas') {   // 点阵跟着画布走，平移缩放时能感觉到「在一张大纸上」
+      let g = 100 * cam.k; while (g < 14) g *= 2; while (g > 56) g /= 2;
+      stage.style.backgroundSize = `${g}px ${g}px`; stage.style.backgroundPosition = `${cam.x % g}px ${cam.y % g}px`;
+    }
+  }
+  // 镜头怎么插值：缩放按对数走（每一帧放大的比例一样，看起来匀速），平移按「屏幕中心对着画布上哪一点」走
+  const centerOf = (c, W, H) => ({ x: (W / 2 - c.x) / c.k, y: (H / 2 - c.y) / c.k });
+  function go(t, dur) {
+    cancelAnimationFrame(anim); target = t; setLive(false);
+    if (!dur || calm.matches) { pos = t.pos; cam = t.cam; draw(); setLive(true); return; }
+    const { W, H } = size(), t0 = performance.now(), p0 = pos.map((p) => ({ ...p })), a0 = centerOf(cam, W, H), a1 = centerOf(t.cam, W, H), lk0 = Math.log(cam.k), lk1 = Math.log(t.cam.k);
+    world.style.willChange = 'transform';
+    const tick = (now) => {
+      if (dead) return;
+      const u = Math.min(1, (now - t0) / dur), e = cvEase(u), k = Math.exp(lk0 + (lk1 - lk0) * e), cx = a0.x + (a1.x - a0.x) * e, cy = a0.y + (a1.y - a0.y) * e;
+      cam = { k, x: W / 2 - cx * k, y: H / 2 - cy * k };
+      pos = p0.map((p, i) => ({ x: p.x + (t.pos[i].x - p.x) * e, y: p.y + (t.pos[i].y - p.y) * e, s: p.s * Math.pow(t.pos[i].s / p.s, e) }));
+      draw();
+      if (u < 1) anim = requestAnimationFrame(tick);
+      else { pos = t.pos; cam = t.cam; draw(); world.style.willChange = ''; setLive(true); }
+    };
+    anim = requestAnimationFrame(tick);
+  }
+  function finishNow() { cancelAnimationFrame(anim); if (target) { pos = target.pos; draw(); } world.style.willChange = ''; }   // 动到一半被打断（拖、滚）：框直接落到位，镜头留在当前
+  // 哪个能直接点：画布推近的那个、并排时全部
+  const live = (i) => mode === 'grid' || (cur === i && !free);
+  function setLive(on) { frames.forEach((f, i) => { const l = on && live(i); f.classList.toggle('live', l); f.querySelector('iframe').tabIndex = l ? 0 : -1; }); }
+  const zoomedIn = () => mode === 'canvas' && (cur >= 0 || free);
+  function ui() {
+    rows.forEach((r, i) => r.setAttribute('aria-current', String(i === cur)));
+    tags.forEach((t, i) => t.classList.toggle('cur', i === cur));
+    frames.forEach((f, i) => f.classList.toggle('dim', mode === 'canvas' && cur >= 0 && i !== cur && !free));
+    stage.classList.toggle('dots', mode === 'canvas');
+    if (mode !== 'canvas') { stage.style.backgroundSize = ''; stage.style.backgroundPosition = ''; }
+    crumb.textContent = T(mode === 'grid' ? '并排 · ' + N + ' 个都能直接点 · 点标题推近' : free ? '自由视角 · Esc 回全景' : cur < 0 ? '全景 · ' + N + ' 个网页 · 点一个推近，拖动平移，ctrl + 滚轮缩放' : no(cur) + ' / ' + no(N - 1) + ' · 现在可以直接点它 · ← → 换一个 · Esc 回全景');
+    onUi(mode === 'grid', zoomedIn());
+  }
+  function render(dur = CV_MOVE) { ui(); go(layout(), dur); }
+  function focusOn(i) { if (mode === 'grid') mode = 'canvas'; cur = i; free = false; render(); }
+  function overview() { mode = 'canvas'; cur = -1; free = false; render(); stage.focus({ preventScroll: true }); }
+  function setMode(m) { if (m === mode) return; mode = m; free = false; if (m === 'grid') cur = -1; render(); }
+  function step(d) { cur = cur < 0 ? (d > 0 ? 0 : N - 1) : (cur + d + N) % N; if (mode === 'grid') mode = 'canvas'; free = false; render(); }
+
+  // 画布上拖动平移、滚轮平移、ctrl + 滚轮缩放（触控板捏合在 WKWebView 里没验过，v1 不做）
+  stage.addEventListener('pointerdown', (e) => {
+    if (mode !== 'canvas' || e.button !== 0 || e.target.closest('.cv-tag')) return;
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y }; dragMoved = false;
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (!(e.buttons & 1)) { dragEnd(); return; }                   // 松手的 pointerup 没送到（在框里、窗口外松开）：当作拖完了
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!dragMoved) {
+      if (Math.hypot(dx, dy) < 4) return;
+      dragMoved = true; finishNow(); setLive(false);
+      stage.setPointerCapture(drag.id); stage.classList.add('grabbing');
+      drag.cx = cam.x - dx; drag.cy = cam.y - dy;
+    }
+    cam = { ...cam, x: drag.cx + dx, y: drag.cy + dy };
+    if (!free) { free = true; ui(); }
+    draw();
+  });
+  const dragEnd = () => { if (!drag) return; drag = null; stage.classList.remove('grabbing'); if (dragMoved) { setLive(true); setTimeout(() => { dragMoved = false; }, 0); } };
+  stage.addEventListener('pointerup', dragEnd); stage.addEventListener('pointercancel', dragEnd);
+  stage.addEventListener('wheel', (e) => {
+    if (mode !== 'canvas') { if (e.ctrlKey) e.preventDefault(); return; }   // C 并排：普通滚轮照常滚，ctrl + 滚轮拦下（不然 Chromium 把整个总控台缩放）
+    e.preventDefault(); finishNow();
+    if (e.ctrlKey) {
+      const r = stage.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top, k = Math.min(2, Math.max(0.04, cam.k * Math.exp(-e.deltaY * 0.01)));
+      cam = { k, x: px - (px - cam.x) * k / cam.k, y: py - (py - cam.y) * k / cam.k };
+    } else cam = { ...cam, x: cam.x - e.deltaX, y: cam.y - e.deltaY };
+    if (!free) { free = true; setLive(true); ui(); }
+    draw();
+  }, { passive: false });
+  // 弹层打开、窗口变大小、底部回话框挪进来时重排；拖过的自由视角跟着作废（框的位置变了）
+  const ro = new ResizeObserver(() => { if (dead) return; stageW = stage.clientWidth; measure(); finishNow(); free = false; render(0); });
+  ro.observe(stage);
+  ui();
+  function destroy() {
+    dead = true; cancelAnimationFrame(anim); ro.disconnect();
+    for (const f of host.querySelectorAll('iframe')) f.src = 'about:blank';
+    host.textContent = ''; host.hidden = true;
+  }
+  return { destroy, owns: (w) => !!w && frames.some((f) => f.querySelector('iframe').contentWindow === w), zoomedIn, overview, step, setMode, mode: () => mode, stage };
+}
+function cvChrome(grid, zoomed) { const b = $('#pCmp'); b.hidden = false; b.setAttribute('aria-pressed', String(grid)); $('#pCvBack').hidden = !zoomed; }
+function renderCanvas(r, folder, grid) {
+  const n = r.items.length, dirs = [...new Set(r.items.map((it) => it.dir))], one = folder ? r.dir : dirs.length === 1 ? dirs[0] : '';
+  $('#pBody').dataset.kind = 'canvas'; setChrome(true, folder);
+  for (const id of ['#pFrame', '#pImg', '#pVid', '#pAud', '#pText']) $(id).hidden = true;
+  $('#pWait').hidden = true;
+  $('#pTitle').textContent = folder ? r.name : T('画布');
+  $('#pDir').textContent = (one ? tilde(one) + ' · ' : '') + T(n + ' 个网页') + (r.more ? ' · ' + T('另有 ' + r.more + ' 个没摆上') : '') + (r.otherDirs ? ' · ' + T('另有 ' + r.otherDirs + ' 个在别的文件夹，没摆上') : ''); $('#pDir').title = one;
+  const d = $('#preview'); if (!d.open) d.showModal();
+  cv = makeCanvas(r.items, !!grid, cvChrome); syncDock();
+  cv.stage.focus({ preventScroll: true });
+}
+// 正文里的「画布 · N 个」、vN.html 顶栏的「并排看全部版本」：一批网页路径问服务（paths + canvas: true），服务只摆同一个文件夹里最多的那组（一把钥匙），按给的顺序摆
+async function openCanvas(paths, grid) {
+  const req = ++previewReq;
+  if (!K) { toast('画布还不能在远程预览里打开'); return; }
+  let r; try { r = await api('/api/preview', { paths, canvas: true }); } catch { if (req === previewReq) toast('总控台服务没应答'); return; }
+  if (req !== previewReq) return;
+  if (!r.ok || r.kind !== 'canvas') { toast(r.error || '这些网页凑不齐两个能打开的'); return; }
+  clearPreview(); previewAt = ''; renderCanvas(r, '', grid);
+}
+$('#pCmp').addEventListener('click', () => {
+  if (cv) cv.setMode(cv.mode() === 'grid' ? 'canvas' : 'grid');      // 画布上是开关：A ↔ C 来回切
+  else if (pVersions) openCanvas(pVersions, true);                    // 看着一个 vN.html：把它和兄弟版本一起摆成 C
+});
+$('#pCvBack').addEventListener('click', () => { if (cv) cv.overview(); });
+// 键：推近 / 拖过时 Esc 先回全景（capture 里拦下，弹层收不到 cancel）；← → 换一个，0 回全景。在底部回话框里打字时 ← → 是挪光标、0 是字
+document.addEventListener('keydown', (e) => {
+  if (!cv || !$('#preview').open || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Escape') { if (cv.zoomedIn()) { e.preventDefault(); e.stopImmediatePropagation(); cvEsc = true; setTimeout(() => { cvEsc = false; }, 0); cv.overview(); } return; }
+  if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); cv.step(e.key === 'ArrowRight' ? 1 : -1); }
+  else if (e.key === '0') { e.preventDefault(); cv.overview(); }
+}, true);
+$('#preview').addEventListener('cancel', (e) => { if (cv && (cv.zoomedIn() || cvEsc)) { e.preventDefault(); if (cv.zoomedIn()) cv.overview(); } });   // 有的引擎拦了 keydown 还发 cancel，同图集
 
 // ── 视图三：架构（11/16 khalil-a0）──
 // 11/15 的需求：把窗口之间的上下级画成一张关系图（各个窗口的职级、谁归谁管），一眼看清每个窗口在干嘛。
@@ -3325,6 +3646,7 @@ document.addEventListener('click', (e) => {
   const df = e.target.closest('[data-diff]'); if (df) { e.preventDefault(); e.stopPropagation(); openDiff(fromSid(df), df.dataset.diff); return; }
   const f = e.target.closest('[data-path]');
   if (f) { e.preventDefault(); const p = f.dataset.path; if (!e.metaKey) { previewSid = fromSid(e.target); openPreview(p); } else openPath(p); return; }     // 文件夹也先问服务：多半是图 / 视频的当图集看，其余服务回 no-preview，照旧交给访达
+  const cc = e.target.closest('[data-canvas]'); if (cc) { e.preventDefault(); let ps = []; try { ps = JSON.parse(cc.dataset.canvas); } catch {} if (ps.length) { previewSid = fromSid(e.target); openCanvas(ps); } return; }
   const gc = e.target.closest('[data-gallery]'); if (gc) { e.preventDefault(); let ps = []; try { ps = JSON.parse(gc.dataset.gallery); } catch {} if (ps.length) { previewSid = fromSid(e.target); openGallery(ps); } return; }
   const c = e.target.closest('[data-close]'); if (c) { c.closest('dialog').close(); return; }
   if (e.target.tagName === 'DIALOG') { if (Date.now() - orgZoomAt > 700) e.target.close(); return; }             // 点弹层外面关掉（架构图里双击一个窗口时，第二下不算）

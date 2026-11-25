@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 node:http / fs / path / crypto；不依赖 server.mjs 的任何状态
- * [OUTPUT]: 对外提供 startPreview({ port, home, log }) → { register(file), registerMany(files), port() }；kindOf(ext)（能预览的类型：page / pdf / image / video / audio / text / markdown；register 对「多半是图 / 视频的文件夹」另回 gallery）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）；mimeOf(ext)、readText(真身, 大小[, 已打开的 fd])、serveFile(req, res, 文件（可带已打开、核过的 fd）, 额外的头)、TEXT_MAX：远程预览（server.mjs 的 /rp/ 和 /api/remote/preview）用同一套类型表、文本上限和发文件的头
- * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register() 或 registerMany() 拿网址和类型，ui.html 按类型显示：网页、PDF 用 iframe，图和音视频用自己的元素，文本由 register() 直接读出内容，gallery（文件夹 / 一批图）排成格子墙。
+ * [OUTPUT]: 对外提供 startPreview({ port, home（canon 过的主目录）, log }) → { register(file), registerMany(files), registerCanvas(files), port() }；canon(路径)（真身：收掉链接、大小写、firmlink 别名）、isTop(真身)（顶层，纯函数）、homeIds(主目录)、idOf(路径)、FIRM（本机预览和 server.mjs 的远程预览共用这一份）；kindOf(ext)（能预览的类型：page / pdf / image / video / audio / text / markdown；register 对「多半是图 / 视频的文件夹」另回 gallery，图集不成立、第一层有 2 个以上网页的文件夹回 canvas）；listCanvas(dir)（画布的规则，纯函数）；ESC_HOOK（发 HTML 时加在末尾的 Esc 转发脚本）；mimeOf(ext)、readText(真身, 大小[, 已打开的 fd])、serveFile(req, res, 文件（可带已打开、核过的 fd）, 额外的头)、TEXT_MAX：远程预览（server.mjs 的 /rp/ 和 /api/remote/preview）用同一套类型表、文本上限和发文件的头
+ * [POS]: 总控台「内置预览」的唯一出口。server.mjs 的 /api/preview 调 register()、registerMany() 或 registerCanvas() 拿网址和类型，ui.html 按类型显示：网页、PDF 用 iframe，图和音视频用自己的元素，文本由 register() 直接读出内容，gallery（文件夹 / 一批图）排成格子墙，canvas（文件夹 / 一批网页）活着摆在一张画布上。
  *        预览页跑在另一个端口（另一个源），所以页面里的脚本读不到总控台的口令、localStorage 和 /api；
  *        网址里的随机编号就是钥匙：一个编号只开一个文件夹，只发白名单里的文件类型，不进点开头的文件夹，不顺着符号链接出去。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
@@ -55,6 +55,26 @@ function withHook(html) {
 }
 
 const inside = (root, p) => p === root || p.startsWith(root + path.sep);
+// ── 真身和「哪些文件夹不往下钻」：本机预览（这个文件）和手机远程预览（server.mjs 的 rpResolve / rpGallery）共用这一份（11/25 起）。
+// 之前两边各一份：远程 11/22 修了大小写和 firmlink，本机这边还是 JS 版 realpathSync + 按字面比主目录，交付里把主目录换个大小写、或写成 firmlink 写法就拿到往下钻的钥匙。
+export const FIRM = '/System/Volumes/Data';               // macOS 的数据卷：/Users、/private、/Volumes 这些在它下面另有一份同一个东西的写法（firmlink）
+export const idOf = (p) => { try { const s = fs.statSync(p, { bigint: true }); return s.dev + ':' + s.ino; } catch { return ''; } };
+// 真身：realpathSync.native 收掉链接和大小写（JS 版 realpathSync 照抄给的大小写）；firmlink 别名它收不掉，去掉前缀后是同一个东西（dev+ino）就用去掉前缀的那个。不在就抛错
+export function canon(p) {
+  const r = fs.realpathSync.native(p);
+  if (!r.startsWith(FIRM + '/')) return r;
+  const id = idOf(r);
+  try { const t = fs.realpathSync.native(r.slice(FIRM.length)); if (id && idOf(t) === id) return t; } catch {}
+  return r;
+}
+// 顶层：只看字符串的纯函数，dir 要是 canon() 给的真身。去掉 FIRM 前缀后，/private 和 /Volumes 下面 3 段以内（/private/tmp、外接盘根 /Volumes/T7）、
+// 其余 2 段以内（/tmp、/Users、/）算顶层；数据卷下没有短写法的也按去掉前缀算（/System/Volumes/Data/mnt 也是顶层）
+export function isTop(dir) {
+  const top = dir === FIRM ? '/' : dir.startsWith(FIRM + '/') ? dir.slice(FIRM.length) : dir;
+  return top.split(path.sep).length <= (/^\/(private|Volumes)\//.test(top) ? 3 : 2);
+}
+// 主目录和它的上层：[主目录, 上一级, …, /] 的 dev+ino，按 dev+ino 比（换大小写、firmlink 别名都认得出），每次现查。home 要是 canon() 给的真身
+export const homeIds = (home) => { const ids = []; for (let a = home; ; a = path.dirname(a)) { ids.push(idOf(a)); if (a === path.dirname(a)) return ids; } };
 
 // 手机远程（C1，11/21）也用这几样：远程端口发对话里出现过的单个文件时，类型表、文本上限、发法（Range、HTML 加 Esc 那段）和本机一样
 export const mimeOf = (ext) => MIME[String(ext).toLowerCase()] || null;
@@ -103,7 +123,7 @@ export function listGallery(dir, { direct = false } = {}) {
   let files = 0; const media = [];
   for (const name of names) {
     if (name.startsWith('.')) continue;
-    let real, st; try { real = fs.realpathSync(path.join(dir, name)); st = fs.statSync(real); } catch { continue; }
+    let real, st; try { real = canon(path.join(dir, name)); st = fs.statSync(real); } catch { continue; }
     if (!st.isFile()) continue;
     files++;
     const kind = kindOf(path.extname(real).slice(1));
@@ -115,13 +135,82 @@ export function listGallery(dir, { direct = false } = {}) {
   return { total: media.length, truncated: media.length > shown.length, media: shown };
 }
 
+// 画布（11/24 定：默认摆成画布；网格版另放一个按钮）：一次交付里有 2 个以上网页时，
+// 所有网页按真尺寸活着摆在一张画布上，点一个推近（界面在 ui.html 的 renderCanvas）。这里只定「哪些网页、叫什么、按手机还是浏览器的框摆」。
+const CANVAS_MIN = 2, CANVAS_MAX = 12;            // 至少 2 个网页才摆画布；最多 12 个活的 iframe，多出来的只报个数（more）
+const CANVAS_HEAD = 64 * 1024;                    // 每页只读开头 64 KiB 取标题和说明：几 MB 的单文件网页不整份读
+const PHONE_NAME = /phone|mobile|(?<![a-z])ios(?![a-z])|手机/i;      // 没写 <meta name="ccb:frame"> 时，文件名里有这几个词就按手机框摆；ios 只认整词（scenarios、studios 不算）
+const isPage = (kind) => kind === 'page';
+const byNumber = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });   // v2 在 v10 前面
+const NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–', middot: '·', hellip: '…' };
+const ch = (n) => (n > 0 && n < 0x110000 && !(n >= 0xd800 && n < 0xe000) ? String.fromCodePoint(n) : '');
+const unent = (t) => t.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (m, d, x, w) => (d ? ch(+d) : x ? ch(parseInt(x, 16)) : Object.hasOwn(NAMED, w.toLowerCase()) ? NAMED[w.toLowerCase()] : m));   // 只认 NAMED 自己的键：&constructor; 这种原型上的名字照原样留着
+const clean = (t, n) => Array.from(unent(String(t || '')).replace(/\s+/g, ' ').trim()).slice(0, n).join('');   // 按字符截（Array.from），不切半个 emoji
+// 一页的标签：<title>、<meta name="description">、<meta name="ccb:frame">（phone / browser）。只看开头 CANVAS_HEAD 字节；读不了回 null
+export function pageMeta(real, name = path.basename(real)) {
+  const buf = Buffer.alloc(CANVAS_HEAD); let n = 0, fd;
+  try { fd = fs.openSync(real, 'r'); n = fs.readSync(fd, buf, 0, CANVAS_HEAD, 0); } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+  const head = buf.subarray(0, n).toString('utf8');
+  const t = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(head);
+  const meta = {};
+  for (const m of head.matchAll(/<meta\b[^>]*>/gi)) {
+    const at = {}; for (const a of m[0].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) at[a[1].toLowerCase()] = a[2] ?? a[3] ?? a[4];
+    const k = (at.name || '').toLowerCase(); if (k && at.content !== undefined && !(k in meta)) meta[k] = at.content;
+  }
+  const fr = String(meta['ccb:frame'] || '').trim().toLowerCase();
+  return { title: t ? clean(t[1], 160) : '', note: clean(meta.description, 240), frame: fr === 'phone' || fr === 'browser' ? fr : PHONE_NAME.test(name) ? 'phone' : 'browser' };
+}
+// 「这一层的版本」：名字是 vN.html / vN.htm，真身是网页、在这个文件夹里、是普通文件；几个名字指到同一个真身（v2 链到 v1）只算一个，留按数字排在前面的名字。
+// 链到 .txt 的 vN.html 不算（不然两个链到文本的 vN 就让比例门槛失效）。versionsOf() 和 listCanvas() 的版本例外共用这一个判断；回按数字排的文件名
+const VERSION = /^v\d+\.html?$/i;
+function versionsIn(root, names) {
+  const seen = new Set(), out = [];
+  for (const n of names.filter((x) => VERSION.test(x)).sort(byNumber)) {
+    let r; try { r = canon(path.join(root, n)); if (!fs.statSync(r).isFile()) r = null; } catch { r = null; }
+    if (r && inside(root, r) && isPage(kindOf(path.extname(r).slice(1))) && !seen.has(r)) { seen.add(r); out.push(n); }
+  }
+  return out;
+}
+// 一个文件夹能不能摆成画布（本机预览的 canvas() 用）。不管图集，调用方先问 gallery()（folder() 就是这样），这里不再扫一遍图。
+// 只看第一层的 .html / .htm；点开头的不列；符号链接要真身还在这个文件夹里才算网页。这一层有 package.json 或 .git 的不摊开（不把整个项目仓库摊开）。
+// 成为画布：至少 CANVAS_MIN 个网页，并且网页占第一层文件（不算点开头的、不算文件夹）的一半以上，或者这一层有 CANVAS_MIN 个以上 vN.html
+// （版本文件夹：旁边常放 SPEC.md、STATE.md 和脚本，不受比例限制）。~/Desktop 这种放成品的地方网页占不到一半，照旧进访达。按数字排，最多 CANVAS_MAX 个，多出来的写进 more。
+// dir 要是真身（register 给的就是）：比的是 realpath 以后还在不在 dir 里面
+export function listCanvas(dir) {
+  let names; try { names = fs.readdirSync(dir); } catch { return { error: 'missing' }; }
+  if (names.includes('package.json') || names.includes('.git')) return { error: 'no-preview' };
+  const pages = []; let files = 0;
+  for (const name of names) {
+    if (name[0] === '.') continue;                                     // 点开头的（.DS_Store、.env）不摆，也不算进文件数
+    let real, st; try { real = canon(path.join(dir, name)); st = fs.statSync(real); } catch { continue; }
+    if (!st.isFile()) continue;
+    files++;
+    if (isPage(kindOf(path.extname(real).slice(1))) && inside(dir, real)) pages.push({ name, real });
+  }
+  if (pages.length < CANVAS_MIN) return { error: 'no-preview' };
+  const versions = versionsIn(dir, names).length;
+  if (!(pages.length * 2 > files || versions >= CANVAS_MIN)) return { error: 'no-preview' };   // 网页没过半，又不是版本文件夹
+  pages.sort((a, b) => byNumber(a.name, b.name));
+  const shown = pages.slice(0, CANVAS_MAX).map((p) => ({ ...p, ...(pageMeta(p.real, p.name) || { title: '', note: '', frame: PHONE_NAME.test(p.name) ? 'phone' : 'browser' }) }));
+  return { total: pages.length, more: pages.length - shown.length, pages: shown };
+}
+// 一页是 vN.html 时，同一层的 v1…vK（ui-workbench 的版本，11/24 SPEC 入口第 3 条「并排看全部版本」）：按数字排的文件名；不到 2 个回 null。
+// 超过 CANVAS_MAX 个时留最新的 CANVAS_MAX 个（比版本，最新的那几个最要紧）
+function versionsOf(root, entry) {
+  if (!VERSION.test(entry)) return null;
+  let names; try { names = fs.readdirSync(root); } catch { return null; }
+  const vs = versionsIn(root, names);
+  return vs.length >= CANVAS_MIN ? vs.slice(-CANVAS_MAX) : null;
+}
+
 export function startPreview({ port, home, log = () => {} }) {
   const byId = new Map();                         // 编号 → { root, entry, shallow }
   const byFile = new Map();                       // 文件真身 → 编号（同一个文件再点，网址不变）
   let bound = 0;
 
-  // 页面就在主目录或更上层（/Users、/）时，只发和它同一层的文件，不往下钻：不然一张页面就能读走整个主目录
-  const isShallow = (root) => inside(root, home) || root.split(path.sep).length <= 2;   // 前一条：root 是主目录或它的上层；后一条：/tmp、/Volumes 这种顶层
+  // 页面就在主目录或更上层（/Users、/）、或者在顶层（/tmp 的真身 /private/tmp、外接盘根 /Volumes/T7）时，只发和它同一层的文件，不往下钻：
+  // 不然一张页面就能读走整个主目录、整块盘。主目录和上层按 dev+ino 比，顶层看 isTop，和远程预览是同一份；root 是 canon() 给的真身，home 是 server.mjs 传来的真身
+  const isShallow = (root) => homeIds(home).includes(idOf(root)) || isTop(root);
   const evict = () => { while (byId.size > KEEP) { const old = byId.keys().next().value; const it = byId.get(old); byId.delete(old); byFile.delete(path.join(it.root, it.entry)); } };
   // 一个文件夹一把钥匙：图集里这个文件夹的每一张图共用它（entry 空着，byFile 的键就是文件夹自己）
   function claimDir(root) {
@@ -148,7 +237,7 @@ export function startPreview({ port, home, log = () => {} }) {
     if (!bound) return { ok: false, error: 'not-ready' };
     const seen = new Set(), items = []; let skipped = 0;
     for (const f of files) {
-      let real, st; try { real = fs.realpathSync(f); st = fs.statSync(real); } catch { skipped++; continue; }
+      let real, st; try { real = canon(f); st = fs.statSync(real); } catch { skipped++; continue; }
       const kind = kindOf(path.extname(real).slice(1)), name = path.basename(real);
       if (!st.isFile() || !isMedia(kind) || name.startsWith('.')) { skipped++; continue; }
       if (seen.has(real)) continue; seen.add(real);
@@ -158,13 +247,55 @@ export function startPreview({ port, home, log = () => {} }) {
     return { ok: true, kind: 'gallery', total: seen.size, truncated: seen.size > items.length, skipped, items };
   }
 
+  // 一个文件夹 → 画布（图集不成立时才问到这里）。和 gallery() 一样：主目录、/tmp 这种顶层不摊开；一个文件夹一把钥匙，每页的网址走预览端口（发 HTML 时带 ESC_HOOK）
+  function canvas(dir) {
+    if (!bound) return { ok: false, error: 'not-ready' };
+    if (isShallow(dir)) return { ok: false, error: 'no-preview' };   // 主目录、/tmp 不摊开
+    const c = listCanvas(dir); if (c.error) return { ok: false, error: c.error };
+    const id = claimDir(dir);
+    return { ok: true, kind: 'canvas', name: path.basename(dir), dir, total: c.total, more: c.more,
+      items: c.pages.map((p) => ({ name: p.name, title: p.title, note: p.note, frame: p.frame, url: mediaUrl(id, p.name), dir })) };
+  }
+  // 文件夹：先看是不是图集，图集不成立（no-preview）再看是不是画布；别的错（not-ready、missing）照原样回
+  const folder = (dir) => { const g = gallery(dir); return g.ok || g.error !== 'no-preview' ? g : canvas(dir); };
+
+  // 一批文件 → 画布（一条交付里写了好几个网页路径，界面的「画布 · N 个」）。一张画布 = 一个文件夹 = 一把钥匙：画布上的 iframe 同源、没有 sandbox，
+  // 一个网页读得到兄弟 iframe 的网址，网址里就是那个文件夹的钥匙，所以只摆同一个文件夹（按真身）里的网页。按真身所在的文件夹分组，摆网页最多的那组
+  // （一样多时取正文里先出现的那组）；别的文件夹的网页不发钥匙、不读标题，只把个数写进 otherDirs。
+  // 组里按给的顺序摆（和 registerMany 一样，正文里怎么排就怎么摆）；不在了的、不是网页的、点开头的跳过，同一个文件只放一次，最多 CANVAS_MAX 个。
+  // 摆不出 2 个回 no-preview；网页够数、只是分在几个文件夹里时带 split（服务据此说明为什么）
+  function registerCanvas(files) {
+    if (!bound) return { ok: false, error: 'not-ready' };
+    const seen = new Set(), groups = new Map(); let skipped = 0;
+    for (const f of files) {
+      let real, st; try { real = canon(f); st = fs.statSync(real); } catch { skipped++; continue; }
+      const name = path.basename(real), dir = path.dirname(real);
+      if (!st.isFile() || !isPage(kindOf(path.extname(real).slice(1))) || name.startsWith('.')) { skipped++; continue; }
+      if (seen.has(real)) continue;                                  // 同一个文件只放一次
+      seen.add(real);
+      let g = groups.get(dir); if (!g) groups.set(dir, (g = []));    // 按真身所在的文件夹分组
+      g.push({ name, real, dir });
+    }
+    let pick = [];
+    for (const g of groups.values()) if (g.length > pick.length) pick = g;   // Map 按放进去的顺序走；用 > 不用 >=：一样多时留先出现的那组
+    const keep = []; let more = 0;
+    for (const p of pick) {
+      if (keep.length >= CANVAS_MAX) { more++; continue; }
+      const m = pageMeta(p.real, p.name); if (!m) { skipped++; continue; }   // 读不了的跳过，后面的补上
+      keep.push({ ...p, m });
+    }
+    if (keep.length < CANVAS_MIN) return { ok: false, error: 'no-preview', split: groups.size > 1 && seen.size >= CANVAS_MIN };
+    return { ok: true, kind: 'canvas', total: keep.length + more, more, otherDirs: seen.size - pick.length, skipped,
+      items: keep.map((p) => ({ name: p.name, ...p.m, url: mediaUrl(claimDir(p.dir), p.name), dir: p.dir })) };
+  }
+
   // 一个文件 → 预览网址和类型。只认真实存在、类型在 KIND 表里的普通文件，按符号链接的真身算。文本类顺带读出内容（最多 TEXT_MAX）。
-  // 文件夹交给 gallery()：多半是图 / 视频的才有预览，其余照旧 no-preview，界面改走 /api/open。
+  // 文件夹交给 folder()：多半是图 / 视频的是图集，第一层网页过半（或有 2 个以上 vN.html）的是画布，其余照旧 no-preview，界面改走 /api/open。
   function register(file) {
     let real, st;
-    try { real = fs.realpathSync(file); st = fs.statSync(real); } catch { return { ok: false, error: 'missing' }; }
+    try { real = canon(file); st = fs.statSync(real); } catch { return { ok: false, error: 'missing' }; }
     const kind = st.isFile() ? kindOf(path.extname(real).slice(1)) : null;
-    if (!kind) return st.isDirectory() ? gallery(real) : { ok: false, error: 'no-preview' };
+    if (!kind) return st.isDirectory() ? folder(real) : { ok: false, error: 'no-preview' };
     if (!bound) return { ok: false, error: 'not-ready' };
     let id = byFile.get(real);
     if (!id || !byId.has(id)) {
@@ -179,6 +310,7 @@ export function startPreview({ port, home, log = () => {} }) {
       const t = readText(real, st.size); if (!t) return { ok: false, error: 'missing' };
       r.text = t.text; r.truncated = t.truncated;
     }
+    if (kind === 'page') { const vs = versionsOf(it.root, it.entry); if (vs) r.versions = vs; }   // vN.html 有兄弟版本：界面顶栏放「并排看全部版本」
     return r;
   }
 
@@ -192,7 +324,7 @@ export function startPreview({ port, home, log = () => {} }) {
     if (parts.some((s) => !s || s.startsWith('.') || /[\\/\0]/.test(s))) return null;   // 空段、..、点开头的（.git、.env、.ssh）都不发
     if (it.shallow && parts.length > 1) return null;
     let real;
-    try { real = fs.realpathSync(path.join(it.root, ...parts)); } catch { return null; }
+    try { real = canon(path.join(it.root, ...parts)); } catch { return null; }
     if (!inside(it.root, real)) return null;                                          // 符号链接指到文件夹外面
     const type = MIME[path.extname(real).slice(1).toLowerCase()];
     let st; try { st = fs.statSync(real); } catch { return null; }
@@ -216,5 +348,5 @@ export function startPreview({ port, home, log = () => {} }) {
   server.on('listening', () => { bound = server.address().port; log(`http://127.0.0.1:${bound}`); });
   server.listen(port, '127.0.0.1');
 
-  return { register, registerMany, port: () => bound };
+  return { register, registerMany, registerCanvas, port: () => bound };
 }
