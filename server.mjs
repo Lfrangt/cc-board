@@ -3775,8 +3775,9 @@ const handle = async (req, res, via) => {
     if (u.pathname === '/api/open') {               // 正文里的本机路径被点了（11/12 Khalil：「把资料直接把链接给我，我可以直接点进去」）
       if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
       const { p, error } = localPath(body.path); if (error) return reply(res, 200, { ok: false, error });
-      const action = openAction(p);
+      let action = openAction(p);
       if (!action) return reply(res, 200, { ok: false, error: '这个文件不在了：' + p });
+      if (body.reveal === true) { try { action = fs.statSync(fs.realpathSync(p)).isDirectory() ? 'open' : 'reveal'; } catch {} }   // 预览顶栏「在访达中显示」（11/25 Khalil）：文件在访达里选中，文件夹直接打开，不管类型表怎么说
       if (SANDBOX) { console.log(`open ${new Date().toISOString()} dry:${action} ${p}`); return reply(res, 200, { ok: true, action, dry: true }); }   // 试验场里只写日志，不真打开
       const r = await run('/usr/bin/open', action === 'open' ? [p] : ['-R', p]);
       return reply(res, 200, { ok: r.ok, action, error: r.err });

@@ -479,7 +479,7 @@ async function remotePreviewCheck() {
       const a = document.createElement('a'); a.className = 'file'; a.dataset.path = p; a.textContent = p; host.appendChild(a); a.click(); a.remove(); return true; }, [FX.sids.links, p, where]);
     const close = async () => { if (await page.evaluate(() => document.querySelector('#preview').open)) await page.click('#preview [data-close]'); await sleep(300); };
     const pv = () => page.evaluate(() => { const q = (s) => document.querySelector(s), v = (s) => !q(s).hidden, im = q('#pImg');
-      return { open: q('#preview').open, kind: q('#pBody').dataset.kind, title: q('#pTitle').textContent, dir: q('#pDir').textContent, openHidden: q('#pOpen').hidden, reloadHidden: q('#pReload').hidden,
+      return { open: q('#preview').open, kind: q('#pBody').dataset.kind, title: q('#pTitle').textContent, dir: q('#pDir').textContent, openHidden: q('#pFinder').hidden, reloadHidden: q('#pReload').hidden,
         frame: v('#pFrame'), img: v('#pImg'), text: v('#pText'), frameSrc: q('#pFrame').getAttribute('src') || '', imgSrc: im.getAttribute('src') || '', imgW: im.naturalWidth,
         h1: (q('#pText h1, #pText h2, #pText h3') || {}).textContent || '', li: document.querySelectorAll('#pText li').length,      // md() 把 # 排成哪一级标题都算
         tiles: [...document.querySelectorAll('#pGal .gi')].map((x) => { const i = x.querySelector('img'); return { name: (x.querySelector('.gn') || {}).textContent || '', src: i ? i.getAttribute('src') : '', w: i ? i.naturalWidth : 0 }; }),
@@ -859,7 +859,7 @@ async function canvasSeg() {
       ok(nm.full, tag + '全景：手机那张的标签名字没被截', JSON.stringify(nm));
       const hooked = await Promise.all(NAMES.map(async (n) => { const f = frameOf(page, n); return f ? f.evaluate(() => /preview-esc/.test(document.documentElement.innerHTML)).catch(() => 'err') : 'none'; }));
       ok(hooked.every((x) => x === true), tag + '每个框都从预览端口载入，页面里带着 ESC_HOOK', JSON.stringify(hooked));
-      const bar = await ev(page, () => ({ open: !document.querySelector('#pOpen').hidden, reload: !document.querySelector('#pReload').hidden }));
+      const bar = await ev(page, () => ({ open: !document.querySelector('#pFinder').hidden, reload: !document.querySelector('#pReload').hidden }));
       ok(bar.open === true && bar.reload === true, tag + '文件夹画布：顶栏有「在访达中显示」和「重新载入」', JSON.stringify(bar));
       await shot(page, pre + '1-A全景.png');
       // 点第 2 个：点击层收得到点击，推近
@@ -959,7 +959,7 @@ async function canvasSeg() {
       ok(asked && asked.canvas === true && JSON.stringify(asked.paths) === JSON.stringify([P[2], P[0], P[1]]), tag + '点了把这些路径带 canvas: true 交给 /api/preview', JSON.stringify(asked));
       ok(s.open && s.n === 3 && s.title === '画布' && /canvas-demo/.test(s.dir) && /3 个网页/.test(s.dir) && s.crumb.startsWith('全景') && s.cmp.pressed === 'false', tag + '打开就是 A 全景，顶栏写文件夹和「3 个网页」', JSON.stringify([s.n, s.title, s.dir, s.crumb, s.cmp]));
       same(s.tags, [TITLES[2], TITLES[0], TITLES[1]], tag + '框的先后 = 正文里的先后');
-      const hd = await ev(page, () => ({ open: document.querySelector('#pOpen').hidden, reload: document.querySelector('#pReload').hidden }));
+      const hd = await ev(page, () => ({ open: document.querySelector('#pFinder').hidden, reload: document.querySelector('#pReload').hidden }));
       ok(hd.open && hd.reload, tag + '一批路径拼成的画布没有对应的文件夹：「在访达中显示」「重新载入」都不给', JSON.stringify(hd));
       await page.click('#preview [data-close]', { timeout: 3000 }).catch(() => {}); await sleep(200);
       // 单个 vN.html：顶栏「并排看全部版本」直接开 C
@@ -3420,7 +3420,7 @@ try {
     await page.route('**/api/open', async (route) => { openedG = JSON.parse(route.request().postData() || '{}'); await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, action: 'open' }) }); });
     await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<a id="tFolder" class="file" data-path="~/Desktop/gal/">gal</a><div id="tChip"></div>'));
     const galState = () => page.evaluate(() => { const q = (s) => document.querySelector(s), imgs = [...document.querySelectorAll('#pGal .gt img')];
-      return { open: q('#preview').open, kind: q('#pBody').dataset.kind, title: q('#pTitle').textContent, dir: q('#pDir').textContent, openBtn: q('#pOpen').textContent.trim(), openHidden: q('#pOpen').hidden, reloadHidden: q('#pReload').hidden,
+      return { open: q('#preview').open, kind: q('#pBody').dataset.kind, title: q('#pTitle').textContent, dir: q('#pDir').textContent, openBtn: q('#pFinder').textContent.trim(), openHidden: q('#pFinder').hidden, reloadHidden: q('#pReload').hidden,
         names: [...document.querySelectorAll('#pGal .gn')].map((x) => x.textContent), tiles: document.querySelectorAll('#pGal .gi').length, vids: document.querySelectorAll('#pGal .gt video').length,
         others: ['#pFrame', '#pImg', '#pVid', '#pAud', '#pText'].filter((s) => !q(s).hidden),
         imgs: imgs.map((i) => { const r = i.getBoundingClientRect(); return { w: r.width, h: r.height, nw: i.naturalWidth, nh: i.naturalHeight }; }) }; });
