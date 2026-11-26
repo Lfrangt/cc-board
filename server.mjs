@@ -2303,20 +2303,97 @@ on run argv
 end run
 `;
 
+// ── tabclose begin（11/26 Khalil 09:43：归档完 Ghostty 那边一堆标签没关）
+// 根因：「去终端」（openAttach）为一个 ccb- 会话另开 Ghostty 标签，里面跑的是 tmux attach。归档时 kill-session 把会话杀了，
+// attach 进程退出，标签却停在「Process exited. Press any key」没人关（stopSession 以前只关 channel === 'ghostty' 的标签）。
+// 标签认 tty（和 FOCUS_TTY 同一个办法）：先在 kill-session 之前问 tmux 这个会话的 client 在哪些 tty 上，杀完以后只关「tty 上已经没有任何进程」的。
+// 里面还有 shell 的（他在自己的 zsh 标签里手敲 tmux attach）不动；ps 读不出来 = 不知道 = 不动。
+const CLOSE_TTYS = `
+on run argv
+  set ids to {}
+  tell application "Ghostty"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with term in terminals of t
+          set y to ""
+          try
+            set y to (tty of term) as text
+          end try
+          if y is not "" and argv contains y then set end of ids to (id of term)
+        end repeat
+      end repeat
+    end repeat
+    set n to 0
+    repeat with i in ids
+      try
+        close (first terminal whose id is (i as text))
+        set n to n + 1
+      end try
+    end repeat
+  end tell
+  return n as text
+end run
+`;
+// 这个会话现在有哪些终端 attach 着（tty）。必须在 kill-session 之前调：杀了就没有 client 可问了
+async function attachTtys(name) {
+  if (!/^ccb-[\w-]+$/.test(String(name || ''))) return [];
+  const cl = await tmuxFor(name, ['list-clients', '-t', name, '-F', '#{client_tty}']);
+  return cl.ok ? [...new Set(cl.out.split('\n').map((x) => x.trim()).filter((x) => /^\/dev\/tty\w+$/.test(x)))] : [];
+}
+// 现在有进程的 tty 集合（名字不带 /dev/）。不用 `ps -t <tty>`：tty 存在但没进程时它退出码是 1、stdout 和 stderr 都空（11/26 在 60 个 tty 上实测，
+// 其中 2 个没进程），和「ps 出错」分不开；这里一次 `ps -A -o tty=` 拿全集，该列带尾随空格要 trim。ps 失败、或一个 ttysN 都认不出 = 不知道，回 null
+async function liveTtys() {
+  const p = await run('/bin/ps', ['-A', '-o', 'tty=']);
+  if (!p.ok) return null;
+  const set = new Set(p.out.split('\n').map((x) => x.trim()).filter((x) => /^ttys\d+$/.test(x)));
+  return set.size ? set : null;
+}
+// 归档停掉会话以后，关掉它留下的 attach 标签。回关掉了几个；绝不抛错（归档本身已经成功了）
+async function closeAttachTabs(ttys, name) {
+  if (!ttys || !ttys.length) return 0;
+  if (SANDBOX) { console.log(`tabclose ${new Date().toISOString()} dry ${name} ${ttys.join(',')}`); return 0; }   // 试验场不碰 Ghostty
+  let dead = [];
+  for (let i = 0; i < 10; i++) {                      // kill-session 之后 attach 进程几十毫秒内退出；最多等 2 秒让它退干净
+    const live = await liveTtys();
+    if (live) dead = ttys.filter((t) => fs.existsSync(t) && !live.has(t.replace(/^\/dev\//, '')));
+    if (live && dead.length === ttys.length) break;
+    await sleep(200);
+  }
+  const kept = ttys.filter((t) => !dead.includes(t));
+  let n = 0, err = '';
+  if (dead.length) {
+    // Ghostty 没开着就不叫它：tell application "Ghostty" 会把它拉起来、弹出一个新窗口（和 refreshTerms 同一道闸；11/26 审查）。
+    // 那时的死 tty 是别的终端留下的（比如 Terminal.app 进程退了窗口不关），本来也没有 Ghostty 标签可关
+    if (!(await run('/usr/bin/pgrep', ['-x', 'ghostty'])).ok) err = ' ghostty=off';
+    else {
+      const r = await osa(CLOSE_TTYS, dead, 8000);
+      if (r.ok) n = parseInt(r.out, 10) || 0; else err = ` err=${r.err.slice(0, 80)}`;
+    }
+  }
+  console.log(`tabclose ${new Date().toISOString()} ${name} closed=${n}/${ttys.length}${dead.length ? ' dead=' + dead.join(',') : ''}${kept.length ? ' kept=' + kept.join(',') : ''}${err}`);
+  return n;
+}
+// ── tabclose end
+
 // 停掉一个会话的进程。只认「登记里这个进程号现在还是这个会话」；不强杀。
 async function stopSession(s) {
   leaving.set(s.sid, Date.now());                   // 是我们自己停的，别当成「意外退出」来提醒
   if (s.provider === 'codex') {                     // Codex 会话都是总控台自己起在 tmux 里的
     if (!/^ccb-[\w-]+$/.test(s.tmux || '')) return { ok: false, error: '不是总控台开的会话' };
+    const ttys = await attachTtys(s.tmux);          // 要在 kill-session 之前问：杀了就没有 client 可查
     await tmuxFor(s.tmux, ['kill-session', '-t', s.tmux]);
     for (let i = 0; i < 25 && alive(s.pid); i++) await sleep(200);
     delete agents[s.tmux]; saveAgents(); codexTracks.delete(s.sid);
-    return alive(s.pid) ? { ok: false, error: '它没停下来' } : { ok: true };
+    if (alive(s.pid)) return { ok: false, error: '它没停下来' };
+    closeAttachTabs(ttys, s.tmux).catch(() => 0);   // 不等它：「删除」在等 stopSession 回话，关标签最多多等约 2 秒 + osascript 8 秒；关了几个也没人读（11/26 审查）
+    return { ok: true };
   }
   let reg = null;
   try { reg = JSON.parse(fs.readFileSync(path.join(SESS_DIR, s.pid + '.json'), 'utf8')); } catch {}
   if (!reg || reg.sessionId !== s.sid) return alive(s.pid) ? { ok: false, error: '进程号和会话对不上，没动它' } : { ok: true };
+  let ttys = [];
   if (s.channel === 'tmux' && /^ccb-[\w-]+$/.test(s.tmux || '')) {
+    ttys = await attachTtys(s.tmux);                // 要在 kill-session 之前问：杀了就没有 client 可查
     await tmuxFor(s.tmux, ['kill-session', '-t', s.tmux]);
   } else {
     const cmd = await run('/bin/ps', ['-o', 'command=', '-p', String(s.pid)]);
@@ -2331,6 +2408,7 @@ async function stopSession(s) {
     const t = terms.find((x) => x.id === s.term);
     if (t && t.title !== s.termTitle) { const r = await osa(CLOSE_TERM, [s.term]); tabClosed = r.ok; }
   }
+  closeAttachTabs(ttys, s.tmux).catch(() => 0);     // 「去终端」为它另开的 attach 标签（tmux 路径才有；ghostty 通道 ttys 是空的）。不等它，理由同上
   return { ok: true, tabClosed };
 }
 
