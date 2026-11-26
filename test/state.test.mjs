@@ -1,6 +1,6 @@
 /**
  * [INPUT]: [4p] 用 node:http2 起本机假 APNs，以独立 P-256 公钥验签；用 CCBOARD_IDLE_FILE 切换空闲值。依赖 ../server.mjs（或命令行给的另一份，比如 mutants.mjs 造的改坏版）；依赖 /bin/sleep 充当「会话进程」
- * [OUTPUT]: 逐项打印 ok / FAIL，[4p] 输出假 APNs 接线、空闲放行与日志限流、墙钟；退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
+ * [OUTPUT]: 逐项打印 ok / FAIL，[4p] 输出假 APNs 接线、空闲放行与日志限流、墙钟；[4q]（11/25 手表）另起五份服务和两台假 APNs，测【待审阅】推送：kinds 登记、只到声明了的设备、config 的合批窗口、只含 review 不响、和待跟进一起时一条、改判、看着总控台、推迟、重启不补推、墙钟；退出码 0 = 全过；带 --ui 时不跑断言，搭好场景并写 ui-fixture.json 给 ui-check.mjs 用
  * [POS]: test/ 的服务端测试：30 个假会话覆盖 运行中 / 后台在跑 / 交付 / 额度用完 / 登录过期 / 报错 / 被打断 / 没做完 / 卡住 / 进程退出 / 交付摘要 / 项目分组 / 点开正文里的路径 / 内置预览（/api/preview 和预览端口：网页、PDF、图、音视频、文本，含 Esc 转发脚本；图集；画布：listCanvas 的规则、paths + canvas、vN.html 的 versions）/ 「归档」自己定删还是留；
  *        另测英文摘要状态标签（`--ui` 不放；英文标签只认代码块外的最后一个非空行：正文中间的、代码块里的、[Review](…) 链接都不算）。
  *        再加 11 个自动收工（autoTidy）用的会话（`--ui` 不放）：到线的收、没到线 / 待跟进 / 在跑 / 后台命令还在跑 / 有 alert 的不收，他正看着时不收，只读预览只记不动。
@@ -2922,6 +2922,214 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     const elapsed = Date.now() - began; console.log('[4p] 墙钟 ' + elapsed + ' ms');
     ok(elapsed <= 40000, '[4p] 整段墙钟 ≤ 40 秒', elapsed + ' ms');
   }
+  console.log('\n[4q] 【待审阅】推送（11/25 手表）：只到声明了 kinds 的设备、按 config 合批、只含 review 不响、和待跟进一起时一条、同一次交付不重复、Mac 横幅不含、重启不补推');
+  {
+    // 几份带 apns 的服务并排跑（A：登记 + 合批 + 混合 + 改判；B：单件 + 看着总控台 + 重启；D：推迟中；E：合批窗口读 config），A 连一台假 APNs、B、D、E 连另一台（按令牌分）；C 只看 reviewBatchSec 写错的日志
+    const began = Date.now(), got = [], h2s = new Set(), chk = { A: [], B: [], C: [], D: [], E: [] };
+    const AP = { keyId: 'ABCDE12345', teamId: 'ZXCVB12345', topic: 'dev.example.remote' };
+    const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const keyFile = path.join(ROOT, 'review-key.b64');
+    fs.writeFileSync(keyFile, Buffer.from(pair.privateKey.export({ type: 'pkcs8', format: 'pem' })).toString('base64') + '\n', { mode: 0o600 });
+    const tokens = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8'].map((x) => x.repeat(32));
+    const ids = ['5', '6', '7', '8'].map((x) => x.repeat(16));
+    const secret = crypto.randomBytes(32).toString('base64url'), hash = crypto.createHash('sha256').update(secret).digest('hex');
+    const host = 'review-fixture.tailtest.ts.net', login = 'tester@example.com';
+    const apis = ['A', 'B'].map((src) => {
+      const srv = http2.createServer();
+      srv.on('session', (s) => { h2s.add(s); s.on('close', () => h2s.delete(s)); s.on('error', () => {}); });
+      srv.on('stream', (stream, headers) => {
+        let body = ''; stream.on('error', () => {}); stream.setEncoding('utf8'); stream.on('data', (s) => { body += s; });
+        stream.on('end', () => { got.push({ src, token: String(headers[':path']).split('/').pop(), body, at: Date.now() }); stream.respond({ ':status': 200 }); stream.end(''); });
+      });
+      return srv;
+    });
+    await Promise.all(apis.map((srv, i) => new Promise((resolve, reject) => { srv.once('error', reject); srv.listen(PORT + 386 + i, '127.0.0.1', resolve); })));
+    const NAMES = ['old', 'a', 'b', 'c', 'mixW', 'mixR', 's1', 'seen', 'down', 'after'];
+    const mk = (name, offset, api, conf, pushes, names = NAMES) => {
+      const h = path.join(ROOT, 'review-' + name), cwd = path.join(h, 'work'), sess = path.join(h, '.claude/sessions');
+      const proj = path.join(h, '.claude/projects', cwd.replace(/[^A-Za-z0-9]/g, '-')), data = path.join(h, 'data');
+      for (const d of [cwd, sess, proj, data]) fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ remote: { on: true, hosts: [host] }, apns: AP, ...conf }));
+      const devFile = path.join(data, 'remote-devices.json');
+      fs.writeFileSync(devFile, JSON.stringify({ devices: ids.map((id, i) => ({ id, name: 'Review device ' + i, login, hash, at: 1, ...(pushes[i] ? { push: pushes[i] } : {}) })) }), { mode: 0o600 });
+      const port = PORT + offset, output = path.join(h, 'server.out'), all = {}, idleFile = path.join(h, 'idle-ms');
+      fs.writeFileSync(idleFile, '0');
+      const reg = (x, status) => fs.writeFileSync(path.join(sess, x.pid + '.json'), JSON.stringify({ pid: x.pid, sessionId: x.sid, cwd, startedAt: began - 600000, kind: 'interactive', entrypoint: 'cli', name: 'PUSH_PRIVATE_NAME_' + x.name, nameSource: 'user', status, statusUpdatedAt: Date.now(), updatedAt: Date.now() }));
+      const add = (x, recs, at) => fs.appendFileSync(x.file, recs.map((r) => JSON.stringify({ ...r, timestamp: at || new Date().toISOString() })).join('\n') + '\n');
+      for (const [i, n] of names.entries()) {
+        const c = spawn('/bin/sleep', ['900'], { stdio: 'ignore' }); kids.push(c.pid);
+        const x = { name: n, pid: c.pid, sid: 'revw' + name.padEnd(2, 'x') + String(i).padStart(2, '0') + '-0000-4000-8000-' + String(c.pid).padStart(12, '0') };
+        x.file = path.join(proj, x.sid + '.jsonl'); fs.writeFileSync(x.file, '');
+        add(x, [R.human('PUSH_PRIVATE_TITLE_' + n), R.final('初始结果。\n\n' + (n === 'old' ? '【待审阅】PUSH_PRIVATE_ASK_INITIAL' : '【进展】先记录'))]); reg(x, 'idle'); all[n] = x;
+      }
+      const f = { name, port, all, reg, add, devFile, output, idleFile, key: '', child: null, n: names.length,
+        text: () => { try { return fs.readFileSync(output, 'utf8'); } catch { return ''; } }, devs: () => JSON.parse(fs.readFileSync(devFile, 'utf8')).devices };
+      f.lines = (p) => f.text().split('\n').filter((l) => l.startsWith(p));
+      f.start = () => {
+        const o = fs.openSync(output, 'a');
+        f.child = spawn(NODE, [SERVER], { env: { ...env, HOME: h, CCBOARD_PORT: String(port), CCBOARD_REMOTE_PORT: String(port + 50), CCBOARD_PREVIEW_PORT: String(port + 1000), CCBOARD_DATA: data, CCBOARD_TMUX_SOCKET: path.join(TMUXDIR, 'q' + name, 'c.sock'), CCBOARD_STALL_MS: '3600000', CCBOARD_READONLY: '0', CCBOARD_APNS_URL: 'http://127.0.0.1:' + (PORT + 386 + api), CCBOARD_APNS_KEY_FILE: keyFile, CCBOARD_DEV_RETRY_MS: '300', CCBOARD_IDLE_FILE: idleFile }, stdio: ['ignore', o, o] });
+        fs.closeSync(o); kids.push(f.child.pid);
+      };
+      f.stop = async () => { const c = f.child; if (!c || c.exitCode !== null || c.signalCode !== null) return; const done = new Promise((r) => c.once('exit', r)); c.kill('SIGTERM'); await done; };
+      f.up = () => until(async () => { try { f.key = fs.readFileSync(path.join(data, '.token'), 'utf8').trim(); const v = await f.local('GET', '/api/state?peek=1'); return v.code === 200 && v.body.sessions.length === f.n; } catch { return false; } }, 8000);
+      f.local = (method, p, body) => rq(port, method, p, { 'x-ccboard': f.key, origin: 'http://127.0.0.1:' + port }, body);
+      f.remote = (index, body) => rq(port + 50, 'POST', '/api/remote/push', { host, 'tailscale-user-login': login, origin: 'https://' + host, 'x-ccboard-device': ids[index] + '.' + secret }, body);
+      f.sv = async () => { const v = await f.local('GET', '/api/state?peek=1'); return Object.fromEntries(((v.body && v.body.sessions) || []).map((s) => [s.sid, s])); };
+      f.start(); return f;
+    };
+    const parse = (r) => { try { return JSON.parse(r.body); } catch { return {}; } };
+    const s8 = (x) => x.sid.slice(0, 8);
+    const fin = (id, text) => ({ type: 'assistant', message: { id, model: 'claude-x', content: [{ type: 'text', text }], stop_reason: 'end_turn' } });
+    // A：设备 0 先没声明（磁盘上没有 review），下面经 /api/remote/push 带 kinds 登记；设备 1 是老 App
+    const A = mk('ra', 390, 0, { reviewBatchSec: 4 }, [{ token: tokens[0], env: 'production', at: 1 }, { token: tokens[1], env: 'sandbox', at: 1 }]);
+    // B：设备 0 在磁盘上就带着 review: true（loadDevices 留下它，服务重启后也认），设备 1 是老 App
+    const B = mk('rb', 392, 1, { reviewBatchSec: 4 }, [{ token: tokens[2], env: 'sandbox', at: 1, review: true }, { token: tokens[3], env: 'sandbox', at: 1 }]);
+    const C = mk('rc', 394, 1, { reviewBatchSec: 'x' }, [], []);
+    const D = mk('rd', 396, 1, { reviewBatchSec: 1 }, [{ token: tokens[6], env: 'sandbox', at: 1, review: true }], ['zz', 'yy']);
+    // E：合批窗口真的读 config（写 8 秒）。A 的 4 秒和写死的 2.5 秒在站稳时间的抖动里分不开，所以单独拉长一份量
+    const E = mk('re', 398, 1, { reviewBatchSec: 8 }, [{ token: tokens[7], env: 'sandbox', at: 1, review: true }], ['ee']);
+    const all3 = [A, B, C, D, E];
+    try {
+      const up = (await Promise.all(all3.map((f) => f.up()))).every(Boolean);
+      ok(up, '[4q] 五份隔离服务起来（A、B 各 10 个会话，C 没有会话，D 两个，E 一个）');
+      const reqs = (src, from = 0) => got.filter((r) => r.src === src && (src !== 'B' || (r.token !== tokens[6] && r.token !== tokens[7]))).slice(from);
+      const phaseA = async () => {
+        const c = (cond, name, extra = '') => chk.A.push([!!cond, name, extra]);
+        // 登记：只改 kinds（同一个令牌）也算变了、落盘、at 不变、token 行带 +review；重复不写盘；kinds 写错不拒整次登记
+        const r1 = await A.remote(0, { token: tokens[0], env: 'production', kinds: ['review'] }), d1 = A.devs().find((d) => d.id === ids[0]);
+        c(r1.code === 200 && r1.body?.ok && JSON.stringify(d1?.push) === JSON.stringify({ token: tokens[0], env: 'production', at: 1, review: true }) && new RegExp('^push \\S+ token ' + ids[0] + ' production ' + tokens[0].slice(0, 8) + ' \\+review$', 'm').test(A.text()),
+          '[4q] 同一个令牌只加 kinds: ["review"]：算变了、落盘 push.review = true、at 不变，token 行带 +review', JSON.stringify({ code: r1.code, push: d1?.push }));
+        const st1 = fs.statSync(A.devFile), tl1 = A.lines('push ').filter((l) => / token /.test(l)).length;
+        const r2 = await A.remote(0, { token: tokens[0], env: 'production', kinds: ['review'] }), r3 = await A.remote(1, { token: tokens[1], env: 'sandbox' });
+        const st2 = fs.statSync(A.devFile);
+        c(r2.body?.ok && r3.body?.ok && st2.mtimeMs === st1.mtimeMs && st2.ino === st1.ino && A.lines('push ').filter((l) => / token /.test(l)).length === tl1 && !('review' in (A.devs().find((d) => d.id === ids[1])?.push || { review: 1 })),
+          '[4q] 带同样 kinds 重复登记、老 App 不带 kinds 重复登记：都不写盘、不多记 token 行，老 App 那台没有 review');
+        const r4 = await A.remote(2, { token: tokens[4], env: 'sandbox', kinds: 'review' }), r5 = await A.remote(3, { token: tokens[5], env: 'sandbox', kinds: ['x', 'review', 3] });
+        const d4 = A.devs().find((d) => d.id === ids[2]), d5 = A.devs().find((d) => d.id === ids[3]);
+        c(r4.code === 200 && r4.body?.ok && d4?.push?.token === tokens[4] && !('review' in d4.push) && r5.code === 200 && d5?.push?.token === tokens[5] && d5.push.review === true,
+          '[4q] kinds 写错（字符串 "review"）：令牌照样登记、当没声明；数组里混着认不出的：只认 review', JSON.stringify({ d4: d4?.push, d5: d5?.push }));
+        const r6 = await A.remote(2, { token: null }), r7 = await A.remote(3, { token: null });
+        c(r6.body?.ok && r7.body?.ok && !('push' in A.devs().find((d) => d.id === ids[2])) && !('push' in A.devs().find((d) => d.id === ids[3])), '[4q] token: null 照旧清掉整个 push（连 review 一起）');
+        // 合批：a、b 同时交付【待审阅】，1 秒后 c 也交付 → 合成一条 PUSH_REVIEW_MANY「3」、不响、只到声明了的那台；等的是 config 里的 4 秒
+        const tA = Date.now();
+        for (const n of ['a', 'b']) A.add(A.all[n], [R.human('新任务 ' + n), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_REVIEW_' + n)]);
+        await sleep(1000);
+        A.add(A.all.c, [R.human('新任务 c'), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_REVIEW_c')]);
+        await until(() => reqs('A').length >= 1, 20000); await sleep(1500);
+        const g1 = reqs('A'), p1 = parse(g1[0] || {});
+        c(g1.length === 1 && g1[0].token === tokens[0], '[4q] 三件【待审阅】：恰好一个请求，只到声明了 review 的那台（老 App 那台零请求）', JSON.stringify(g1.map((r) => [r.token.slice(0, 4), parse(r).aps?.alert])));
+        c(g1.length === 1 && p1.aps?.alert?.['loc-key'] === 'PUSH_REVIEW_MANY' && JSON.stringify(p1.aps.alert['loc-args']) === '["3"]' && !('sound' in p1.aps) && !('sid' in p1) && p1.aps['thread-id'] === 'cc-board',
+          '[4q] 合成一条：PUSH_REVIEW_MANY、数量 3、不带 sound、不带 sid、thread-id 照旧', g1[0]?.body);
+        c(g1.length === 1 && g1[0].at - tA >= 8500 && g1[0].at - tA <= 20000, '[4q] 站稳 5 秒 + config 的合批窗口 4 秒以后才发（' + (g1[0] ? g1[0].at - tA : '-') + ' ms，≥ 8500）');
+        const rl1 = A.lines('review ');
+        c(rl1.length === 1 && /^review \S+ push n=3 /.test(rl1[0]) && ['a', 'b', 'c'].every((n) => rl1[0].includes(s8(A.all[n]))) && !rl1[0].includes(s8(A.all.old)) && / sent 1\/1 PUSH_REVIEW_MANY$/m.test(A.text()),
+          '[4q] review 行一行（push n=3，三个会话号，不含服务起来时就交付了的 old），push sent 1/1 PUSH_REVIEW_MANY', JSON.stringify(rl1));
+        c(A.lines('notify ').length === 0 && A.lines('alert ').length === 0, '[4q] 只有 review 的一批：不弹 Mac 横幅，alert / notify 两行都不记', JSON.stringify(A.lines('notify ')));
+        // a 同一次交付：busy 一下又回来，不重复推
+        A.reg(A.all.a, 'busy'); await sleep(2600); A.reg(A.all.a, 'idle');
+        // 混合：mixW【待跟进】+ 0.3 秒后 mixR【待审阅】→ 2.5 秒那一批把 review 带上：声明了的那台一条 PUSH_MIXED_MANY「2」、响；老 App 那台收到的和以前逐字节一样
+        const n2 = reqs('A').length, tsW = new Date().toISOString(), idW = 'mqw' + Date.now();
+        A.add(A.all.mixW, [R.human('新任务 mixW')]); A.add(A.all.mixW, [fin(idW, '做完了。\n\n【待跟进】PUSH_PRIVATE_ASK_MIXW')], tsW);
+        await sleep(300);
+        const tsR = new Date().toISOString(), idR = 'mqr' + Date.now();
+        A.add(A.all.mixR, [R.human('新任务 mixR')]); A.add(A.all.mixR, [fin(idR, '做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_MIXR')], tsR);
+        await until(() => reqs('A', n2).length >= 2, 15000); await sleep(5500);
+        const g2 = reqs('A', n2), toNew = g2.filter((r) => r.token === tokens[0]), toOld = g2.filter((r) => r.token === tokens[1]);
+        const pN = parse(toNew[0] || {});
+        c(g2.length === 2 && toNew.length === 1 && pN.aps?.alert?.['loc-key'] === 'PUSH_MIXED_MANY' && JSON.stringify(pN.aps.alert['loc-args']) === '["2"]' && pN.aps.sound === 'default' && !('sid' in pN),
+          '[4q] 待跟进 + 待审阅同一批：声明了的那台一条 PUSH_MIXED_MANY、数量 2、照旧响；之后 5.5 秒（过了 review 的 4 秒窗口）没有第三条', JSON.stringify(g2.map((r) => [r.token.slice(0, 4), r.body])));
+        c(toOld.length === 1 && toOld[0].body === JSON.stringify({ aps: { alert: { 'loc-key': 'PUSH_REPLY_ONE' }, sound: 'default', 'thread-id': 'cc-board' }, sid: A.all.mixW.sid }),
+          '[4q] 老 App 那台：只有待跟进那件，载荷和没有 review 时逐字节一样（PUSH_REPLY_ONE + sid）', toOld[0]?.body);
+        const nl = A.lines('notify '), al = A.lines('alert '), rl2 = A.lines('review ');
+        c(nl.length === 1 && nl[0].split(' ')[3] === 'reply:' + s8(A.all.mixW) && /\| 「[^」]*」要你回 \| /.test(nl[0]) && !/review/.test(nl[0]) && al.length === 1 && / n=1 reply$/.test(al[0]),
+          '[4q] Mac 横幅（notify 行）和 alert 行只有待跟进那一件：n=1、标题「…」要你回，不含 review', JSON.stringify({ nl, al }));
+        c(rl2.length === 2 && rl2[1] === rl2[1].trim() && new RegExp('^review \\S+ push n=1 ' + s8(A.all.mixR) + ' \\+alert$').test(rl2[1]) && / sent 1\/1 PUSH_MIXED_MANY$/m.test(A.text()) && / sent 1\/1 PUSH_REPLY_ONE$/m.test(A.text()),
+          '[4q] 带上的 review 另记一行（push n=1 +alert）；按载荷分组各记一行 sent 1/1', JSON.stringify(rl2));
+        c(rl2.filter((l) => l.includes(s8(A.all.a))).length === 1, '[4q] 同一次交付（a busy 一下又回来）：review 只推过一次');
+        // 改判：同一条回复（同一个 id、同一个时间）后面又补了一段 → 同一次交付改判。mixW 待跟进发过、改判成待审阅：不再补发「做好了」；mixR 待审阅发过、改判成待跟进：待跟进照发
+        const n3 = reqs('A').length;
+        A.add(A.all.mixW, [fin(idW, '补一句。\n\n【待审阅】PUSH_PRIVATE_ASK_FLIPW')], tsW);
+        A.add(A.all.mixR, [fin(idR, '还有一件要你定。\n\n【待跟进】PUSH_PRIVATE_ASK_FLIPR')], tsR);
+        await until(() => reqs('A', n3).length >= 2, 15000); await sleep(5500);
+        const S3 = await A.sv(), g3 = reqs('A', n3), w3 = S3[A.all.mixW.sid] || {}, r3s = S3[A.all.mixR.sid] || {};
+        c(w3.resultAt === tsW && w3.digest?.need === 'review' && r3s.resultAt === tsR && r3s.digest?.need === 'reply', '[4q] 改判的场景搭对了：mixW 同一个 resultAt 现在是待审阅，mixR 同一个 resultAt 现在是待跟进', JSON.stringify({ w: [w3.resultAt, w3.digest?.need], r: [r3s.resultAt, r3s.digest?.need], tsW, tsR }));
+        c(g3.length === 2 && g3.every((r) => r.body === JSON.stringify({ aps: { alert: { 'loc-key': 'PUSH_REPLY_ONE' }, sound: 'default', 'thread-id': 'cc-board' }, sid: A.all.mixR.sid })) && new Set(g3.map((r) => r.token)).size === 2 && / sent 2\/2 PUSH_REPLY_ONE$/m.test(A.text()),
+          '[4q] 待审阅发过、改判成待跟进：待跟进照发（两台都是 PUSH_REPLY_ONE + sid、响，同一份载荷一组 sent 2/2）', JSON.stringify(g3.map((r) => [r.token.slice(0, 4), r.body])));
+        c(!A.lines('review ').some((l) => l.includes(s8(A.all.mixW))), '[4q] 待跟进发过、同一次交付改判成待审阅：不再补发「做好了」（review 行里从没有 mixW）', JSON.stringify(A.lines('review ')));
+        // 之后老 App 换回不带 kinds 的登记：review 去掉、落盘
+        const r8 = await A.remote(0, { token: tokens[0], env: 'production' }), d8 = A.devs().find((d) => d.id === ids[0]);
+        c(r8.body?.ok && JSON.stringify(d8?.push) === JSON.stringify({ token: tokens[0], env: 'production', at: 1 }), '[4q] 同一个令牌改成不带 kinds 登记（换回老 App）：review 去掉、落盘', JSON.stringify(d8?.push));
+      };
+      const phaseB = async () => {
+        const c = (cond, name, extra = '') => chk.B.push([!!cond, name, extra]);
+        // 单件：PUSH_REVIEW_ONE + sid、不响，只到磁盘上就带着 review 的那台
+        B.add(B.all.s1, [R.human('新任务 s1'), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_S1')]);
+        await until(() => reqs('B').length >= 1, 20000); await sleep(1500);
+        const g1 = reqs('B');
+        c(g1.length === 1 && g1[0].token === tokens[2] && g1[0].body === JSON.stringify({ aps: { alert: { 'loc-key': 'PUSH_REVIEW_ONE' }, 'thread-id': 'cc-board' }, sid: B.all.s1.sid }),
+          '[4q] 单件【待审阅】：PUSH_REVIEW_ONE、带 sid、不带 sound；只到设备表里带 review 的那台（服务启动时从盘上读回）', JSON.stringify(g1.map((r) => [r.token.slice(0, 4), r.body])));
+        // 看着总控台（f=1）、Mac 不空闲：review 也不推，review 行记 ui
+        const n2 = reqs('B').length;
+        B.add(B.all.seen, [R.human('新任务 seen'), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_SEEN')]);
+        const ui = await until(async () => { await B.local('GET', '/api/state?peek=1&f=1'); return B.lines('review ').find((l) => l.includes(s8(B.all.seen))) || null; }, 20000) || '';
+        await sleep(1000);
+        c(/^review \S+ ui n=1 /.test(ui) && reqs('B', n2).length === 0 && B.lines('notify ').length === 0, '[4q] 他正看着总控台、Mac 不空闲：review 不推（review 行记 ui），也不弹横幅', ui);
+        // 重启：停着的时候交付的（down）、发过的（s1、seen）、起来时就有的（old）都不补推；重启以后新交付的（after）照推，设备的 review 从盘上读回
+        await B.stop();
+        B.add(B.all.down, [R.human('新任务 down'), R.final('停着的时候做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_DOWN')]);
+        const mark = B.text().length, n3 = reqs('B').length;
+        B.start();
+        const back = await B.up();
+        await sleep(2500);
+        B.add(B.all.after, [R.human('新任务 after'), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_AFTER')]);
+        await until(() => reqs('B', n3).length >= 1, 20000); await sleep(1500);
+        const g3 = reqs('B', n3), rl3 = B.text().slice(mark).split('\n').filter((l) => l.startsWith('review '));
+        c(back && g3.length === 1 && g3[0].token === tokens[2] && parse(g3[0]).sid === B.all.after.sid && parse(g3[0]).aps?.alert?.['loc-key'] === 'PUSH_REVIEW_ONE' && rl3.length === 1 && rl3[0].includes(s8(B.all.after)),
+          '[4q] 重启：停着时交付的（down）、发过的、起来时就有的都不补推；重启后新交付的那件照推一条，只到带 review 的那台', JSON.stringify({ back, g3: g3.map((r) => [r.token.slice(0, 4), r.body]), rl3 }));
+      };
+      const phaseC = async () => {
+        const c = (cond, name, extra = '') => chk.C.push([!!cond, name, extra]);
+        const line = await until(() => C.lines('config ').find((l) => /reviewBatchSec 不用/.test(l)) || null, 6000) || '';
+        c(/^config \S+：reviewBatchSec 不用（要是 1–600 的整数秒），【待审阅】推送照默认 30 秒合批$/.test(line) && C.lines('config ').some((l) => / 个项目，autoTrust=/.test(l)) && !A.lines('config ').some((l) => /reviewBatchSec/.test(l)),
+          '[4q] reviewBatchSec 写错（"x"）：只这一项回默认 30 秒、记一行 config，整份 config 照用；写对的不多记', JSON.stringify(C.lines('config ')));
+      };
+      const phaseD = async () => {
+        const c = (cond, name, extra = '') => chk.D.push([!!cond, name, extra]);
+        const toD = () => got.filter((r) => r.token === tokens[6]);
+        // 推迟中：刚交付【待审阅】、还没站稳就先放着 4 秒 → 推迟中不发，到点以后也不补发（推迟的就是这一件，记成已知道，和待跟进一样）
+        D.add(D.all.zz, [R.human('新任务 zz'), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_ZZ')]);
+        const z = await until(async () => { const x = (await D.sv())[D.all.zz.sid]; return x && x.done && x.digest && x.digest.need === 'review' ? x : null; }, 4000) || {};
+        const tz = Date.now(), pz = await D.local('POST', '/api/snooze', { sid: D.all.zz.sid, until: tz + 4000, at: z.resultAt });
+        await until(() => Date.now() - tz >= 13000, 14000);                        // 推迟 4 秒 + 站稳 5 秒 + 合批 1 秒，再多等 3 秒
+        c(pz.code === 200 && pz.body?.ok && toD().length === 0 && !D.lines('review ').some((l) => l.includes(s8(D.all.zz))) && D.lines('snooze ').some((l) => / wake due$/.test(l)),
+          '[4q] 刚交付【待审阅】就推迟：推迟中不发，到点醒了也不补发', JSON.stringify({ pz: pz.body, n: toD().length, rl: D.lines('review '), sz: D.lines('snooze ') }));
+        // 对照：同一份服务里不推迟的那件照推（上面不是因为这份服务推不出去）
+        D.add(D.all.yy, [R.human('新任务 yy'), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_YY')]);
+        await until(() => toD().length >= 1, 15000); await sleep(800);
+        c(toD().length === 1 && parse(toD()[0]).sid === D.all.yy.sid && parse(toD()[0]).aps?.alert?.['loc-key'] === 'PUSH_REVIEW_ONE', '[4q] 对照：同一份服务里没推迟的那件照推一条', JSON.stringify(toD().map((r) => r.body)));
+      };
+      const phaseE = async () => {
+        const c = (cond, name, extra = '') => chk.E.push([!!cond, name, extra]);
+        const toE = () => got.filter((r) => r.token === tokens[7]);
+        // 交付前记下时间：第一次看到它不会早于这一刻，站稳至少 5 秒，再等 config 的 8 秒，所以最早 13 秒到；合批写死 2.5 秒的话一般 7.5–10 秒就到了
+        const tE = Date.now();
+        E.add(E.all.ee, [R.human('新任务 ee'), R.final('做好了。\n\n【待审阅】PUSH_PRIVATE_ASK_EE')]);
+        await until(() => toE().length >= 1, 25000); await sleep(800);
+        const dt = toE()[0] ? toE()[0].at - tE : -1;
+        c(toE().length === 1 && dt >= 12700 && dt <= 24000 && parse(toE()[0]).aps?.alert?.['loc-key'] === 'PUSH_REVIEW_ONE',
+          '[4q] 合批窗口照 config 的 reviewBatchSec（这份写 8 秒）：交付后站稳 5 秒 + 8 秒才到（' + dt + ' ms，≥ 12700）', JSON.stringify(toE().map((r) => r.body)));
+      };
+      if (up) await Promise.all([phaseA(), phaseB(), phaseC(), phaseD(), phaseE()].map((p) => p.catch((e) => chk.C.push([false, '[4q] 场景抛错', String(e && e.stack || e).slice(0, 300)]))));
+      for (const k of ['A', 'B', 'C', 'D', 'E']) for (const [cond, name, extra] of chk[k]) ok(cond, name, extra);
+      const forbidden = ['PUSH_PRIVATE_TITLE_', 'PUSH_PRIVATE_NAME_', 'PUSH_PRIVATE_ASK_'];
+      ok(got.length >= 8 && got.every((r) => forbidden.every((w) => !r.body.includes(w))), '[4q] 每条正文（含 review 的）都没有会话标题、登记名和状态行后面的字', 'requests=' + got.length);
+      ok(tokens.every((t) => !all3.some((f) => f.text().includes(t))), '[4q] 完整 token 不进日志');
+    } finally {
+      await Promise.all(all3.map((f) => f.stop())); for (const s of h2s) s.destroy(); await Promise.all(apis.map((srv) => new Promise((r) => srv.close(r))));
+    }
+    const elapsed = Date.now() - began; console.log('[4q] 墙钟 ' + elapsed + ' ms');
+    ok(elapsed <= 70000, '[4q] 整段墙钟 ≤ 70 秒', elapsed + ' ms');
+  }
   console.log('\n[10-0] 手机远程：config 里没有 remote（这一趟的主服务）→ 远程端口没人听；4747 和以前一样，只多拒带代理头的请求');
   {
     const TSN = 'ccb-r1.tail1a2b.ts.net', LG = 'khalil@example.com';
@@ -3292,15 +3500,28 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     for (const [why, y, e] of g4) ok(y.code === 403 && y.body && y.body.error === e, '拦：' + why + ' → 403 ' + e, errOf(y));
     x = await rget(R1R, '/api/state', CRED);
     ok(x.code === 200 && Array.isArray(x.body.sessions) && x.body.peek === true && !('remote' in x.body), '凭证对、头齐：远程读得到状态；手机读不取走本机界面的提示（peek）；不给配对信息', errOf(x));
-    const NOT = [['POST', '/api/delete'], ['POST', '/api/open'], ['POST', '/api/reveal'], ['POST', '/api/focus'], ['POST', '/api/attach'], ['POST', '/api/pick'], ['POST', '/api/crash'], ['POST', '/api/auto'], ['POST', '/api/upload'], ['POST', '/api/preview'],
+    const NOT = [['POST', '/api/delete'], ['POST', '/api/open'], ['POST', '/api/reveal'], ['POST', '/api/focus'], ['POST', '/api/attach'], ['POST', '/api/pick'], ['POST', '/api/crash'], ['POST', '/api/auto'], ['POST', '/api/preview'],
       ['POST', '/api/unarchive'], ['POST', '/api/cancel'], ['POST', '/api/remote/revoke'], ['GET', '/api/remote/devices'], ['GET', '/health'], ['GET', '/api/send'], ['GET', '/api/state/']];
     const leak = [];
     for (const [m, p] of NOT) { const y = await rq(R1R, m, p, RH({ 'x-ccboard-device': CRED, ...(m === 'POST' ? { origin: ORI } : {}) }), m === 'POST' ? { sid: 'x', path: '/etc/hosts', name: 'ccb-x' } : undefined); if (!(y.code === 403 && y.body && y.body.error === 'remote: not allowed')) leak.push(m + ' ' + p + ' → ' + errOf(y)); }
-    ok(leak.length === 0, '拦：凭证对也不给的 ' + NOT.length + ' 个（删除、打开、选中、聚焦、去终端、选文件框、一起退出、自动续跑、上传、预览、接回、取消、撤销、列设备、/health、换方法、结尾斜杠）→ 403 remote: not allowed', JSON.stringify(leak));
+    ok(leak.length === 0, '拦：凭证对也不给的 ' + NOT.length + ' 个（删除、打开、选中、聚焦、去终端、选文件框、一起退出、自动续跑、预览、接回、取消、撤销、列设备、/health、换方法、结尾斜杠）→ 403 remote: not allowed', JSON.stringify(leak));
     const okA = [await rget(R1R, '/api/archive', CRED), await rq(R1R, 'POST', '/api/processed', RH({ 'x-ccboard-device': CRED, origin: ORI }), {}), await rq(R1R, 'POST', '/api/ack', RH({ 'x-ccboard-device': CRED, origin: ORI }), { sid: 'nope' }), await rget(R1R, '/api/turns?sid=nope', CRED)];
     ok(okA[0].code === 200 && Array.isArray(okA[0].body.items) && okA[1].code === 200 && okA[1].body.ok && okA[2].code === 200 && okA[3].code === 404, '放行的接口真走到原来的处理：归档列表、审完了、知道了、对话（没有这段记录 → 404）', okA.map(errOf).join(' | '));
     const acts = logOf(r1).split('\n').filter((l) => / act /.test(l));
     ok(acts.some((l) => new RegExp('^remote \\S+ act ' + idA + ' khalil@example\\.com POST /api/processed$').test(l)) && acts.some((l) => new RegExp('^remote \\S+ act ' + idA + ' khalil@example\\.com POST /api/ack nope$').test(l)) && !acts.some((l) => / GET /.test(l)), '远程做的事留痕（审查 L5）：每个远程 POST 记一行 act <设备号> <登录名> POST <路径> <sid 前 8 位>，不记正文；GET 不记', JSON.stringify(acts.slice(0, 3)));
+    // B6（11/25）：手机传附件。凭证对 → 和 Mac 上粘贴一样存进这台的 uploads、回路径；act 那一行只多记大小和扩展名，不记原名和内容
+    const b6Up = await rq(R1R, 'POST', '/api/upload', RH({ 'x-ccboard-device': CRED, origin: ORI }), { name: 'secretplan.txt', data: Buffer.from('hello').toString('base64') });
+    let b6UpBytes = null; try { b6UpBytes = fs.readFileSync(b6Up.body.path, 'utf8'); } catch {}
+    ok(b6Up.code === 200 && b6Up.body && b6Up.body.ok === true && String(b6Up.body.path).startsWith(path.join(r1.d, 'uploads') + path.sep) && /-secretplan\.txt$/.test(b6Up.body.path) && b6UpBytes === 'hello',
+      'B6：凭证对、头齐的手机 POST /api/upload → 存进 uploads/<日期>/，回路径，字节原样', errOf(b6Up) + ' read=' + JSON.stringify(b6UpBytes));
+    const b6UpOdd = await rq(R1R, 'POST', '/api/upload', RH({ 'x-ccboard-device': CRED, origin: ORI }), { name: 'notes.mypassword', data: Buffer.from('hi').toString('base64') });
+    const b6UpNo = await rq(R1R, 'POST', '/api/upload', RH({ origin: ORI }), { name: 'x.txt', data: Buffer.from('nope').toString('base64') });
+    ok(b6UpNo.code === 401 && b6UpNo.body && b6UpNo.body.error === 'device', 'B6：没带设备凭证的上传 → 401（白名单放行了路径，凭证那道照样拦）', errOf(b6UpNo));
+    const b6UpActs = logOf(r1).split('\n').filter((l) => / act .*POST \/api\/upload/.test(l));
+    ok(b6UpActs.length === 2 && new RegExp('^remote \\S+ act ' + idA + ' khalil@example\\.com POST /api/upload bytes=5 ext=\\.txt$').test(b6UpActs[0]) && !/secretplan|hello|aGVsbG8/.test(b6UpActs[0]),
+      'B6：上传的 act 行只多记 bytes=5 ext=.txt，没有原名、内容、base64；没凭证的那次不记 act', JSON.stringify(b6UpActs));
+    ok(b6UpOdd.code === 200 && b6UpOdd.body && b6UpOdd.body.ok === true && b6UpActs.length === 2 && / POST \/api\/upload bytes=2 ext=other$/.test(b6UpActs[1]) && !/mypassword|notes/.test(b6UpActs[1]),
+      'B6：不常见的扩展名（.mypassword）在 act 行记成 ext=other，名字的尾巴不进日志', errOf(b6UpOdd) + ' ' + JSON.stringify(b6UpActs));
     // 「审完了」跨设备（11/18，[3p] 的远程那一半）：手机经远程端口报上来的 Mac 读得到，Mac 报上来的手机也读得到（两个端口的 /api/state 都带 processed）；Mac 撤销，手机下一次读就没了
     const lst = async () => ((await rq(R1P, 'GET', '/api/state?peek=1', { 'x-ccboard': tok1 })).body || {});
     const [pA, pB] = ((await lst()).sessions || []).filter((s) => s.sid && s.resultAt && s.done);
@@ -3390,7 +3611,10 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
     ok(gd.code === 200 && gd.body.kind === 'gallery' && gd.body.name === 'gal' && gd.body.total === 5 && gd.body.truncated === false && gd.body.items.map((i) => i.name).join() === 'a.png,b.png,c.png,d.png,e.png' && gd.body.items.every((i) => i.kind === 'image' && /^\/rp\/[0-9a-f]{32}\//.test(i.url))
       && gdG.length === 5 && gdG.every((y, i) => y.code === 200 && y.text === PNG + 'gal/' + gd.body.items[i].name),
       '远程文件夹图集：交付里写到的文件夹 → 第一层的 5 张图，按文件名排，每张一把钥匙、拿得到原图', gdJ.slice(0, 300));
-    ok(!/n\.txt|deep|hid|l-in|l-out|outside|outdir|pics2|q1|q2|RP_DIR_TEXT/.test(gdJ), '远程文件夹图集不列：文本、点开头的、子文件夹里的、指回文件夹里的链接、指到别处的链接、指到外面文件夹的链接 outdir 和它里面的图（名字都不出现在应答里）', gdJ.slice(0, 300));
+    // 先把测试临时根换成固定字样再匹配：ROOT 是 mkdtemp 的 run-XXXXXX，随机名里带 q2 / hid 就误报（0.3.13 出包那次撞上过）；
+    // 漏出来的完整路径（<ROOT>/…/deep/x.png）照样抓得到，比只看 items 的 name 严。
+    const gdN = [ROOT, fs.realpathSync(ROOT)].reduce((t, r) => t.split(r).join('<ROOT>'), gdJ);
+    ok(!/n\.txt|deep|hid|l-in|l-out|outside|outdir|pics2|q1|q2|RP_DIR_TEXT/.test(gdN), '远程文件夹图集不列：文本、点开头的、子文件夹里的、指回文件夹里的链接、指到别处的链接、指到外面文件夹的链接 outdir 和它里面的图（名字都不出现在应答里）', gdJ.slice(0, 300));
     const rpDir = [
       ['文件夹里只写到一张图、没写到文件夹本身', { sid: rvS, path: rpAt('onlyfile') }, 404, 'not-in-conversation'],
       ['写到的文件夹的上一级', { sid: rvS, path: RD }, 404, 'not-in-conversation'],

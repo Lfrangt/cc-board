@@ -17,6 +17,8 @@
  *        ccb:frame、文件夹先问图集、主目录不摊开、paths 去重和点开头的、vN.html 的 versions、server 不认 canvas: true。
  *        11/25 画布第二轮再加 11 个 canvas-*：一批网页不分文件夹（拿到别的文件夹的钥匙）、分开时的说明、版本文件夹的比例例外、过半改成一半、/tmp 不去 /private、
  *        主目录钥匙往下钻、versions 留最早的、只读 32 KiB、实体查到原型、按 UTF-16 截、ios 不认整词。
+ *        11/25 待审阅推送（手表）加 11 个 review-*（[4q] 抓）：没有 review 槽、走 Mac 横幅、合批不看 config、不跟待跟进那批带上、看着总控台也推、待跟进发过还补发、
+ *        老设备也收到、重启不记已知道、登记不认 kinds、只改 kinds 不落盘、推迟中不记已知道；push-ignores-ui、push-token-in-log 两个跟着新写法换了原文。
  *        11/25 真身和顶层挪进 preview.mjs 共用（canon、isTop、homeIds）：rp-canon-case、rp-canon-firm、rp-dir-private-top 跟着挪到 preview.mjs（本机和远程一起红），
  *        preview-deep-home、canvas-tmp-private 换了原文；再加 7 个 canvas-*：外接盘根不算顶层、register 绕过 canon、版本不看是不是网页、版本不去重、取第一组、
  *        分母数子文件夹、分母数点开头的。
@@ -62,15 +64,28 @@ const MUTANTS = {
   'push-idle-unknown-away': ["return null; // 空闲未知时不额外放行", "return 180000; // 改坏：空闲未知也放行"],
   'push-idle-threshold-flipped': ["idleMs >= PUSH_AWAY_MS", "idleMs < PUSH_AWAY_MS", 'remote.mjs'],
   'push-bad-path': ["':path': '/3/device/' + token,", "':path': '/wrong/device/' + token,"],
-  "push-ignores-ui": ["if (would === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));\n  else if (pushReady()) {\n    const idleMs = await readHidIdleMs();\n    if (pushWould(Date.now() - uiFocusAt, idleMs) === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));\n  }", "void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));"],
+  "push-ignores-ui": ["if (pushed) void sendPush(items);\n  else if (pushReady()) {\n    const idleMs = await readHidIdleMs();\n    if (pushWould(Date.now() - uiFocusAt, idleMs) === 'sent') { pushed = true; void sendPush(items); }\n  }", "pushed = true; void sendPush(items);"],   // 11/25 待审阅：推送的那份改叫 items（带上排着的 review），原文跟着改
   "push-without-config": ["const APNS = CONFIG.apns;", "const APNS = CONFIG.apns.on ? CONFIG.apns : { on: true, keyId: 'ABCDE12345', teamId: 'ZXCVB12345', topic: 'dev.example.remote' };"],
   "push-revoke-keeps-token": ["devices.delete(id); devSeen.delete(id);", "if (!d.push) devices.delete(id); devSeen.delete(id);"],
   "push-410-kept": ["delete d.push; saveDevices();", "saveDevices();"],
   "push-network-retries": ["const r = await apnsRequest(host, token, jwt, payload);", "let r = await apnsRequest(host, token, jwt, payload); if (r.verdict === 'err') r = await apnsRequest(host, token, jwt, payload);"],
-  "push-token-in-log": ["${token.slice(0, 8)}`);\n      } else", "${token}`);\n      } else"],
+  "push-token-in-log": ["${token.slice(0, 8)}${d.push.review ? ' +review' : ''}`);\n      } else", "${token}${d.push.review ? ' +review' : ''}`);\n      } else"],   // 11/25 token 行后面多了 +review，原文跟着改
   "push-token-duplicate": ["if (other !== d && other.push?.token === token) { delete other.push; changed = true; }", "if (false) { delete other.push; changed = true; }"],
   "push-local-registers": ["if (rem && u.pathname === '/api/remote/push') {\n      const d = rem.dev;", "if (u.pathname === '/api/remote/push') {\n      const d = rem ? rem.dev : devices.values().next().value;"],
   "push-readonly-off": ["const READONLY = process.env.CCBOARD_READONLY === '1';", "const READONLY = process.env.CCBOARD_READONLY === '1' && !(() => { try { return parseApns(JSON.parse(fs.readFileSync(path.join(DATA, 'config.json'), 'utf8')).apns).on; } catch { return false; } })();"],
+  // 11/25 待审阅推送（手表）接线，[4q] 抓：没有 review 槽、走 Mac 横幅那一路、合批不看 config、不跟待跟进那批带上、看着总控台也推、
+  // 待跟进发过还补发「做好了」、老设备也收到、重启不记已知道、登记不认 kinds、只改 kinds 不落盘、推迟中不记已知道
+  'review-not-notified':  ["  if (!asking(s) && !s.alert && s.digest && s.digest.need === 'review'", "  if (false && s.digest.need === 'review'"],
+  'review-to-mac':        ["      if (slot === 'review') { queueReview(s.sid); continue; }", ""],
+  'review-batch-fixed':   ["setTimeout(flushReviews, CONFIG.reviewBatchSec * 1000)", "setTimeout(flushReviews, 2500)"],
+  'review-not-carried':   ["  const rv = takeReviews();", "  const rv = [];"],
+  'review-ignores-ui':    ["  if (how === 'push') void sendPush(r);", "  void sendPush(r);"],
+  'review-after-reply':   ["      if (slot === 'review' && done.reply === 'reply@' + s.resultAt) { done.review = n.key; alertHold.delete(hk); continue; }", ""],
+  'review-all-devices':   ["const mine = pushItems(items, d.push);", "const mine = items;"],
+  'review-no-baseline':   ["  b.review = s.resultAt ? 'review@' + s.resultAt : null;", ""],
+  'review-kinds-ignored': ["const review = pushKinds(body.kinds).includes('review');", "const review = false;"],
+  'review-kinds-unsaved': ["if (!same || (d.push.review === true) !== review)", "if (!same)"],
+  'review-snooze-sends':  ["const v = ns.find((n) => n.slot === 'review'); if (v) done.review = v.key;", ";"],
   // 每个窗口一台 tmux / 一起退出 / 全部接回（P0-0，win-bf）。tmux 那几个不许写回 -L：perwindow-shared 是退回到老的 -S tmux.sock
   "perwindow-shared": ["  const sv = await startServer(name);\n", "  const sv = { sock: TMUX_SOCKET, watched: false };\n"],
   "enum-legacy-only": ["  const socks = [TMUX_SOCKET, ...winSocks()];", "  const socks = [TMUX_SOCKET];"],

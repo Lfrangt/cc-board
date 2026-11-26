@@ -3,11 +3,12 @@
  * [OUTPUT]: 逐项打印 ok / FAIL，最后一行「结果：N 过，M 没过」，退出码 0 = 全过。带 --mutants 时改跑反向对照：造若干个改坏的 remote.mjs，每个都必须让本测试变红
  * [POS]: test/ 的「手机远程」规则测试（remote.mjs 的三道拦）。测：config 的 remote 什么算开、写错一律关且不抛；Host / 登录头 / Origin 怎么认；
  *        远程能碰的接口恰好那 11 个（11/21 加远程预览）；设备凭证、配对码、设备表；APNs 配置、令牌、锁屏类别、ES256 验签、失效判定与空闲放行。
+ *        11/25 待审阅推送（手表）：pushKinds 认设备声明的 kinds、pushItems 按设备滤 review、pushPayload 的 PUSH_REVIEW_ONE / _MANY / 混合、只含 review 不带 sound、设备表保留 push.review。
  *        接进 server.mjs 之后的端到端断言在 state.test.mjs 的 [10]，接线的改坏版在 mutants.mjs 的 remote-*。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 // 用法：node test/remote.test.mjs [remote.mjs 的路径]      node test/remote.test.mjs --mutants
-import path from 'node:path'; import fs from 'node:fs'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
+import path from 'node:path'; import fs from 'node:fs'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process'; import vm from 'node:vm'; import os from 'node:os';
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const SRC = path.resolve(process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : path.join(HERE, '../remote.mjs'));
 
@@ -34,6 +35,7 @@ if (process.argv.includes('--mutants')) {
     'bad-host-skipped':     ["    if (!TS_HOST.test(x)) return off('remote.hosts 里有不是 *.ts.net 的名字：' + String(h).slice(0, 80));", "    if (!TS_HOST.test(x)) continue;"],
     'any-domain':           ["(?:\\\\.${LABEL})*\\\\.ts\\\\.net(?::\\\\d{1,5})?$`", "(?:\\\\.${LABEL})*(?::\\\\d{1,5})?$`"],
     'rp-api-missing':       ["'POST /api/remote/push', 'POST /api/remote/preview']", "'POST /api/remote/push']"],
+    'upload-api-missing':   ["'POST /api/archive', 'POST /api/upload', 'POST /api/remote/push'", "'POST /api/archive', 'POST /api/remote/push'"],
     'rp-key-no-expiry':     ["!!it && it.exp > now && devs", "!!it && devs"],
     'rp-key-any-device':    [" && devs.get(it.dev.id) === it.dev && it.login", " && devs.has(it.dev.id) && it.login"],
     'rp-key-any-login':     [" && it.login === login;", ";"],
@@ -67,7 +69,19 @@ if (process.argv.includes('--mutants')) {
     "push-count-off": ["[String(items.length)]", "[String(items.length + 1)]"],
     "push-sid-many": ["items.length === 1 && typeof items[0].sid", "items.length >= 1 && typeof items[0].sid"],
     "push-sid-loose": ["/^[\\w-]{8,64}$/.test(items[0].sid)", "true"],
-    "push-title-leak": ["return { aps: { alert, sound:", "return { title: items[0].title, aps: { alert, sound:"],
+    "push-title-leak": ["return { aps: { alert, ...(quiet", "return { title: items[0].title, aps: { alert, ...(quiet"],   // 11/25 sound 改成按 quiet 带不带，原文跟着改
+    // 11/25 待审阅推送（手表）：设备声明 kinds、按设备滤、review 的锁屏键、只含 review 不响
+    "push-review-loud": ["const quiet = reviews > 0 && reviews === items.length;", "const quiet = false;"],
+    "push-review-quiet-mixed": ["const quiet = reviews > 0 && reviews === items.length;", "const quiet = reviews > 0;"],
+    "push-review-one-key": ["review: 'PUSH_REVIEW_ONE'", "review: 'PUSH_STOP_ONE'"],
+    "push-review-many-key": ["reviews && reviews === items.length ? 'PUSH_REVIEW_MANY'", "reviews && reviews === items.length ? 'PUSH_WAIT_MANY'"],
+    "push-review-mixed-key": ["reviews ? 'PUSH_MIXED_MANY' : waits ===", "reviews ? 'PUSH_REVIEW_MANY' : waits ==="],
+    "push-items-unfiltered": ["push && push.review === true ? items : items.filter((x) => x.kind !== 'review')", "items"],
+    "push-items-truthy": ["push && push.review === true ? items", "push && push.review ? items"],
+    "push-kinds-loose": ["Array.isArray(v) ? PUSH_KINDS.filter((k) => v.includes(k)) : []", "Array.isArray(v) ? PUSH_KINDS.filter((k) => v.includes(k)) : v ? ['review'] : []"],
+    "push-kinds-any": ["PUSH_KINDS.filter((k) => v.includes(k))", "v.filter((k) => typeof k === 'string')"],
+    "push-load-drops-review": ["if (dev.push && d.push.review === true) dev.push.review = true;", ""],
+    "push-load-review-truthy": ["d.push.review === true) dev.push.review = true", "d.push.review) dev.push.review = true"],
     "jwt-wrong-issuer": ["iss: teamId, iat: nowSec", "iss: keyId, iat: nowSec"],
     "jwt-wrong-kid": ["alg: 'ES256', kid: keyId", "alg: 'ES256', kid: teamId"],
     "jwt-der": ["dsaEncoding: 'ieee-p1363'", "dsaEncoding: 'der'"],
@@ -136,13 +150,13 @@ ok(g({ host: H, 'tailscale-user-login': LOGIN }, ON, 'POST').deny === 'no origin
 for (const o of ['http://' + H, 'https://evil.com', 'https://other.tail1a2b.ts.net', 'null', 'https://' + H + ':8443', 'https://' + H + '/']) ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: o }, ON, 'POST').deny === 'bad origin', 'Origin 是 ' + o + ' → 拒');
 ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: 'https://evil.com' }).deny === 'bad origin', 'GET 带着别人的 Origin 也拒');
 
-console.log('\n第二道：远程能碰的接口恰好 11 个，按「方法 + 路径」整串查');
-const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push', 'POST /api/remote/preview'];
-ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 11, '原有九条加设备推送登记、远程预览：放行，恰好这 11 个', [...R.REMOTE_API].join(','));
-const NO = ['POST /api/delete', 'POST /api/open', 'POST /api/reveal', 'POST /api/focus', 'POST /api/attach', 'POST /api/pick', 'POST /api/crash', 'POST /api/auto', 'POST /api/upload', 'POST /api/preview', 'POST /api/unarchive', 'POST /api/cancel',
+console.log('\n第二道：远程能碰的接口恰好 12 个，按「方法 + 路径」整串查');
+const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/upload', 'POST /api/remote/push', 'POST /api/remote/preview'];
+ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 12, '原有九条加 B6 上传、设备推送登记、远程预览：放行，恰好这 12 个', [...R.REMOTE_API].join(','));
+const NO = ['POST /api/delete', 'POST /api/open', 'POST /api/reveal', 'POST /api/focus', 'POST /api/attach', 'POST /api/pick', 'POST /api/crash', 'POST /api/auto', 'POST /api/preview', 'POST /api/unarchive', 'POST /api/cancel',
   'POST /api/remote/pair', 'POST /api/remote/revoke', 'GET /api/remote/devices', 'POST /api/remote/claim', 'GET /health', 'GET /api/send', 'POST /api/state', 'GET /api/state/', 'GET /API/STATE', 'GET /api/state%20', 'GET /api/constructor', 'GET constructor', 'HEAD /api/state', 'OPTIONS /api/send'];
 const leak = NO.filter((x) => R.allowed(...x.split(' ')));
-ok(leak.length === 0, '删除、打开 / 选中文件、聚焦、去终端、选文件框、一起退出、自动续跑、上传、预览、接回、取消、配对管理（含 claim，它另走一条路）、/health、换了方法、结尾斜杠、大小写、原型上的名字：一律不放', JSON.stringify(leak));
+ok(leak.length === 0, '删除、打开 / 选中文件、聚焦、去终端、选文件框、一起退出、自动续跑、预览、接回、取消、配对管理（含 claim，它另走一条路）、/health、换了方法、结尾斜杠、大小写、原型上的名字：一律不放', JSON.stringify(leak));
 
 console.log('\n第三道：设备凭证（只存哈希、定长比较、绑配对时的登录名）');
 const a = R.newDevice('iPhone', LOGIN, 1000), b = R.newDevice('iPad', LOGIN, 2000);
@@ -240,6 +254,38 @@ for (const bad of ['short', '../fixture', 'x'.repeat(65), ['fixture-1234'], null
 const privateWords = ['PRIVATE_TITLE', 'PRIVATE_BODY', 'PRIVATE_NAME'];
 const clean = call('pushPayload', [{ kind: 'reply', sid, title: privateWords[0], text: privateWords[1], name: privateWords[2] }]);
 ok(!!clean && privateWords.every((w) => !JSON.stringify(clean).includes(w)), '锁屏只取类别和 sid，输入额外的标题正文登记名均不能漏出');
+
+console.log('\n待审阅推送（11/25 手表）：设备声明 kinds、按设备滤、review 单件 / 多件 / 混合、只含 review 不响');
+const pj = (items) => { try { return JSON.stringify(call('pushPayload', items)); } catch { return ''; } };
+ok(JSON.stringify(R.PUSH_KINDS) === '["review"]', 'PUSH_KINDS 只有 review');
+for (const [v, want, label] of [[['review'], ['review'], '只有 review'], [['x', 'review', 7, null], ['review'], '混着认不出的元素：只留 review'], [['review', 'review'], ['review'], '重复只算一次'],
+  [[], [], '空数组'], [['x', 'sound'], [], '只有认不出的'], ['review', [], '字符串（不是数组）'], [{ review: true }, [], '对象'], [null, [], 'null'], [undefined, [], '没带'], [7, [], '数字'],
+  [['Review', ' review', 'review '], [], '大小写 / 空白不同不算'], [[['review']], [], '套了一层数组']]) {
+  const got = call('pushKinds', v); ok(JSON.stringify(got) === JSON.stringify(want), 'pushKinds：' + label + ' → ' + JSON.stringify(want), JSON.stringify(got));
+}
+const mixItems = [{ kind: 'reply', sid }, { kind: 'review', sid: 'fixture-5678' }, { kind: 'limit', sid }];
+ok(JSON.stringify(call('pushItems', mixItems, { token: PT, env: 'sandbox', at: 1, review: true })) === JSON.stringify(mixItems), 'pushItems：声明了 review 的设备原样收到（顺序不变）');
+for (const [push, label] of [[{ token: PT, env: 'sandbox', at: 1 }, '没声明'], [{ token: PT, env: 'sandbox', at: 1, review: 'true' }, 'review 是字符串 "true"'], [{ token: PT, env: 'sandbox', at: 1, review: 1 }, 'review 是 1'], [undefined, '没有 push'], [null, 'push 是 null']]) {
+  const got = call('pushItems', mixItems, push); ok(JSON.stringify(got) === JSON.stringify([mixItems[0], mixItems[2]]), 'pushItems：' + label + ' → 滤掉 review，别的原样、顺序不变', JSON.stringify(got));
+}
+ok(call('pushItems', [{ kind: 'review', sid }, { kind: 'review' }], { token: PT, env: 'sandbox', at: 1 })?.length === 0, 'pushItems：只有 review、设备没声明 → 空（服务跳过这台）');
+ok(pj(call('pushItems', mixItems, { token: PT, env: 'sandbox', at: 1 })) === '{"aps":{"alert":{"loc-key":"PUSH_MIXED_MANY","loc-args":["2"]},"sound":"default","thread-id":"cc-board"}}', '老设备滤完的载荷 = 没有 review 时那一批的载荷（数量不含 review）');
+ok(pj([{ kind: 'reply', sid }]) === '{"aps":{"alert":{"loc-key":"PUSH_REPLY_ONE"},"sound":"default","thread-id":"cc-board"},"sid":"fixture-1234"}' && pj([{ kind: 'reply' }, { kind: 'limit' }]) === '{"aps":{"alert":{"loc-key":"PUSH_MIXED_MANY","loc-args":["2"]},"sound":"default","thread-id":"cc-board"}}',
+  '没有 review 的载荷逐字节照旧（键的顺序 aps.alert、sound、thread-id，再 sid）');
+ok(pj([{ kind: 'review', sid }]) === JSON.stringify({ aps: { alert: { 'loc-key': 'PUSH_REVIEW_ONE' }, 'thread-id': 'cc-board' }, sid }), 'review 单件：PUSH_REVIEW_ONE、带 sid、不带 loc-args、不带 sound', pj([{ kind: 'review', sid }]));
+ok(pj([{ kind: 'review', sid: 'bad sid' }]) === JSON.stringify({ aps: { alert: { 'loc-key': 'PUSH_REVIEW_ONE' }, 'thread-id': 'cc-board' } }), 'review 单件、sid 不合规：不带 sid');
+ok(pj([{ kind: 'review', sid }, { kind: 'review' }, { kind: 'review', sid }]) === JSON.stringify({ aps: { alert: { 'loc-key': 'PUSH_REVIEW_MANY', 'loc-args': ['3'] }, 'thread-id': 'cc-board' } }), 'review 多件：PUSH_REVIEW_MANY、数量 3、不带 sid、不带 sound');
+for (const [items, label] of [[[{ kind: 'reply', sid }, { kind: 'review', sid }], '待跟进 + review'], [[{ kind: 'review' }, { kind: 'ask' }], 'review + 等你选'],
+  [[{ kind: 'limit' }, { kind: 'review' }, { kind: 'review' }], '停住了 + 两件 review'], [[{ kind: 'crash' }, { kind: 'review' }], '一起退出 + review'], [[{ kind: 'reply' }, { kind: 'ask' }, { kind: 'review' }], '待跟进 + 等你选 + review']]) {
+  ok(pj(items) === JSON.stringify({ aps: { alert: { 'loc-key': 'PUSH_MIXED_MANY', 'loc-args': [String(items.length)] }, sound: 'default', 'thread-id': 'cc-board' } }), 'review 混着别的（' + label + '）：PUSH_MIXED_MANY、数量含 review、照旧响', pj(items));
+}
+const cleanR = call('pushPayload', [{ kind: 'review', sid, title: privateWords[0], text: privateWords[1], name: privateWords[2] }]);
+ok(!!cleanR && privateWords.every((w) => !JSON.stringify(cleanR).includes(w)), 'review 的锁屏同样只取类别和 sid，标题正文登记名不漏出');
+ok(JSON.stringify(dp({ token: PT, env: 'sandbox', at: 123, review: true })?.push) === JSON.stringify({ token: PT, env: 'sandbox', at: 123, review: true }), '设备表：push.review === true 留下');
+for (const [rv, label] of [['true', '字符串'], [1, '1'], [false, 'false'], [null, 'null'], [{}, '对象']]) {
+  const d = dp({ token: PT, env: 'sandbox', at: 123, review: rv }); ok(JSON.stringify(d?.push) === JSON.stringify({ token: PT, env: 'sandbox', at: 123 }), '设备表：push.review 不是 true（' + label + '）→ 丢掉这个字段、令牌留着', JSON.stringify(d?.push));
+}
+const dbad = dp({ token: 'bad', env: 'sandbox', at: 123, review: true }); ok(dbad?.id === good.id && !('push' in dbad), '设备表：令牌写错、带着 review 也整个 push 丢掉');
 const keys = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const jwt = call('apnsJwt', keys.privateKey, AP.keyId, AP.teamId, 1700000000);
 let head, claims, valid = false, sigLen = 0;
@@ -261,6 +307,31 @@ const dv = { id: 'd1' }, rpDevs = new Map([['d1', dv]]), key = { dev: dv, login:
 ok(R.rpKeyOk(key, rpDevs, 'a@b', 1999) && !R.rpKeyOk(key, rpDevs, 'a@b', 2000) && !R.rpKeyOk(key, rpDevs, 'c@d', 1000) && !R.rpKeyOk(key, new Map(), 'a@b', 1000) && !R.rpKeyOk(key, new Map([['d1', { id: 'd1' }]]), 'a@b', 1000) && !R.rpKeyOk(undefined, rpDevs, 'a@b', 1000),
   'rpKeyOk：没过期、设备还是领钥匙的那一台（撤销后重新配对的同号对象也不算）、登录名一样才认；没有这把钥匙不认');
 ok(R.RP_TTL === 1800000 && R.RP_KEEP === 512, '钥匙 30 分钟过期，最多记 512 把');
+
+console.log('\nB6 上传：server.mjs 的 uploadPath 同一秒、同名、随机又撞上时不覆盖（原文抠出来、钉住时钟和随机数跑）');
+{
+  const src = fs.readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
+  const a = src.indexOf('function uploadPath(name) {'), b = src.indexOf('// 手机照片常是 HEIC');
+  const W = src.match(/fs\.writeFileSync\(dest, buf, \{ mode: 0o600 \}\);/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-b6-upload-'));
+  try {
+    ok(a > 0 && b > a && W, 'uploadPath 和上传写盘那一句都在 server.mjs 里（找不到就是改了名字，这一段要跟着改）');
+    const FixedDate = class extends Date { constructor() { super('2026-11-25T12:00:00Z'); } };
+    const mk = (rand) => vm.runInNewContext(src.slice(a, b) + '\nuploadPath', { Date: FixedDate, fs, path, UPLOAD_DIR: root, p2: (n) => String(n).padStart(2, '0'), crypto: { randomBytes: rand } });
+    const write = (dest, text) => vm.runInNewContext(W[0], { fs, dest, buf: Buffer.from(text) });
+    const seq = [[0, 0], [0, 0], [0, 1]]; let i = 0;
+    const up = mk(() => Buffer.from(seq[Math.min(i++, seq.length - 1)]));
+    const p1 = up('../same.txt'); write(p1, 'first');
+    const p2 = up('/private/same.txt'); write(p2, 'second');
+    ok(p1 !== p2 && fs.readFileSync(p1, 'utf8') === 'first' && fs.readFileSync(p2, 'utf8') === 'second' && /-0001-same\.txt$/.test(p2),
+      '同一秒、清理后同名、第一次随机又撞上：换一个随机重来，两份都在（原来第二次会把第一份覆盖掉）', JSON.stringify([p1, p2]));
+    const stuck = mk(() => Buffer.from([0, 0]));
+    let threw = ''; try { stuck('same.txt'); } catch (e) { threw = String(e.message); }
+    ok(/起不了名字/.test(threw) && fs.readFileSync(p1, 'utf8') === 'first', '随机数一直撞（8 次）：报错不给路径，已有的那份原样不动', threw);
+    const p3 = mk(() => Buffer.from([9, 9]))('');
+    ok(/-0909-file$/.test(p3) && fs.statSync(p3).size === 0 && (fs.statSync(p3).mode & 0o777) === 0o600, '名字为空回退 file；交出去之前已经占住一个 0600 的空文件', p3);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
 
 console.log(`\n结果：${pass} 过，${fail} 没过`);
 process.exit(fail || !pass ? 1 : 0);

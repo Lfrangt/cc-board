@@ -1135,6 +1135,210 @@ async function canvasSeg() {
   }
   if (cvBrowser !== browser) await cvBrowser.close();
 }
+// ── 预览里放大缩小（11/25 作者：「小图的时候我就喜欢放大……按 command 加 plus 就可以直接把它放大」）──
+// 夹具：假主目录 Desktop/zoom/ 放一张小图（120 × 80）、一张大图（4000 × 2000）、一个 Markdown、一个网页；Desktop/zoomg/ 三张图排成图集。/api/preview 把请求换成夹具文件，走真的预览端口。
+// 核：⌘+ / ⌘− / ⌘0 的倍数和百分比提示；不小于默认大小；双击智能放大（小图撑满窗口、大图一比一真像素）再双击回去；拖着挪挪不出边；⌘ 滚轮以指针为中心；
+// 图集格子墙整面变大变小、上下限；放大层里的图能放大、翻页回默认；文本跟着变大；网页上不拦按键；关掉再开回默认；不报错；英文提示。Chromium、WebKit 都跑（ZM_ENGINES 可改）。
+// 单独跑：UI_ONLY=zoom node test/ui-check.mjs；ZM_HTML=<另一份 ui.html> 换页面做红阶段 / 改坏对照。截图放 <OUT>/zoom/
+async function zoomSeg() {
+  console.log('\n[预览 · 放大缩小]');
+  const png = (w, h, rgb) => {
+    const ck = (t, d) => { const l = Buffer.alloc(4), c = Buffer.alloc(4), td = Buffer.concat([Buffer.from(t), d]); l.writeUInt32BE(d.length); c.writeUInt32BE(zlib.crc32(td)); return Buffer.concat([l, td, c]); };
+    const ih = Buffer.alloc(13); ih.writeUInt32BE(w, 0); ih.writeUInt32BE(h, 4); ih[8] = 8; ih[9] = 2;
+    const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w * 3 }, (_, i) => rgb[i % 3]))]);
+    return Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), ck('IHDR', ih), ck('IDAT', zlib.deflateSync(Buffer.concat(Array.from({ length: h }, () => row)))), ck('IEND', Buffer.alloc(0))]);
+  };
+  const Z = path.join(FX.home, 'Desktop', 'zoom'), ZG = path.join(FX.home, 'Desktop', 'zoomg'), SH = path.join(OUT, 'zoom');
+  for (const d of [Z, ZG, SH]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(Z, 'small.png'), png(120, 80, [40, 160, 200]));
+  fs.writeFileSync(path.join(Z, 'big.png'), png(4000, 2000, [200, 120, 40]));
+  fs.writeFileSync(path.join(Z, 'note.md'), '# 标题\n\n一段正文，用来看字跟着变大。\n');
+  fs.writeFileSync(path.join(Z, 'page.html'), '<!doctype html><meta charset="utf-8"><p>page</p>');
+  for (const [n, c] of [['01-a.png', [90, 90, 220]], ['02-b.png', [220, 90, 90]], ['03-c.png', [90, 200, 90]]]) fs.writeFileSync(path.join(ZG, n), png(390, 844, c));
+  const html = process.env.ZM_HTML ? fs.readFileSync(process.env.ZM_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k')) : null;
+  const engines = (process.env.ZM_ENGINES || (process.env.UI_ONLY === 'zoom' ? 'chromium,webkit' : 'chromium')).split(',').map((x) => x.trim()).filter(Boolean);   // 整套只跑 Chromium：公开 CI 只装了它；UI_ONLY=zoom 才默认带 WebKit
+  for (const eng of engines) {
+    const pw = await import('playwright-core');
+    const br = eng === 'chromium' ? browser : await pw[eng].launch({ headless: true });
+    try {
+      for (const lang of eng === 'chromium' ? ['zh', 'en'] : ['zh']) {
+        const tag = '放大缩小（' + eng + ' · ' + lang + '）：';
+        const ctx = await br.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: 'dark', deviceScaleFactor: 2 });
+        await ctx.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('wall')); localStorage.setItem('ccb_strip', 'off'); } catch (e) {} });
+        const page = await ctx.newPage(), errs = [];
+        if (html) await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+        let target = '';
+        await page.route('**/api/preview', (route) => route.continue({ postData: JSON.stringify({ path: target }) }));
+        page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+        try {
+          await page.goto(FX.url + '&lang=' + lang); await page.waitForSelector('.card'); await sleep(1500);
+          await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<a id="tZoom" class="file" data-path="~/Desktop/zoom/x">x</a>'));
+          const openIt = async (p, kind) => {
+            target = p; await page.evaluate(() => { const d = document.querySelector('#preview'); if (d.open) d.close(); }); await sleep(150);      // close 事件是异步发的（会 clearPreview 作废在途的请求），等它过去再点
+            await page.evaluate(() => document.querySelector('#tZoom').click());
+            await page.waitForFunction((k) => { const b = document.querySelector('#pBody'); if (b.dataset.kind !== k) return false;
+              if (k === 'image') { const im = document.querySelector('#pImg'); return im.complete && im.naturalWidth > 0; }
+              if (k === 'gallery') return [...document.querySelectorAll('#pGal .ggrid img')].every((im) => im.complete && im.naturalWidth > 0);
+              return true; }, kind, { timeout: 8000 }).catch(() => {});
+            await sleep(250);
+          };
+          const st = (sel) => ev(page, (s) => { const im = document.querySelector(s), z = document.querySelector('#pZoom'); if (!im) return { none: true };
+            const r = im.getBoundingClientRect(), p = im.parentNode.getBoundingClientRect(), m = /scale\(([\d.]+)\)/.exec(im.style.transform || '');
+            return { s: m ? +m[1] : 1, zm: im.classList.contains('zm'), tf: im.style.transform, r: { l: r.left, t: r.top, w: r.width, h: r.height, rr: r.right, b: r.bottom }, p: { l: p.left, t: p.top, w: p.width, h: p.height, rr: p.right, b: p.bottom },
+              tip: z ? { hidden: z.hidden, text: z.textContent } : null, title: im.title }; }, sel);
+          const key = async (k) => { await page.keyboard.press(k); await sleep(200); };
+          const near = (a, b, e = 0.02) => Math.abs(a - b) <= e;
+          // 关掉 transform 的过渡再量：不然量到的是动画中途的框
+          const still = () => page.addStyleTag({ content: '#pImg.zm,.lstage img.zm{transition:none!important}' });
+          await still();
+
+          // ① 单张小图：⌘+ 两下、⌘− 一下、⌘0；默认大小再 ⌘− 不缩
+          await openIt(path.join(Z, 'small.png'), 'image');
+          let s0 = await st('#pImg');
+          ok(!s0.none && !s0.zm && near(s0.r.w, 120, 1) && near(s0.r.h, 80, 1), tag + '小图默认按原大显示、没放大', JSON.stringify(s0));
+          await key('Meta+Equal'); let s = await st('#pImg');
+          ok(near(s.s, 1.25) && s.zm && s.tip && !s.tip.hidden && s.tip?.text === '125%', tag + '⌘+ 一下：1.25 倍，底部闪「125%」', JSON.stringify(s));
+          await key('Meta+Equal'); s = await st('#pImg');
+          ok(near(s.s, 1.5625) && s.tip?.text === '156%' && near(s.r.w, 120 * 1.5625, 1.5), tag + '⌘+ 再一下：1.5625 倍，框真的变大了', JSON.stringify(s));
+          await key('Meta+Minus'); s = await st('#pImg');
+          ok(near(s.s, 1.25) && s.tip?.text === '125%', tag + '⌘− 一下：回到 1.25 倍', JSON.stringify(s));
+          await key('Meta+Digit0'); s = await st('#pImg');
+          ok(!s.zm && s.tf === '' && near(s.r.w, 120, 1) && s.tip?.text === '100%', tag + '⌘0：回到默认大小', JSON.stringify(s));
+          await key('Meta+Minus'); s = await st('#pImg');
+          ok(!s.zm && near(s.r.w, 120, 1), tag + '默认大小再 ⌘−：不缩到比默认还小', JSON.stringify(s));
+          await sleep(1000); s = await st('#pImg');
+          ok(s.tip?.hidden, tag + '百分比提示过一会儿自己收起', JSON.stringify(s.tip));
+          // ② 双击小图：放到刚好撑满窗口（留 16 px 边），再双击回默认
+          await page.dblclick('#pImg'); await sleep(150); s = await st('#pImg');
+          const fillOk = near(s.r.h, s.p.h - 32, 2) || near(s.r.w, s.p.w - 32, 2);
+          ok(s.zm && fillOk && s.r.w <= s.p.w - 30 && s.r.h <= s.p.h - 30, tag + '双击小图：放到刚好撑满窗口', JSON.stringify(s));
+          await page.screenshot({ path: path.join(SH, eng + '-' + lang + '-01-小图双击撑满.png') });
+          await page.dblclick('#pImg'); await sleep(150); s = await st('#pImg');
+          ok(!s.zm && near(s.r.w, 120, 1), tag + '再双击：回默认', JSON.stringify(s));
+          ok(s.title === (lang === 'zh' ? '⌘+ 放大 · ⌘− 缩小 · ⌘0 复原 · 双击智能放大 · 放大后拖着挪' : '⌘+ zoom in · ⌘− zoom out · ⌘0 reset · double-click to smart zoom · drag to pan when zoomed'), tag + '图上悬停有怎么放大的提示', s.title);
+
+          // ③ 大图：默认缩到窗口里；双击放到一比一真像素（deviceScaleFactor 2 → 4000 px 的图是 2000 CSS px 宽）
+          await openIt(path.join(Z, 'big.png'), 'image');
+          s0 = await st('#pImg');
+          ok(!s0.zm && s0.r.w <= s0.p.w - 31 && s0.r.h <= s0.p.h - 31, tag + '大图默认缩进窗口里', JSON.stringify(s0));
+          await page.dblclick('#pImg'); await sleep(150); s = await st('#pImg');
+          ok(s.zm && near(s.r.w, 2000, 2), tag + '双击大图：一比一真像素（2000 CSS px 宽）', JSON.stringify(s));
+          // 拖着挪：往左拖 5000 px，图的右边停在窗口右边，不会被拖出去
+          const mid = { x: s.p.l + s.p.w / 2, y: s.p.t + s.p.h / 2 };
+          await page.mouse.move(mid.x, mid.y); await page.mouse.down(); await page.mouse.move(mid.x - 300, mid.y, { steps: 4 }); await page.mouse.move(mid.x - 5000, mid.y - 5000, { steps: 4 }); await page.mouse.up(); await sleep(100);
+          s = await st('#pImg');
+          ok(near(s.r.rr, s.p.rr, 1.5) && near(s.r.b, s.p.b, 1.5), tag + '放大后拖着挪：挪到头时图的右下角贴着窗口，不会拖出去', JSON.stringify(s));
+          // 松手的那一下丢了（buttons 变 0 的 pointermove）：拖动收尾，不再跟着鼠标
+          await page.mouse.move(mid.x, mid.y); await page.mouse.down(); await page.mouse.move(mid.x + 40, mid.y, { steps: 2 });
+          const endDrag = await ev(page, () => { const im = document.querySelector('#pImg'), was = im.classList.contains('zdrag');
+            im.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, buttons: 0, clientX: 10, clientY: 10, pointerType: 'mouse' })); return { was, now: im.classList.contains('zdrag') }; });
+          await page.mouse.up();
+          ok(endDrag.was === true && endDrag.now === false, tag + '拖着的时候收到「没按着键」的移动：拖动收尾', JSON.stringify(endDrag));
+          // 图放大到 8 倍也不盖出预览：顶栏 ×、「在访达中显示」中心点上还是它们自己
+          for (let i = 0; i < 12; i++) await page.keyboard.press('Meta+Equal');
+          await sleep(200);
+          const hit = await ev(page, () => ['#preview [data-close]', '#pFinder', '#pReload'].map((q) => { const b = document.querySelector(q), r = b.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && (e === b || b.contains(e)); }));
+          same(hit, [true, true, true], tag + '图放大到 8 倍：顶栏的 ×、「在访达中显示」、「重新载入」还点得到（没被图盖住）');
+          await page.screenshot({ path: path.join(SH, eng + '-' + lang + '-02-大图一比一拖到右下.png') });
+          await key('Meta+Digit0');
+          // ⌘ 滚轮以指针为中心：指针下那一点缩放前后在图上的位置不变
+          s0 = await st('#pImg'); const at = { x: s0.r.l + s0.r.w * 0.8, y: s0.r.t + s0.r.h * 0.3 };
+          const fx = (q) => [(at.x - q.r.l) / q.r.w, (at.y - q.r.t) / q.r.h];
+          await page.mouse.move(at.x, at.y); await page.keyboard.down('Meta'); await page.mouse.wheel(0, -100); await page.keyboard.up('Meta'); await sleep(250);
+          s = await st('#pImg'); const [a0, b0] = fx(s0), [a1, b1] = fx(s);
+          ok(s.zm && s.s > 1.5 && near(a0, a1, 0.01) && near(b0, b1, 0.01), tag + '⌘ 滚轮：以指针为中心放大，指针下那一点不跑', JSON.stringify({ s: s.s, before: [a0, b0], after: [a1, b1] }));
+          // 放大后普通滚轮挪图
+          // 刚才以右边那一点放大，图已经往左挪了不少；往右滑（deltaX < 0）离边远，不会碰到挪不出边的限制
+          // 无头 Chromium 在 2 倍屏上把 wheel(120) 发成 deltaX 60（11/25 实测），所以按页面真收到的 deltaX 比
+          await page.evaluate(() => { window.__zdx = 0; addEventListener('wheel', (e) => { window.__zdx += e.deltaX; }, { capture: true }); });
+          const x1 = s.r.l; await page.mouse.wheel(-120, 0); await sleep(100); s = await st('#pImg'); const dx = await page.evaluate(() => window.__zdx);
+          ok(dx < 0 && near(s.r.l, x1 - dx, 1.5), tag + '放大后两指滑：图跟着挪', JSON.stringify({ before: x1, after: s.r.l, dx }));
+          // ⌘+ 一直按：最多 8 倍
+          for (let i = 0; i < 14; i++) await page.keyboard.press('Meta+Equal');
+          await sleep(200); s = await st('#pImg');
+          ok(near(s.s, 8, 0.001) && s.tip?.text === '800%', tag + '一直 ⌘+：停在 8 倍', JSON.stringify(s.s));
+          // 关掉再开：回默认
+          await openIt(path.join(Z, 'small.png'), 'image'); s = await st('#pImg');
+          ok(!s.zm && s.tf === '' && near(s.r.w, 120, 1), tag + '换一个文件：回到默认大小', JSON.stringify(s));
+
+          // ④ 图集格子墙：整面墙一起变大变小，有上下限；放大层里的图能放大，翻页回默认；Esc 回格子墙
+          await openIt(ZG + '/', 'gallery');
+          const gh = () => ev(page, () => { const g = document.querySelector('#pGal .ggrid'), ims = [...g.querySelectorAll('.gt img')]; return { h: ims.map((x) => x.offsetHeight), room: g.clientHeight, gz: g.style.getPropertyValue('--gz'), tip: (document.querySelector('#pZoom') || {}).textContent }; });
+          const g0 = await gh();
+          await key('Meta+Equal'); let g = await gh();
+          ok(g0.h.length === 3 && g.h.every((h) => near(h / g0.h[0], 1.25, 0.02)) && g.tip === '125%', tag + '图集格子墙 ⌘+：每格一起变成 1.25 倍高', JSON.stringify([g0, g]));
+          await page.screenshot({ path: path.join(SH, eng + '-' + lang + '-03-图集放大一档.png') });
+          for (let i = 0; i < 10; i++) await page.keyboard.press('Meta+Equal');
+          await sleep(200); g = await gh();
+          ok(g.h[0] <= g.room - 69 && g.h[0] > g0.h[0] * 1.5, tag + '格子墙一直 ⌘+：停在一格刚好放进窗口', JSON.stringify(g));
+          for (let i = 0; i < 12; i++) await page.keyboard.press('Meta+Minus');
+          await sleep(200); g = await gh();
+          ok(near(g.h[0] / g0.h[0], 0.5, 0.02) && g.tip === '50%', tag + '格子墙一直 ⌘−：最小到一半', JSON.stringify(g));
+          await key('Meta+Digit0'); g = await gh();
+          ok(g.h[0] === g0.h[0], tag + '格子墙 ⌘0：回到原来的格子大小', JSON.stringify(g));
+          await page.click('#pGal [data-gi="0"]'); await sleep(250);
+          await key('Meta+Equal'); s = await st('#pGal .lstage img');
+          ok(s.zm && near(s.s, 1.25) && s.tip?.text === '125%', tag + '图集放大层里 ⌘+：放大的是那一张图', JSON.stringify(s));
+          for (let i = 0; i < 12; i++) await page.keyboard.press('Meta+Equal');
+          await sleep(200);
+          const lbHit = await ev(page, () => ['#pGal [data-gback]', '#pGal [data-gstep="1"]', '#preview [data-close]'].map((q) => { const b = document.querySelector(q), r = b.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!e && (e === b || b.contains(e)); }));
+          same(lbHit, [true, true, true], tag + '放大层里图放到 8 倍：「图集」「下一张」和 × 还点得到');
+          await key('Meta+Digit0');
+          g = await gh(); ok(g.h[0] === g0.h[0], tag + '放大层里 ⌘+ 不动底下的格子墙', JSON.stringify(g));
+          await key('ArrowRight'); s = await st('#pGal .lstage img');
+          ok(!s.none && !s.zm && s.tf === '', tag + '→ 翻到下一张：从默认大小开始', JSON.stringify(s));
+          await key('Escape'); const back = await ev(page, () => ({ lb: !!document.querySelector('#pGal .lb'), open: document.querySelector('#preview').open }));
+          ok(!back.lb && back.open, tag + '放大后 Esc 照旧先回格子墙', JSON.stringify(back));
+
+          // ⑤ 文本 / Markdown：字一起变大
+          await openIt(path.join(Z, 'note.md'), 'markdown');
+          const tzOf = () => ev(page, () => { const t = document.querySelector('#pText'), c = t.firstElementChild; return { z: t.style.zoom, fs: c ? c.getBoundingClientRect().height : 0, tag: c ? c.tagName : '' }; });
+          const t0 = await tzOf(); await key('Meta+Equal'); let t = await tzOf();
+          ok(t.z === '1.25' && t0.fs > 0 && t.fs > t0.fs * 1.15, tag + 'Markdown ⌘+：字变大', JSON.stringify([t0, t]));
+          await key('Meta+Digit0'); t = await tzOf();
+          ok(t.z === '' && near(t.fs, t0.fs, 0.5), tag + 'Markdown ⌘0：回默认', JSON.stringify(t));
+
+          // ⑥ 网页预览：按键不拦（预览页是另一个源，缩放不归这里），图片预览上拦
+          const prevented = () => ev(page, () => { const e = new KeyboardEvent('keydown', { key: '=', code: 'Equal', metaKey: true, cancelable: true, bubbles: true }); document.body.dispatchEvent(e); return e.defaultPrevented; });
+          await openIt(path.join(Z, 'page.html'), 'page');
+          ok((await prevented()) === false, tag + '网页预览上 ⌘+ 不拦', '');
+          await openIt(path.join(Z, 'small.png'), 'image');
+          ok((await prevented()) === true, tag + '图片预览上 ⌘+ 拦下（不交给别的快捷键）', '');
+          // 预览没开时 ⌘+ 不拦
+          await page.evaluate(() => document.querySelector('#preview').close());
+          ok((await prevented()) === false, tag + '预览没开时 ⌘+ 不拦', '');
+          const gest = () => ev(page, () => { const e = new Event('gesturestart', { bubbles: true, cancelable: true }); document.querySelector('#pImg').dispatchEvent(e); return e.defaultPrevented; });
+          await openIt(path.join(Z, 'small.png'), 'image');
+          ok((await gest()) === true, tag + '桌面上捏合归预览管（gesturestart 被拦下）', '');
+          ok(errs.length === 0, tag + '页面没有报错', errs.join(' | '));
+        } finally { await ctx.close(); }
+      }
+      // 触屏（手机远程用的是同一份 ui.html）：捏合、双击、拖动都留给系统，不拦；⌘ 快捷键照常（外接键盘）
+      if (eng === 'chromium') {
+        const tag = '放大缩小（' + eng + ' · 触屏）：';
+        const ctx = await br.newContext({ viewport: { width: 1024, height: 768 }, colorScheme: 'dark', deviceScaleFactor: 2, hasTouch: true, isMobile: true });
+        await ctx.addInitScript(() => { try { localStorage.setItem('ccb_mode', JSON.stringify('wall')); localStorage.setItem('ccb_strip', 'off'); } catch (e) {} });
+        const page = await ctx.newPage(), errs = [];
+        if (html) await page.route((u) => u.pathname === '/', async (r) => r.fulfill({ response: await r.fetch(), body: html, contentType: 'text/html; charset=utf-8' }));
+        await page.route('**/api/preview', (route) => route.continue({ postData: JSON.stringify({ path: path.join(Z, 'small.png') }) }));
+        page.on('pageerror', (e) => errs.push(String(e)));
+        try {
+          await page.goto(FX.url + '&lang=zh'); await page.waitForSelector('.card'); await sleep(1500);
+          await page.evaluate(() => { document.body.insertAdjacentHTML('beforeend', '<a id="tZoom" class="file" data-path="~/Desktop/zoom/x">x</a>'); document.querySelector('#tZoom').click(); });
+          await page.waitForFunction(() => { const im = document.querySelector('#pImg'); return document.querySelector('#pBody').dataset.kind === 'image' && im.complete && im.naturalWidth > 0; }, null, { timeout: 8000 }).catch(() => {});
+          const t = await ev(page, () => { const im = document.querySelector('#pImg'), g = new Event('gesturestart', { bubbles: true, cancelable: true }); im.dispatchEvent(g);
+            im.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: 500, clientY: 400 }));
+            return { coarse: matchMedia('(pointer: coarse)').matches, gesture: g.defaultPrevented, zm: im.classList.contains('zm') }; });
+          ok(t.coarse === true && t.gesture === false && t.zm === false, tag + '捏合不拦（留给系统）、双击不放大', JSON.stringify(t));
+          await page.keyboard.press('Meta+Equal'); await sleep(200);
+          const k = await ev(page, () => document.querySelector('#pImg').style.transform);
+          ok(/scale\(1\.25\)/.test(k), tag + '外接键盘 ⌘+ 照常放大', k);
+          ok(errs.length === 0, tag + '页面没有报错', errs.join(' | '));
+        } finally { await ctx.close(); }
+      }
+    } finally { if (br !== browser) await br.close(); }
+  }
+}
 // ── 图集 · 视频在格子里播（11/17 作者：「我想直接播放……不用把它放到全屏」「甚至你可以加入这个同时播放」，win-35）──
 // 夹具：假主目录 Desktop/galv/ 放三段没有声音的 VP8（a、b 6 秒，c 4 秒，test/clips.mjs）；Desktop/galone/ 一段视频 + 一张图。/api/preview 把夹具路径换成真文件，走真的预览端口。
 // 核：点格子就地播 / 停、不进放大层；一次只播一个；⤢ 才放大且格子里的停下；「同时播放」全播、只有一格出声、出声的跟着鼠标走、被拉开的会对回去；
@@ -2769,6 +2973,7 @@ try {
   let ctx, page, errs;                                   // 架构那一段也用这三个；UI_ONLY=org 时它前面的整段不跑，所以提到这里声明
   if (process.env.UI_ONLY !== 'org') {
   if (process.env.UI_ONLY === 'dock') { await dockCheck(); console.log('\n（UI_ONLY=dock：只跑了「弹层里回话」这一段，不是整套）'); throw ONLY_DONE; }
+  if (process.env.UI_ONLY === 'zoom') { await zoomSeg(); console.log('\n（UI_ONLY=zoom：只跑了「预览 · 放大缩小」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'galv') { await galVideoCheck(); console.log('\n（UI_ONLY=galv：只跑了「图集 · 视频」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'canvas') { await canvasSeg(); console.log('\n（UI_ONLY=canvas：只跑了「画布」这一段，不是整套）'); throw ONLY_DONE; }
   // ── 性能（11/17 win-1f）：作者「窗口多了之后有点卡卡的……新窗口交付完，它弹到上面的时候，动画不是很流畅」。
@@ -3508,6 +3713,7 @@ try {
     ok(errs.length === 0, '图集（' + lang + '）：页面没有报错', errs.join(' | ')); await ctx.close();
   }
   console.log('\n[图集 · 视频]'); await galVideoCheck();
+  await zoomSeg();
   await canvasSeg();       // 画布（11/24）：整套里只跑 Chromium；WebKit 在 UI_ONLY=canvas 里跑
 
   // 放大看：⌘O、双击封面；再按 ⌘O / 双击标题栏收回；双击正文里的字照旧选词（11/13 作者）

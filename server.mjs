@@ -5,6 +5,7 @@
  *          依赖 ./org.mjs 定「哪个窗口归哪个窗口管」；依赖 /usr/sbin/lsof 和 /bin/ps 认出是哪个会话在调 /api/new（测试用 CCBOARD_LSOF / CCBOARD_PS 换掉）；config.json 的 org.chief 指向的 JSON 文件（只读，点名总管）。
  *          依赖 node:http2 发 APNs；remote.mjs 生成载荷和 JWT；生产在前台推送前异步读 HIDIdleTime，试验场只读空闲夹具文件；首次发送时异步读 cc-board-apns 钥匙串项，试验场改读显式密钥文件。
  * [OUTPUT]: APNs 设备登记与通知合批推送；前台空闲两分钟时额外放行手机推送，Mac 横幅门不变；密钥只在首次发送时异步读，试验场只连显式假地址。
+ *           【待审阅】推送（11/25 手表）：只发给登记时带 kinds: ["review"] 的设备，按 config.json 的 reviewBatchSec（默认 30 秒）单独合批，只含 review 的不带 sound；Mac 横幅和 alert / notify 日志不含它，另记 review 行。
  *           对外提供 127.0.0.1:4747 上的页面 /、/health 和 /api/*（state（带 peek=1 只看不取提示；org = 架构视图的上下级）、turns、diff（只读这一轮逐笔补丁）、send、new、archive、unarchive、delete、ack、answer、open、preview…）；
  *           另起 preview.mjs 的只读预览端口（默认 4747 + 1000），/api/preview 给正文里的路径发预览网址和类型（网页、PDF、图、音视频、文本；多半是图 / 视频的文件夹、或 body.paths 里的一批图回 gallery；第一层有 2 个以上网页的文件夹、或 body.paths + canvas: true 的一批网页回 canvas）
  * [POS]: 总控台唯一的服务进程，由 app/main.swift 启动和重启，ui.html 只通过 /api 和它说话。
@@ -59,7 +60,7 @@ import { routeNew, briefNew } from './route.mjs';                               
 import { parseAccounts, parseFallback, pickDefault, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
 import { startPreview, kindOf, mimeOf, readText, serveFile, listGallery, canon, isTop, homeIds, idOf } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 import { buildOrg } from './org.mjs';
-import { pathsIn, RP_TTL, RP_KEEP, rpKeyOk, hiddenPath, parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
+import { pathsIn, RP_TTL, RP_KEEP, rpKeyOk, hiddenPath, parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushKinds, pushItems, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
 import { parseUpdateConf, createUpdater } from './update.mjs';               // 公开安装包检查新版本、自动下载（只连 github.com，config 的 updateCheck / autoUpdate）
 import { qrSvg } from './qr.mjs';                                               // 配对链接画成二维码（零依赖）
 import { parseAutoConfig, autoArgs, autoInput, parseAuto, hardStop, autoMessage, isAutoPrompt, autoBlock, quotaHold, KW_TEXT, isKeepWarm, parseKeepWarm, keepWarmDue, kwPaneGate } from './autopilot.mjs';   // 自动续跑：哪些窗口能替他把灰字建议发出去、先问小模型                                         // 架构视图：哪个窗口归哪个窗口管（规则全在那里，这里只备料）
@@ -76,6 +77,7 @@ const TOKEN_FILE = path.join(DATA, '.token');
 const ARCHIVE_FILE = path.join(DATA, 'archive.json');
 const DELETED_DIR = path.join(DATA, 'deleted');
 const UPLOAD_DIR = path.join(DATA, 'uploads');          // 粘贴 / 拖进来的附件存这里，30 天后清
+const UPLOAD_LOG_EXT = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.gif', '.webp', '.tiff', '.tif', '.bmp', '.mov', '.mp4', '.m4v', '.pdf', '.txt', '.md', '.csv', '.json', '.zip', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.key', '.pages', '.numbers', '.m4a', '.mp3', '.wav']);   // 远程上传的日志只记这些扩展名，别的记 other
 const LIMITS_DIR = path.join(DATA, 'limits');           // statusline-tap.mjs 在各个 Claude 会话里取走的额度，一个会话一个文件
 const LIMITS_MS = Number(process.env.CCBOARD_LIMITS_MS) || 30000;   // 额度半分钟读一遍：它按「周」算，不用比这更勤
 const GRACE = 8000;                      // 归档后这么久才真的停进程，期间可以撤销
@@ -221,9 +223,18 @@ function parseGeminiLedgers(v) {
   if (bad) console.log(`config ${CONFIG_FILE}：geminiLedgers 丢掉 ${bad} 条（要 .tsv / .jsonl 的绝对路径或 ~/ 开头，最多 ${GEMINI_LEDGERS_MAX} 条）`);
   return list;
 }
+// reviewBatchSec 键（11/25 手表，总管 khalil-4c 定）：【待审阅】推送的合批窗口（秒）。第一件站稳以后等这么久，期间站稳的几件合成一条推送。
+// 要是 1–600 的整数；写错只关这一项（用默认 30 秒）、日志一行，不连累整份（同 gemini / limitsPin）；不写 = 默认
+const REVIEW_BATCH_DEF = 30;
+function parseReviewBatch(v) {
+  if (v === undefined) return REVIEW_BATCH_DEF;
+  if (Number.isInteger(v) && v >= 1 && v <= 600) return v;
+  console.log(`config ${CONFIG_FILE}：reviewBatchSec 不用（要是 1–600 的整数秒），【待审阅】推送照默认 ${REVIEW_BATCH_DEF} 秒合批`);
+  return REVIEW_BATCH_DEF;
+}
 let CONFIG_OK = false;                  // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], limitsPin: null, accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf() };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], limitsPin: null, accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf(), reviewBatchSec: REVIEW_BATCH_DEF };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
@@ -248,7 +259,7 @@ const CONFIG = (() => {
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
     console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，limitsPin=${lp.pin ? lp.pin.length : '默认'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns), limitsPin: lp.pin };   // remote / apns / limitsPin 写错各自关闭，不抛
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns), limitsPin: lp.pin, reviewBatchSec: parseReviewBatch(c.reviewBatchSec) };   // remote / apns / limitsPin / reviewBatchSec 写错各自关闭（回默认），不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -400,27 +411,42 @@ async function readHidIdleMs() {
     return null; // 空闲未知时不额外放行
   }
 }
+// 按设备算载荷（11/25 待审阅）：没声明 review 的设备（老 App 没有 PUSH_REVIEW_* 的字）滤掉 review，滤完是空的就不发这台。
+// 同一份载荷的设备归一组，每组记一行 sent / dry。一批里没有 review 时每台都是同一份、只有一组，载荷和日志都和之前一样
+function pushGroups(items) {
+  const groups = new Map();
+  for (const d of devices.values()) {
+    if (!d.push) continue;
+    const mine = pushItems(items, d.push); if (!mine.length) continue;
+    const payload = pushPayload(mine), j = JSON.stringify(payload);
+    if (!groups.has(j)) groups.set(j, { payload, key: payload.aps.alert['loc-key'], targets: [] });
+    groups.get(j).targets.push({ d, push: d.push });
+  }
+  return [...groups.values()];
+}
 async function sendPush(items) {
   if (!pushReady()) return;
-  const payload = pushPayload(items), key = payload.aps.alert['loc-key'];
-  if (SANDBOX && !process.env.CCBOARD_APNS_URL) { pushLog('dry ' + key); return; }
+  if (SANDBOX && !process.env.CCBOARD_APNS_URL) { for (const g of pushGroups(items)) pushLog('dry ' + g.key); return; }
+  if (!pushGroups(items).length) return;                                       // 只有 review、没有一台声明了 review：不读密钥
   const privateKey = await pushKey(); if (!privateKey) return;
-  const targets = [...devices.values()].filter((d) => d.push).map((d) => ({ d, push: d.push }));
-  if (!targets.length) return;
+  const groups = pushGroups(items);                                            // 读密钥的这一会儿设备表可能变了：按现在的重分
+  if (!groups.length) return;
   if (!apnsJWT || Date.now() - apnsJWTAt >= APNS_JWT_MS) { apnsJWTAt = Date.now(); apnsJWT = apnsJwt(privateKey, APNS.keyId, APNS.teamId, Math.floor(apnsJWTAt / 1000)); }
   const jwt = apnsJWT;
-  const result = await Promise.all(targets.map(async ({ d, push }) => {
-    if (devices.get(d.id) !== d || d.push !== push) return false;
-    const { token, env } = push;
-    const host = (SANDBOX && process.env.CCBOARD_APNS_URL) || (env === 'production' ? 'https://api.push.apple.com' : 'https://api.sandbox.push.apple.com');
-    const r = await apnsRequest(host, token, jwt, payload);
-    if (r.verdict === 'drop' && devices.get(d.id) === d && d.push === push) {
-      delete d.push; saveDevices();
-      pushLog(`drop ${d.id} ${token.slice(0, 8)} ${r.status} ${r.reason}`);
-    } else if (r.verdict === 'err') pushLog(`err ${d.id} ${r.status} ${r.reason}`);
-    return r.verdict === 'ok';
+  await Promise.all(groups.map(async ({ payload, key, targets }) => {
+    const result = await Promise.all(targets.map(async ({ d, push }) => {
+      if (devices.get(d.id) !== d || d.push !== push) return false;
+      const { token, env } = push;
+      const host = (SANDBOX && process.env.CCBOARD_APNS_URL) || (env === 'production' ? 'https://api.push.apple.com' : 'https://api.sandbox.push.apple.com');
+      const r = await apnsRequest(host, token, jwt, payload);
+      if (r.verdict === 'drop' && devices.get(d.id) === d && d.push === push) {
+        delete d.push; saveDevices();
+        pushLog(`drop ${d.id} ${token.slice(0, 8)} ${r.status} ${r.reason}`);
+      } else if (r.verdict === 'err') pushLog(`err ${d.id} ${r.status} ${r.reason}`);
+      return r.verdict === 'ok';
+    }));
+    pushLog(`sent ${result.filter(Boolean).length}/${targets.length} ${key}`);
   }));
-  pushLog(`sent ${result.filter(Boolean).length}/${targets.length} ${key}`);
 }
 
 function run(cmd, args, { input, timeout = 15000, env, maxBuffer = 8 << 20 } = {}) {
@@ -1611,12 +1637,12 @@ function watchSnooze() {          // 每轮扫描后：该醒的从表里拿掉�
 const withSnooze = (o) => { const z = snoozes[o.sid]; return z && !snoozeWake(o, z) ? { ...o, snooze: { until: z.until, at: z.at } } : o; };   // 给界面：推迟中的会话多一个 snooze
 
 // 系统通知：你不在总控台前面时才发；几个窗口一起停（比如额度用完）合成一条。
-// 发三类：停住了（alert）、【待跟进】（reply：交付了、要你本人定）、停下来等你选（ask）。门：
+// 发三类：停住了（alert）、【待跟进】（reply：交付了、要你本人定）、停下来等你选（ask）。11/25 加第四类【待审阅】（review：做好了，等你看），只推手机 / 手表、不弹 Mac 横幅，见 queueReview。门：
 // 没见过的会话当下的几件只记账不发（服务刚起的第一轮全是；后来才上墙的、接回来的也是）；同一件事只发一次（每类记一个 key）；
 // 站稳才发（停住了 4 秒、没做完 15 秒、等你选 4 秒、待跟进 5 秒：这期间它又动了——自动续跑、后台通知把它叫醒——就不发）；
 // 推迟中（先放着、没到点、没被叫醒）的不发，推迟期间出现的也不补发；被打断不发。
 const WHY = { limit: '额度用完了', auth: '登录过期了', flagged: '被安全检查拦了', error: '报错了', interrupt: '被打断了', unfinished: '没做完就停了', stall: '可能卡住了', gone: '进程退出了', crash: '一起退出了', reply: '要你回', ask: '等你选' };
-const alerted = new Map();     // sid → { alert, reply, ask }：每类已经提醒过（或算作已知道）的那一件的 key
+const alerted = new Map();     // sid → { alert, reply, ask, review }：每类已经提醒过（或算作已知道）的那一件的 key（review 不进 notified.json）
 const alertHold = new Map();   // sid + ' ' + 类 → {key, since}：站稳才算，免得状态闪一下就打扰你
 const alertGone = new Map();   // sid → 第一次不在墙上的时间：一两轮读不到会话登记（文件正在写）不算没见过，60 秒后才忘
 const askEp = new Map();       // sid → 这一段「等你选」的 key：一直停在选择框上就是同一件，离开再进来才算新的一件
@@ -1639,6 +1665,24 @@ function saveNotified() {
   try { const tmp = NOTIFIED_FILE + '.tmp'; fs.writeFileSync(tmp, j); fs.renameSync(tmp, NOTIFIED_FILE); replySaved = j; } catch (e) { console.log(`notified ${new Date().toISOString()} 写不进 notified.json：${e.message}`); replySaved = j; }
 }
 let alertQueue = [], alertTimer = null, uiFocusAt = 0;
+// 【待审阅】（做好了，等你看）只推手机 / 手表（11/25 手表；规则是总管 khalil-4c 定的）：单独一条队列，第一件进来后等 config.json 的 reviewBatchSec 秒（默认 30）合成一条推送。
+// 这期间待跟进 / 等你选 / 停住了那一批（2.5 秒）先发了，就把排着的 review 一起带上（一条推送、响），review 的计时器清掉。
+// Mac 横幅和 alert / notify 两行日志不含 review（他人在 Mac 前，看板上看得到）；每次推 review 另记一行 review <时间> <push|ui> n=<件数> <会话号前八位,…>[ +alert]。
+let reviewQueue = [], reviewTimer = null;
+function queueReview(sid) {
+  if (!pushReady()) return;                                                      // 没有能推的设备（没配 apns、只读、一个令牌都没有）：不排队、不记日志
+  reviewQueue.push({ kind: 'review', sid });
+  if (!reviewTimer) reviewTimer = setTimeout(flushReviews, CONFIG.reviewBatchSec * 1000);
+}
+function takeReviews() { clearTimeout(reviewTimer); reviewTimer = null; const r = reviewQueue; reviewQueue = []; return r; }
+const reviewLog = (how, r, also = '') => console.log(`review ${new Date().toISOString()} ${how} n=${r.length} ${r.map((x) => x.sid ? x.sid.slice(0, 8) : '-').join(',')}${also ? ' +' + also : ''}`);
+async function flushReviews() {                   // 只有 review 的一批：不弹 Mac 横幅；放行门和 flushAlerts 的推送一样（没看着总控台 6 秒，或看着但 Mac 空闲 ≥ 2 分钟）
+  const r = takeReviews(); if (!r.length || !pushReady()) return;
+  let how = Date.now() - uiFocusAt < 6000 ? 'ui' : 'push';
+  if (how === 'ui' && pushWould(Date.now() - uiFocusAt, await readHidIdleMs()) === 'sent') how = 'push';
+  reviewLog(how, r);
+  if (how === 'push') void sendPush(r);
+}
 function queueAlert(title, kind, sid = '', text = '') {
   alertQueue.push({ title: String(title || '').replace(/\s+/g, ' ').slice(0, 24), kind, sid, text: String(text || '').replace(/\s+/g, ' ').slice(0, 80) });
   if (!alertTimer) alertTimer = setTimeout(flushAlerts, 2500);
@@ -1654,12 +1698,16 @@ function needsOf(s) {          // 这个会话此刻要你处理的事，每类�
   if (s.alert) out.push({ slot: 'alert', kind: s.alert.kind, key: s.alert.key, wait: s.alert.kind === 'unfinished' ? 15000 : 4000 });   // 原因不明的多等一会儿
   if (asking(s)) out.push({ slot: 'ask', kind: 'ask', key: askKey(s), wait: 4000, text: (s.ask && s.ask.questions && s.ask.questions[0] && s.ask.questions[0].q) || '' });
   else if (!s.alert && s.done && s.resultAt && s.digest && s.digest.need === 'reply' && !s.digest.raised && s.status !== 'busy') out.push({ slot: 'reply', kind: 'reply', key: 'reply@' + s.resultAt, wait: s.status === 'shell' ? REPLY_SHELL_MS : 5000, text: s.digest.ask || '' });
+  // 【待审阅】（11/25 手表）：条件照待跟进那条（不在跑、没停住、不在等你选），只推手机 / 手表，不弹 Mac 横幅（见 flushAlerts）
+  if (!asking(s) && !s.alert && s.digest && s.digest.need === 'review' && s.done && s.resultAt && s.status !== 'busy' && !s.digest.raised)
+    out.push({ slot: 'review', kind: 'review', key: 'review@' + s.resultAt, wait: s.status !== 'shell' ? 5000 : REPLY_SHELL_MS, text: '' });
   return out;                  // raised（先放着到点、翻回来的那件）不另发：推迟的那件他已经知道
 }
 function baseOf(s) {           // 没见过的会话：当下的几件记成已知道。待跟进先看盘上（重启前的那一份服务记的）；盘上没有，当下这一次交付不论是不是待跟进都记上（头一回见到它，之后小模型再把它判成待跟进也不算新的）
   const b = { alert: s.alert ? s.alert.key : null, reply: s.resultAt ? 'reply@' + s.resultAt : null, ask: asking(s) ? askKey(s) : null };
   const stale = s.digest && s.digest.need === 'reply' && Date.parse(s.resultAt) < ALERT_BOOT - 120000;   // 服务停着的时候早就交付了的待跟进（停了很久、回滚到不写这个文件的旧版跑过一阵）：算旧的，不看盘
   if (replyDisk.has(s.sid) && !stale) b.reply = replyDisk.get(s.sid);
+  b.review = s.resultAt ? 'review@' + s.resultAt : null;                 // 【待审阅】不存盘：没见过的会话当下这次交付一律算已知道（重启后不对旧交付补推）
   return b;
 }
 function watchAlerts() {
@@ -1672,18 +1720,21 @@ function watchAlerts() {
     const ns = needsOf(s), z = snoozes[s.sid];
     if (z && !snoozeWake(s, z, now)) {                                        // 推迟中：都不发。推迟的那件待跟进记成已知道（醒了也不补）；停住了不记，醒来时还停着就照常发
       const r = ns.find((n) => n.slot === 'reply'); if (r) done.reply = r.key;
-      for (const n of ['alert', 'reply', 'ask']) alertHold.delete(s.sid + ' ' + n);
+      const v = ns.find((n) => n.slot === 'review'); if (v) done.review = v.key;   // 推迟中的【待审阅】也记成已知道，和待跟进一样
+      for (const n of ['alert', 'reply', 'ask', 'review']) alertHold.delete(s.sid + ' ' + n);
       continue;
     }
-    for (const slot of ['alert', 'reply', 'ask']) {
+    for (const slot of ['alert', 'reply', 'ask', 'review']) {
       const n = ns.find((x) => x.slot === slot), hk = s.sid + ' ' + slot;
       if (!n) { alertHold.delete(hk); continue; }
       if (done[slot] === n.key) continue;                                     // 同一件事只发一次
+      if (slot === 'review' && done.reply === 'reply@' + s.resultAt) { done.review = n.key; alertHold.delete(hk); continue; }   // 这一次交付已经按待跟进发过（或算作已知道）：改判成待审阅不再补发「做好了」
       if (slot === 'ask' && s.provider === 'codex' && process.uptime() < 60) { done.ask = n.key; continue; }   // Codex 的弹框要等读屏（slowLoop）才知道，服务起来 60 秒内读到的算已有的
       const h = alertHold.get(hk);
       if (!h || h.key !== n.key || h.wait !== n.wait) { alertHold.set(hk, { key: n.key, since: now, wait: n.wait }); continue; }   // 要等多久变了（后台跑完 shell → idle）从头站稳
       if (now - h.since < n.wait) continue;
       done[slot] = n.key; alertHold.delete(hk);
+      if (slot === 'review') { queueReview(s.sid); continue; }                // 【待审阅】走自己的队列：只推手机 / 手表
       if (n.kind !== 'interrupt') queueAlert(s.title, n.kind, s.sid, n.text); // 被打断是你自己按的 Esc，界面上标出来就够了
     }
   }
@@ -1693,17 +1744,21 @@ function watchAlerts() {
 }
 async function flushAlerts() {
   alertTimer = null; const q = alertQueue; alertQueue = []; if (!q.length) return;
+  const rv = takeReviews();                                                      // 排着的【待审阅】跟这一批一起推（一条、响），不再等它自己的合批窗口；横幅和下面两行日志里没有它们
   const title = q.length === 1 ? (q[0].kind === 'crash' ? q[0].title + WHY.crash : '「' + q[0].title + '」' + WHY[q[0].kind]) : q.length + (q.every((x) => x.kind === 'reply' || x.kind === 'ask') ? ' 个窗口在等你' : q.some((x) => x.kind === 'reply' || x.kind === 'ask') ? ' 个窗口要你处理' : ' 个窗口停住了');
   const body = q.length === 1 ? q[0].text || '打开总控台跟进一下' : q.slice(0, 3).map((x) => '「' + x.title + '」' + WHY[x.kind]).join('；') + (q.length > 3 ? ' 等' : '');
   const would = Date.now() - uiFocusAt < 6000 ? 'ui' : 'sent';                    // ui = 你正看着总控台，界面自己会提示
   const how = SANDBOX ? 'dry:' + would : would;                                  // 试验场里只写日志，不真发
   console.log(`alert ${new Date().toISOString()} ${how} n=${q.length} ${q.map((x) => x.kind).join(',')}`);
   console.log(`notify ${new Date().toISOString()} ${how} ${q.map((x) => x.kind + ':' + (x.sid ? x.sid.slice(0, 8) : '-')).join(',')} | ${title} | ${body}`);   // 本来会发 / 发了什么（试验场里测试读这一行）
-  if (would === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));
+  const items = [...q, ...rv].map(({ kind, sid }) => ({ kind, sid }));          // 推送只带类别和会话号；review 排在后面，载荷按每台设备再滤（sendPush）
+  let pushed = would === 'sent';
+  if (pushed) void sendPush(items);
   else if (pushReady()) {
     const idleMs = await readHidIdleMs();
-    if (pushWould(Date.now() - uiFocusAt, idleMs) === 'sent') void sendPush(q.map(({ kind, sid }) => ({ kind, sid })));
+    if (pushWould(Date.now() - uiFocusAt, idleMs) === 'sent') { pushed = true; void sendPush(items); }
   }
+  if (rv.length) reviewLog(pushed ? 'push' : 'ui', rv, 'alert');
   if (how !== 'sent') return;
   await new Promise((resolve) => execFile('/usr/bin/osascript', ['-e', 'display notification (system attribute "CCB_BODY") with title (system attribute "CCB_TITLE")'],
     { timeout: 8000, env: { ...process.env, CCB_TITLE: '总控台 · ' + title, CCB_BODY: body } }, () => resolve()));
@@ -2175,7 +2230,13 @@ function uploadPath(name) {
   const d = new Date(); const dir = path.join(UPLOAD_DIR, d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()));
   fs.mkdirSync(dir, { recursive: true });
   const base = path.basename(String(name || 'file')).replace(/[^\w.\-\u4e00-\u9fff]+/g, '_').replace(/^_+|_+$/g, '').slice(-60) || 'file';
-  return path.join(dir, p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds()) + '-' + crypto.randomBytes(2).toString('hex') + '-' + base);
+  const stamp = p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds()) + '-';
+  // 先排他地占住这个名字再交出去（11/25 B6）：同一秒、同名、2 字节随机又撞上时换一个随机重来，绝不覆盖已有的附件。
+  for (let i = 0; i < 8; i++) {
+    const p = path.join(dir, stamp + crypto.randomBytes(2).toString('hex') + '-' + base);
+    try { fs.closeSync(fs.openSync(p, 'wx', 0o600)); return p; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  }
+  throw new Error('附件起不了名字：同一秒同名的太多');
 }
 // 手机照片常是 HEIC，Claude Code 不认；太大的图也先缩一下。原文件不动，转出来的放进 uploads。
 async function normalizeFile(p) {
@@ -2183,15 +2244,17 @@ async function normalizeFile(p) {
   if (!st.isFile()) return null;
   const ext = path.extname(p).toLowerCase();
   if (ext === '.heic' || ext === '.heif' || ext === '.tiff' || ext === '.tif' || ext === '.bmp') {
-    const out = uploadPath(path.basename(p, path.extname(p)) + '.jpg');
+    let out; try { out = uploadPath(path.basename(p, path.extname(p)) + '.jpg'); } catch { return p; }   // 占不到名字就照原文件发，别连文字一起丢
     const r = await run(SIPS, ['-s', 'format', 'jpeg', '-Z', '2400', p, '--out', out], { timeout: 60000 });
-    if (r.ok && fs.existsSync(out)) return out;
+    if (r.ok && fs.statSync(out, { throwIfNoEntry: false })?.size) return out;
+    fs.rmSync(out, { force: true });                 // uploadPath 先占了一个空文件，转不出来就删掉
     return p;
   }
   if (isImage(p) && ext !== '.gif' && st.size > 5 * 1024 * 1024) {
-    const out = uploadPath(path.basename(p, path.extname(p)) + '.jpg');
+    let out; try { out = uploadPath(path.basename(p, path.extname(p)) + '.jpg'); } catch { return p; }   // 占不到名字就照原文件发，别连文字一起丢
     const r = await run(SIPS, ['-s', 'format', 'jpeg', '-Z', '2400', p, '--out', out], { timeout: 60000 });
-    if (r.ok && fs.existsSync(out)) return out;
+    if (r.ok && fs.statSync(out, { throwIfNoEntry: false })?.size) return out;
+    fs.rmSync(out, { force: true });
   }
   return p;
 }
@@ -3594,23 +3657,33 @@ const handle = async (req, res, via) => {
     if (rem && rem.dev) {                            // 等正文的时候这台可能刚被撤销（审查 M1）：拿到正文再核一次，撤销了就不办
       if (devices.get(rem.dev.id) !== rem.dev) { remoteLog(`deny revoked-in-flight ${rem.dev.id} POST ${pathOf(req)}`, 'd:inflight:' + rem.dev.id); return reply(res, 401, { error: 'device', why: 'unknown device' }); }
       const sid8 = (/^[\w-]{1,8}/.exec(typeof body.sid === 'string' ? body.sid : '') || [''])[0];   // 只取字母数字横杠：正文里的换行不能伪造日志行
-      remoteLog(`act ${rem.dev.id} ${rem.login} POST ${pathOf(req)}${sid8 ? ' ' + sid8 : ''}`);   // 远程做了什么留一行（不记正文）
+      let meta = '';                                 // B6 上传：只多记大小和扩展名，不记原名和内容
+      if (u.pathname === '/api/upload') {
+        const d = typeof body.data === 'string' ? body.data : '';   // 只量长度，不对几十 MB 的正文再跑正则、复制
+        const n = d.startsWith('data:') ? d.length - d.indexOf(',') - 1 : d.length;
+        const pad = d.endsWith('==') ? 2 : d.endsWith('=') ? 1 : 0;
+        const ext = path.extname(String(body.name || '')).toLowerCase();
+        meta = ` bytes=${Math.max(0, Math.floor(n * 3 / 4) - pad)} ext=${UPLOAD_LOG_EXT.has(ext) ? ext : 'other'}`;   // 扩展名只认常见的，别把名字尾巴带进日志
+      }
+      remoteLog(`act ${rem.dev.id} ${rem.login} POST ${pathOf(req)}${sid8 ? ' ' + sid8 : ''}${meta}`);   // 远程做了什么留一行（不记正文）
     }
     if (rem && u.pathname === '/api/remote/push') {
       const d = rem.dev;
       const { token, env } = body;
+      const review = pushKinds(body.kinds).includes('review');   // 这台 App 有没有 PUSH_REVIEW_* 的字（11/25）。kinds 写错只当没声明，不拒整次登记（见 remote.mjs pushKinds）
       if (token !== null && !pushToken(token)) return reply(res, 400, { ok: false, error: 'bad token' });
       if (token !== null && !pushEnv(env)) return reply(res, 400, { ok: false, error: 'bad env' });
       let changed = false;
       if (token === null) { if (d.push) { delete d.push; changed = true; } }
       else {
         for (const other of devices.values()) if (other !== d && other.push?.token === token) { delete other.push; changed = true; }
-        if (d.push?.token !== token || d.push?.env !== env) { d.push = { token, env, at: Date.now() }; changed = true; }
+        const same = d.push?.token === token && d.push?.env === env;   // 只改了 kinds（同一个令牌）：也算变了、要落盘；at 留着登记令牌的那一刻
+        if (!same || (d.push.review === true) !== review) { d.push = { token, env, at: same ? d.push.at : Date.now(), ...(review ? { review: true } : {}) }; changed = true; }
       }
       if (!changed) return reply(res, 200, { ok: true });
       const se = saveDevices();
       if (token !== null) {
-        pushLog(`token ${d.id} ${env} ${token.slice(0, 8)}`);
+        pushLog(`token ${d.id} ${env} ${token.slice(0, 8)}${d.push.review ? ' +review' : ''}`);
       } else pushLog(`token ${d.id} cleared`);
       return reply(res, se ? 500 : 200, se ? { ok: false, error: 'save' } : { ok: true });
     }
@@ -3709,7 +3782,8 @@ const handle = async (req, res, via) => {
       if (!m) return reply(res, 200, { ok: false, error: '文件内容读不出来' });
       const buf = Buffer.from(m[1], 'base64');
       if (!buf.length || buf.length > 30 * 1024 * 1024) return reply(res, 200, { ok: false, error: '单个文件最大 30 MB' });
-      const dest = uploadPath(body.name || 'file');
+      let dest;
+      try { dest = uploadPath(body.name || 'file'); } catch (e) { return reply(res, 200, { ok: false, error: String(e.message || e) }); }
       fs.writeFileSync(dest, buf, { mode: 0o600 });
       return reply(res, 200, { ok: true, ...fileInfo((await normalizeFile(dest)) || dest) });
     }
@@ -3873,7 +3947,7 @@ server.listen(PORT, '127.0.0.1', () => {
   if (REMOTE.on && REMOTE_PORT_BAD) { remoteDown = 'bad port'; remoteLog(`listen 远程端口写错（${REMOTE_PORT_RAW.slice(0, 20)}），不听，手机连不上`); }
   else if (REMOTE.on) {                              // 远程端口：只在 remote 开着时听，也只听 127.0.0.1（tailscale serve 在本机转过来）。听不上不连累总控台本身
     const rs = http.createServer((req, res) => handle(req, res, 'remote'));
-    rs.requestTimeout = 30000; rs.headersTimeout = 10000; rs.maxConnections = 64;   // 远程的连接比本机收紧：没配对的设备挂不住连接
+    rs.requestTimeout = 180000; rs.headersTimeout = 10000; rs.maxConnections = 64;   // 远程的连接比本机收紧：没配对的设备挂不住连接（头 10 秒）；整个请求放到 180 秒，B6 手机在慢网上传几十 MB 的附件要这么久，没配对的在读正文之前就被拦掉
     const tryListen = () => { try { rs.listen(REMOTE_PORT, '127.0.0.1'); } catch (e) { remoteDown = String((e && e.code) || e); } };
     rs.on('listening', () => { remoteDown = ''; remoteLog(`listen 127.0.0.1:${REMOTE_PORT}（tailscale serve 指向这里）`); });
     rs.on('error', (e) => {                          // 被占着（别的进程先听了这个端口）：手机的请求会落到它那里，所以不出码；隔一阵再试，占着的走了就接上

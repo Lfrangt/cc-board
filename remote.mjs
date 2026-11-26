@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 只用 node:crypto。服务传入 remote / apns 配置、设备表、请求头、通知类别和签名密钥对象。
  * [OUTPUT]: 导出远程准入与配对规则；APNs 配置、锁屏类别与签名规则；parseHidIdle()、pushWould() 和 PUSH_AWAY_MS 定空闲放行规则。
+ *           待审阅推送（11/25）：PUSH_KINDS / pushKinds()（设备注册时声明要哪些额外类别，只认 review）、pushItems()（按设备的 push.review 滤掉 review）；pushPayload() 多 PUSH_REVIEW_ONE / PUSH_REVIEW_MANY，只含 review 的不带 sound。
  *           远程预览（C1，11/21）：pathsIn()（照 ui.html inline() 从交付正文里抽本机路径）、hiddenPath()（真身里点开头的段）、rpKeyOk() / RP_TTL / RP_KEEP（/rp/ 钥匙网址认不认）。
  * [POS]: 手机远程（经 tailscale serve 进来，11/17 Khalil 14:13 要的最小版）的三道拦：从哪个端口来、认哪些 Host、远程能碰哪些接口、凭证对不对。
  *        这里只有规则，不起进程、不读写文件（读写设备表、记日志在 server.mjs），所以 test/remote.test.mjs 能直接断言。
@@ -42,13 +43,22 @@ export function parseApns(v) {
 export const pushToken = (v) => typeof v === 'string' && PUSH_TOKEN.test(v) && v === v.trim();
 export const pushEnv = (v) => v === 'sandbox' || v === 'production';
 const validPush = (v) => v && pushToken(v.token) && pushEnv(v.env) && Number.isSafeInteger(v.at) && v.at >= 0;
+// 设备注册时可以声明要哪些额外类别（11/25 手表）：只认 review。老 App（0.2.3）没有 PUSH_REVIEW_* 的字，锁屏会露出原始键名，所以没声明的设备一律不发 review。
+// 认不出的元素、不是数组：丢掉 / 当没声明，不拒整次注册（App 和服务各自发版，新 App 多带一个服务不认识的类别时，令牌照样要登记上）。只会少给，不会多给。
+export const PUSH_KINDS = ['review'];
+export const pushKinds = (v) => Array.isArray(v) ? PUSH_KINDS.filter((k) => v.includes(k)) : [];
+export const pushItems = (items, push) => push && push.review === true ? items : items.filter((x) => x.kind !== 'review');
 export function pushPayload(items) {
-  const keys = { __proto__: null, reply: 'PUSH_REPLY_ONE', ask: 'PUSH_ASK_ONE', crash: 'PUSH_CRASH' };
+  const keys = { __proto__: null, reply: 'PUSH_REPLY_ONE', ask: 'PUSH_ASK_ONE', crash: 'PUSH_CRASH', review: 'PUSH_REVIEW_ONE' };
   const waits = items.filter((x) => x.kind === 'reply' || x.kind === 'ask').length;
-  const key = items.length === 1 ? keys[items[0].kind] || 'PUSH_STOP_ONE' : waits === items.length ? 'PUSH_WAIT_MANY' : waits ? 'PUSH_MIXED_MANY' : 'PUSH_STOP_MANY';
+  const reviews = items.filter((x) => x.kind === 'review').length;
+  // 几件里有 review：全是 review → PUSH_REVIEW_MANY；review 混着别的（待跟进、等你选、停住了都算）→ PUSH_MIXED_MANY（「N 个窗口要你处理」）。
+  const key = items.length === 1 ? keys[items[0].kind] || 'PUSH_STOP_ONE' : reviews && reviews === items.length ? 'PUSH_REVIEW_MANY' : reviews ? 'PUSH_MIXED_MANY' : waits === items.length ? 'PUSH_WAIT_MANY' : waits ? 'PUSH_MIXED_MANY' : 'PUSH_STOP_MANY';
   const alert = { 'loc-key': key, ...(items.length > 1 ? { 'loc-args': [String(items.length)] } : {}) };
   const sid = items.length === 1 && typeof items[0].sid === 'string' && /^[\w-]{8,64}$/.test(items[0].sid) && items[0].sid === items[0].sid.trim() ? items[0].sid : '';
-  return { aps: { alert, sound: 'default', 'thread-id': 'cc-board' }, ...(sid ? { sid } : {}) };
+  // 只含 review 的轻一档（总管 khalil-4c 11/25 定）：不带 sound；review 混着待跟进 / 等你选 / 停住了照旧响。没有 review 的载荷和之前逐字节一样（键的顺序也不变）
+  const quiet = reviews > 0 && reviews === items.length;
+  return { aps: { alert, ...(quiet ? {} : { sound: 'default' }), 'thread-id': 'cc-board' }, ...(sid ? { sid } : {}) };
 }
 export function apnsJwt(keyObject, keyId, teamId, nowSec) {
   const enc = (v) => Buffer.from(JSON.stringify(v)).toString('base64url');
@@ -102,10 +112,11 @@ export function gate(h, R, method, via) {
 }
 
 // ───────────── 第二道：远程能碰哪些接口 ─────────────
-// 只给看和说话：状态、对话、发话、答选择框、开新任务、知道了、审完了、归档。删除、打开 / 选中文件、聚焦、去终端、选文件框、
-// 自动续跑、一起退出、上传、预览、接回、取消、配对管理本身……不在表里的一律拒。按「方法 + 路径」整串查，不做前缀匹配。
+// 只给看和说话：状态、对话、发话、答选择框、开新任务、知道了、审完了、归档，加 B6 上传附件（11/25：手机传照片 / 文件，存进 uploads、回路径，跟 Mac 上粘贴同一个处理）。
+// 删除、打开 / 选中文件、聚焦、去终端、选文件框、自动续跑、一起退出、预览、接回、取消、配对管理本身……不在表里的一律拒。按「方法 + 路径」整串查，不做前缀匹配。
+// 上传不限文件类型（Mac 上本来就不限）：能发话的设备已经能让窗口跑任意命令，类型白名单挡不住什么；它只决定字节落在 uploads、路径交给会话。
 export const REMOTE_API = new Set(['GET /api/state', 'GET /api/turns', 'GET /api/archive',
-  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/remote/push', 'POST /api/remote/preview']);
+  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/upload', 'POST /api/remote/push', 'POST /api/remote/preview']);
 export const allowed = (method, pathname) => REMOTE_API.has(method + ' ' + pathname);
 
 // ───────────── 远程预览（C1，11/21）：只给这个会话对话里出现过的文件 ─────────────
@@ -179,6 +190,7 @@ export function loadDevices(text) {
     if (!d || typeof d.id !== 'string' || !/^[0-9a-f]{16}$/.test(d.id) || typeof d.hash !== 'string' || !HEX64.test(d.hash) || typeof d.login !== 'string' || !LOGIN.test(d.login)) continue;   // 数组会被正则转成字符串，先核类型
     const dev = { id: d.id, name: devName(d.name), login: d.login, hash: d.hash, at: Number(d.at) || 0 };
     if (validPush(d.push)) dev.push = { token: d.push.token, env: d.push.env, at: d.push.at };
+    if (dev.push && d.push.review === true) dev.push.review = true;
     out.set(d.id, dev);
   }
   return out;

@@ -489,7 +489,7 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 #preview{width:calc(100vw - 32px);height:calc(100vh - 32px);max-height:none}
 #preview .dhead h1{flex:0 1 auto}
 .pdir{flex:1;min-width:0;color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pbody{position:relative;flex:1;min-height:0;background:#fff}
+.pbody{position:relative;flex:1;min-height:0;background:#fff;overflow:hidden}   /* overflow：放大的图不能盖出去挡住顶栏的 ×（11/25 1b 审查） */
 #pFrame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
 /* 图、音视频和逐笔改动留在总控台页面。底色跟主题走，文本按卡片正文排版。 */
 .pbody[data-kind="image"],.pbody[data-kind="video"],.pbody[data-kind="audio"],.pbody[data-kind="text"],.pbody[data-kind="markdown"],.pbody[data-kind="gallery"],.pbody[data-kind="diff"],.pbody[data-kind="canvas"]{background:var(--bg)}
@@ -571,7 +571,7 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 /* 图集格子里的图框。只认 .gi 里的：输入框灰字的文字也叫 .gt（11/13 先有的），11/15 起这三条把灰字套成了一个带底色和描边的框（11/17 修） */
 .gi .gt{position:relative;display:block;border-radius:var(--r-ctl);background:var(--fill)}
 .gi .gt::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 var(--ink-w) var(--ink);pointer-events:none}   /* 描边画在图上面：图自己的 box-shadow 会被图盖住 */
-.gi .gt img,.gi .gt video{display:block;height:clamp(200px,34vh,360px);width:auto;min-width:96px;max-width:min(100%,560px);object-fit:contain;border-radius:inherit}
+.gi .gt img,.gi .gt video{display:block;height:calc(clamp(200px,34vh,360px) * var(--gz,1));width:auto;min-width:96px;max-width:min(100%,calc(560px * var(--gz,1)));object-fit:contain;border-radius:inherit}   /* --gz：⌘+ / ⌘− 调格子大小（zoomGrid） */
 .gplay{position:absolute;right:8px;bottom:14px;font-size:11px;line-height:1;padding:4px 6px;border-radius:var(--r-badge);background:var(--hud);color:#fff;pointer-events:none;transition:opacity var(--d1) var(--ease)}
 /* 图集里的视频（11/17 Khalil：「直接播放……不用把它放到全屏」「同时播放」）：点格子就在格子里播 / 停，底边一条进度能点能拖；右上角 ⤢ 才进放大层。
    在播时 ▶ 换成 ❚❚，只在指着时露出来，不挡画面。「同时播放」时有声的那一格描一圈青线、左上角一个喇叭 */
@@ -596,7 +596,7 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .lbar{display:flex;align-items:center;gap:6px;padding:10px 14px;flex:none;border-bottom:1px solid var(--hair)}
 .lcap{flex:1;min-width:0;font-size:12.5px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lcap b{font-weight:600;color:var(--text);margin-right:8px}
-.lstage{position:relative;flex:1;min-height:0;cursor:zoom-out}
+.lstage{position:relative;flex:1;min-height:0;cursor:zoom-out;overflow:hidden}   /* 同上：不盖住「图集 / 上一张 / 下一张」 */
 .lstage img,.lstage video{position:absolute;inset:0;margin:auto;max-width:calc(100% - 32px);max-height:calc(100% - 32px);object-fit:contain;cursor:default}
 .ib[disabled]{opacity:.3;pointer-events:none}
 #pReload[hidden],#pOpen[hidden],#pFinder[hidden]{display:none}      /* .ib 自己设了 display:grid，盖过了 hidden 属性 */
@@ -606,6 +606,12 @@ body .dock .sg,body .dock .ap{padding:0 14px 8px}
 .gchip:hover{background:var(--hover);color:var(--text)} .gchip:active{background:var(--press)}
 .gchip+.gchip{margin-left:8px}
 .pwait{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-3);font-size:13px;pointer-events:none} .pwait[hidden]{display:none}
+/* 放大缩小（11/25 Khalil：「小图的时候我就喜欢放大……按 command 加 plus 就可以直接把它放大」）：图用 transform 放大、拖着挪；放大了才变成「抓手」光标。
+   .zdrag 拖的时候去掉过渡，不然图跟不上手。#pZoom 是缩放后底部中间闪一下的百分比 */
+#pImg.zm,.lstage img.zm{cursor:grab;transition:transform .12s var(--ease-out,ease-out);will-change:transform}
+#pImg.zm.zdrag,.lstage img.zm.zdrag{cursor:grabbing;transition:none}
+.pzoom{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);padding:4px 10px;border-radius:999px;background:var(--raised);box-shadow:inset 0 0 0 var(--ink-w) var(--ink);color:var(--text-2);font-size:12px;font-variant-numeric:tabular-nums;pointer-events:none;z-index:3;transition:opacity .2s}
+.pzoom[hidden]{display:block;opacity:0}
 .dbody{padding:18px 20px 20px;overflow:auto}
 .dfoot{display:flex;align-items:center;gap:8px;padding:12px 16px 14px 20px;border-top:1px solid var(--hair);flex:none}
 .dfoot .grow{flex:1;color:var(--text-3);font-size:12px}
@@ -800,7 +806,7 @@ body.org main:has(#org.map){overflow:hidden}
 <div id="toast" role="status"><span></span><button hidden></button></div>
 
 <dialog id="detail"><div class="dhead"><h1 id="dTitle"></h1><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="dbody" id="dBody"></div><div class="dock" id="dDock" hidden></div></dialog>
-<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="tbtn" id="pSync" hidden title="所有视频从头一起播；鼠标停在哪一格，就听哪一格的声音">同时播放</button><button class="tbtn" id="pCvBack" hidden title="回到全景（Esc）">全景</button><button class="tbtn" id="pCmp" hidden aria-pressed="false" title="所有版本同时摆出来，每个都能直接点；再按一下回到画布">并排看全部版本</button><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="tbtn" id="pFinder" title="在访达里选中这个文件">在访达中显示</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody" id="pBody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><img id="pImg" alt="" hidden><video id="pVid" controls playsinline preload="metadata" hidden></video><audio id="pAud" controls preload="metadata" hidden></audio><div id="pText" class="md" hidden></div><div id="pGal" hidden></div><div id="pCan" hidden></div><div class="pwait" id="pWait">读取中…</div></div><div class="dock" id="pDock" hidden><div class="dto"><span>回给</span><b></b></div></div></dialog>
+<dialog id="preview"><div class="dhead"><h1 id="pTitle"></h1><span class="pdir" id="pDir"></span><button class="tbtn" id="pSync" hidden title="所有视频从头一起播；鼠标停在哪一格，就听哪一格的声音">同时播放</button><button class="tbtn" id="pCvBack" hidden title="回到全景（Esc）">全景</button><button class="tbtn" id="pCmp" hidden aria-pressed="false" title="所有版本同时摆出来，每个都能直接点；再按一下回到画布">并排看全部版本</button><button class="ib" id="pReload" aria-label="重新载入" title="重新载入"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 7a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 2v2.6H8.9"/></svg></button><button class="tbtn" id="pOpen" title="在默认浏览器里打开（也可以 ⌘ 点链接）">在浏览器打开</button><button class="tbtn" id="pFinder" title="在访达里选中这个文件">在访达中显示</button><button class="ib" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"/></svg></button></div><div class="pbody" id="pBody"><iframe id="pFrame" title="预览" referrerpolicy="no-referrer"></iframe><img id="pImg" alt="" hidden><video id="pVid" controls playsinline preload="metadata" hidden></video><audio id="pAud" controls preload="metadata" hidden></audio><div id="pText" class="md" hidden></div><div id="pGal" hidden></div><div id="pCan" hidden></div><div class="pwait" id="pWait">读取中…</div><div class="pzoom" id="pZoom" aria-live="polite" hidden></div></div><div class="dock" id="pDock" hidden><div class="dto"><span>回给</span><b></b></div></div></dialog>
 
 <dialog id="newDlg" style="--w:580px"><div class="dhead"><h1 id="nTitle">新任务</h1></div>
   <div class="dbody">
@@ -928,7 +934,7 @@ const EN = {
   '只有点这里、或回它一句，才算处理过': 'Only this button or a reply marks it handled',
   '你点过「审完了」': 'you marked it reviewed', '无需处理的交付': 'a no-action delivery', '待审阅的交付': 'a delivery to review', '几十秒': 'under a minute', '要你：': 'Needs you: ',
   '重新载入': 'Reload', '在浏览器打开': 'Open in browser', '在默认浏览器里打开（也可以 ⌘ 点链接）': 'Open in your default browser (or ⌘-click the link)', '预览': 'Preview',
-  '图集': 'Gallery', '在访达中显示': 'Show in Finder', '在访达里打开这个文件夹': 'Open this folder in Finder', '在访达里选中这个文件': 'Select this file in Finder', '回到图集（Esc）': 'Back to gallery (Esc)',
+  '图集': 'Gallery', '在访达中显示': 'Show in Finder', '在访达里打开这个文件夹': 'Open this folder in Finder', '在访达里选中这个文件': 'Select this file in Finder', '回到图集（Esc）': 'Back to gallery (Esc)', '⌘+ 放大 · ⌘− 缩小 · ⌘0 复原 · 双击智能放大 · 放大后拖着挪': '⌘+ zoom in · ⌘− zoom out · ⌘0 reset · double-click to smart zoom · drag to pan when zoomed',
   '并排看全部版本': 'Compare all versions', '回到全景（Esc）': 'Back to overview (Esc)', '全景': 'Overview', '网页': 'Page', '这一次的网页': 'Pages in this delivery', '换一个': 'next', '回全景': 'overview',
   '拖动平移 · ctrl + 滚轮缩放': 'Drag to pan · ctrl + scroll to zoom', '自由视角 · Esc 回全景': 'Free view · Esc for overview', '所有版本同时摆出来，每个都能直接点；再按一下回到画布': 'Lay all versions side by side, each one live; click again to go back to the canvas',
   '这些网页凑不齐两个能打开的': 'Fewer than two of these pages can be opened', '这些网页不在同一个文件夹，画布只摆同一个文件夹里的': 'These pages are in different folders; a canvas only shows pages from one folder', '画布还不能在远程预览里打开': 'The canvas is not available in remote preview yet',
@@ -2658,6 +2664,7 @@ function clearPreview() {
   $('#pSync').hidden = true;
   if (cv) { cv.destroy(); cv = null; }                       // 画布：每个 iframe 先置空再拆，12 个页面的声音、定时器不在后台接着跑
   pVersions = null; $('#pCmp').hidden = $('#pCvBack').hidden = true;
+  zoomReset();                                               // 放大缩小回默认：下一个文件从「整张看得到」开始
 }
 // 顶栏右边的按钮跟着内容走（11/25 Khalil：「预览打开的时候，可以选择在浏览器里打开，或者在访达中打开，两个都加上去」）：
 // 单个文件两个都有：「在浏览器打开」和「在访达中显示」；文件夹的图集没有「浏览器」可言，只留「在访达中显示」；一批图拼成的图集没有对应的文件夹，两个都不要
@@ -2723,7 +2730,7 @@ async function openPreview(p) {
   for (const id of ['#pFrame', '#pImg', '#pVid', '#pAud', '#pText']) $(id).hidden = id !== show;
   const wait = $('#pWait'); wait.hidden = false;
   if (show === '#pFrame') { const fr = $('#pFrame'); fr.onload = () => { if (fr.src !== 'about:blank') wait.hidden = true; }; fr.src = r.url; }
-  else if (show === '#pImg') { const im = $('#pImg'); im.onload = im.onerror = () => { wait.hidden = true; }; im.src = r.url; }
+  else if (show === '#pImg') { const im = $('#pImg'); im.title = T(ZOOM_HINT); im.onload = im.onerror = () => { wait.hidden = true; }; im.src = r.url; }
   else if (show === '#pText') {
     $('#pText').innerHTML = (r.kind === 'markdown' ? md(r.text) : '<pre class="raw">' + esc(r.text) + '</pre>') + (r.truncated ? L('<div class="cut">文件太大，只显示了开头 1 MB。</div>') : '');
     $('#pText').scrollTop = 0; wait.hidden = true;
@@ -2775,7 +2782,7 @@ function galShow(i) {
     '<span class="lcap"><b class="num">' + (gal.i + 1) + ' / ' + n + '</b>' + esc(it.name) + '</span>' +
     '<button type="button" class="ib" data-gstep="-1" aria-label="' + esc(T('上一张')) + '" title="' + esc(T('上一张（←）')) + '"' + (gal.i === 0 ? ' disabled' : '') + '>' + SVG_CH('M8.5 2.5 4 7l4.5 4.5') + '</button>' +
     '<button type="button" class="ib" data-gstep="1" aria-label="' + esc(T('下一张')) + '" title="' + esc(T('下一张（→）')) + '"' + (gal.i === n - 1 ? ' disabled' : '') + '>' + SVG_CH('M5.5 2.5 10 7l-4.5 4.5') + '</button></div>' +
-    '<div class="lstage">' + (it.kind === 'video' ? '<video controls playsinline preload="metadata" src="' + esc(it.url) + '"></video>' : '<img alt="" src="' + esc(it.url) + '">') + '</div>';
+    '<div class="lstage">' + (it.kind === 'video' ? '<video controls playsinline preload="metadata" src="' + esc(it.url) + '"></video>' : '<img alt="" src="' + esc(it.url) + '" title="' + esc(T(ZOOM_HINT)) + '">') + '</div>';
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();      // 焦点别留在被盖住的格子上：回车 / 空格会点到它
 }
 function galBack() {
@@ -2872,7 +2879,114 @@ $('#preview').addEventListener('cancel', (e) => { if (gal && (gal.i >= 0 || galE
 $('#pReload').addEventListener('click', () => { if (previewAt) openPreview(previewAt); });
 $('#pOpen').addEventListener('click', () => openPath(previewAt));
 $('#pFinder').addEventListener('click', () => openPath(previewAt, true));
-$('#preview').addEventListener('close', () => { clearPreview(); syncDock(); });   // 关掉就卸载：里面的音视频、动画不在背后接着放；回话框还给大窗口或卡片
+$('#preview').addEventListener('close', () => { clearPreview(); syncDock(); });
+// ── 放大缩小（11/25 Khalil：「小图的时候我就喜欢放大……按 command 加 plus 就可以直接把它放大」）──
+// ⌘+ / ⌘− / ⌘0 跟着预览里现在是什么走：
+//   一张图（单张预览、图集放大层）：以窗口中心放大，最多 8 倍，不小于默认大小；放大以后拖着挪、两指滑挪，双击在「默认」和「智能放大」之间切换。
+//   图集格子墙：整面墙的格子一起变大变小（--gz），最大到一格刚好放进窗口。
+//   文本、Markdown、改动对照：字一起变大变小（CSS zoom）。网页、PDF 是另一个源，按键到不了，不管。
+// 捏合（WebKit 是 gesture 事件，Chromium 是带 ctrlKey 的 wheel）、⌘ + 滚轮：以指针为中心缩放。
+// 换一张、回格子墙、关预览就回到默认：每张图都从「整张看得到」开始。
+const ZOOM_HINT = '⌘+ 放大 · ⌘− 缩小 · ⌘0 复原 · 双击智能放大 · 放大后拖着挪';
+const ZMAX = 8, ZSTEP = 1.25, GZMIN = 0.5, TZMIN = 0.6, TZMAX = 3;
+let pz = null, tz = 1, zoomTip = 0;                         // pz = { el, s, x, y }：放大的那张图、倍数（相对默认大小）、平移（屏幕像素）
+function zoomImgEl() {                                        // 现在能放大的那张图；没有就是 null
+  if (!$('#preview').open) return null;
+  if (gal) return gal.i >= 0 ? $('#pGal .lstage img') : null;        // 图集放大层里的视频有自己的控制条，不放大
+  const im = $('#pImg'); return !im.hidden && im.getAttribute('src') ? im : null;
+}
+function zoomShow(s) {
+  const t = $('#pZoom'); t.textContent = Math.round(s * 100) + '%'; t.hidden = false;
+  clearTimeout(zoomTip); zoomTip = setTimeout(() => { t.hidden = true; }, 900);
+}
+function zoomApply() {
+  if (!pz) return; const on = pz.s > 1.001;
+  pz.el.classList.toggle('zm', on); pz.el.style.transform = on ? 'translate(' + pz.x + 'px,' + pz.y + 'px) scale(' + pz.s + ')' : '';
+}
+// 挪不出边：放大后比窗口宽的那一边，最多挪到图的边贴着窗口的边；没窗口宽的那一边留在正中
+function zoomClamp() {
+  const st = pz.el.parentNode.getBoundingClientRect(), w = pz.el.offsetWidth * pz.s, h = pz.el.offsetHeight * pz.s;
+  const mx = Math.max(0, (w - st.width) / 2), my = Math.max(0, (h - st.height) / 2);
+  pz.x = Math.max(-mx, Math.min(mx, pz.x)); pz.y = Math.max(-my, Math.min(my, pz.y));
+}
+const zoomFill = (el, st) => Math.min((st.width - 32) / (el.offsetWidth || 1), (st.height - 32) / (el.offsetHeight || 1));   // 放到刚好撑满窗口（四周留 16 px）要几倍
+// 把图放到 s 倍，(cx, cy) 那一点在屏幕上不动（没给就是窗口中心）。图摆在舞台正中、transform 以图心为原点，所以图心 = 舞台中心 + 平移
+function zoomImg(el, s, cx, cy) {
+  if (!pz || pz.el !== el) pz = { el, s: 1, x: 0, y: 0 };
+  const st = el.parentNode.getBoundingClientRect(), ox = st.left + st.width / 2, oy = st.top + st.height / 2;
+  s = Math.max(1, Math.min(Math.max(ZMAX, zoomFill(el, st)), s));      // 上限 8 倍；很小的图（图标）撑满窗口要更多倍，就以撑满为上限
+  if (Math.abs(s - pz.s) < 0.0005 && s !== 1) { zoomShow(s); return; }
+  if (cx == null) { cx = ox; cy = oy; }
+  const k = s / pz.s; pz.x = cx - ox - (cx - ox - pz.x) * k; pz.y = cy - oy - (cy - oy - pz.y) * k; pz.s = s;
+  zoomClamp(); zoomApply(); zoomShow(s);
+}
+// 双击：放大过就回默认；没放大过，按图的情况挑一个「最该看」的倍数
+function zoomSmart(el, cx, cy) {
+  if (pz && pz.el === el && pz.s > 1.001) { zoomImg(el, 1); return; }
+  // 小图（默认就是原大、四周空着）：放到刚好撑满窗口；大图被缩小了：放到一比一的真像素（视网膜截图按屏幕倍数算）；都不是就 2 倍
+  const fill = zoomFill(el, el.parentNode.getBoundingClientRect()), real = el.naturalWidth / (devicePixelRatio || 1) / (el.offsetWidth || 1);
+  zoomImg(el, fill > 1.2 ? fill : real > 1.2 ? real : 2, cx, cy);
+}
+// 格子墙：--gz 乘在格子高度上。最大到一格刚好放进窗口（再大就该点开那一张看了）；滚动位置按比例留住，不跳回顶上
+function zoomGrid(z) {
+  const g = $('#pGal .ggrid'); if (!g || !gal) return false;
+  const cur = gal.z || 1, one = g.querySelector('.gt img, .gt video'), base = one ? one.offsetHeight / cur : 0;
+  const top = base > 0 ? Math.max(1, (g.clientHeight - 70) / base) : 3;
+  z = Math.max(GZMIN, Math.min(top, z)); if (Math.abs(z - cur) < 0.001 && z !== 1) { zoomShow(z); return true; }
+  const room = g.scrollHeight - g.clientHeight, frac = room > 0 ? g.scrollTop / room : 0;
+  gal.z = z; g.style.setProperty('--gz', String(z)); g.scrollTop = frac * Math.max(0, g.scrollHeight - g.clientHeight);
+  zoomShow(z); return true;
+}
+function zoomText(z) {
+  const t = $('#pText'); if (t.hidden || !$('#preview').open) return false;
+  tz = Math.max(TZMIN, Math.min(TZMAX, z)); t.style.zoom = tz === 1 ? '' : String(tz); zoomShow(tz); return true;
+}
+// dir：1 放大、-1 缩小、0 回默认。返回 false = 这里没有能缩放的东西（网页、PDF、视频），按键不拦
+function zoomStep(dir, cx, cy, f) {
+  const k = f || (dir > 0 ? ZSTEP : 1 / ZSTEP), el = zoomImgEl();
+  if (el) { zoomImg(el, dir === 0 ? 1 : (pz && pz.el === el ? pz.s : 1) * k, cx, cy); return true; }
+  if (gal && gal.i < 0) return zoomGrid(dir === 0 ? 1 : (gal.z || 1) * k);
+  if (!$('#pText').hidden) return zoomText(dir === 0 ? 1 : tz * k);
+  return false;
+}
+function zoomReset() {
+  pz = null; tz = 1; clearTimeout(zoomTip); $('#pZoom').hidden = true;
+  const im = $('#pImg'); im.classList.remove('zm', 'zdrag'); im.style.transform = ''; $('#pText').style.zoom = '';
+}
+// ⌘ 加 = / + / − / 0（中文输入法下 e.key 不一定对，也认 e.code；小键盘的 + − 0 也算）。capture：别的 ⌘ 快捷键先轮不到
+document.addEventListener('keydown', (e) => {
+  if (!$('#preview').open || !e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+  const c = e.code, k = e.key;
+  const dir = c === 'Equal' || c === 'NumpadAdd' || k === '=' || k === '+' ? 1 : c === 'Minus' || c === 'NumpadSubtract' || k === '-' ? -1 : c === 'Digit0' || c === 'Numpad0' || k === '0' ? 0 : null;
+  if (dir !== null && zoomStep(dir)) { e.preventDefault(); e.stopPropagation(); }
+}, true);
+// 捏合 / ⌘ 滚轮缩放；图放大了以后，两指滑（普通滚轮）挪图
+$('#pBody').addEventListener('wheel', (e) => {
+  if (e.ctrlKey || e.metaKey) { if (zoomStep(e.deltaY < 0 ? 1 : -1, e.clientX, e.clientY, Math.exp(-e.deltaY * 0.01))) e.preventDefault(); return; }
+  const el = zoomImgEl(); if (!el || !pz || pz.el !== el || pz.s <= 1.001) return;
+  e.preventDefault(); pz.x -= e.deltaX; pz.y -= e.deltaY; zoomClamp(); zoomApply();
+}, { passive: false });
+// 触屏和手机远程（!K）不接管捏合、拖动、双击：系统自带的捏合缩放和平移比我们做得好，接管了反而挪不了图（11/25 1b 审查）。⌘ 快捷键照常
+const zoomTouch = () => !K || matchMedia('(pointer: coarse)').matches;
+let zg0 = 0;                                                  // 0 = 这次捏合不归这里管（网页、视频、画布、触屏自己处理）
+$('#pBody').addEventListener('gesturestart', (e) => {
+  const el = zoomImgEl(); zg0 = zoomTouch() ? 0 : el ? (pz && pz.el === el ? pz.s : 1) : gal && gal.i < 0 ? gal.z || 1 : !$('#pText').hidden ? tz : 0;
+  if (zg0) e.preventDefault();
+});
+$('#pBody').addEventListener('gesturechange', (e) => {
+  if (!zg0) return; e.preventDefault(); const el = zoomImgEl(), s = zg0 * e.scale;
+  if (el) zoomImg(el, s, e.clientX, e.clientY); else if (gal && gal.i < 0) zoomGrid(s); else zoomText(s);
+});
+// 放大了的图按住拖着挪
+$('#pBody').addEventListener('pointerdown', (e) => {
+  const el = zoomImgEl(); if (e.button !== 0 || e.pointerType === 'touch' || zoomTouch() || !el || e.target !== el || !pz || pz.el !== el || pz.s <= 1.001) return;
+  e.preventDefault(); const p0 = { x: e.clientX, y: e.clientY, ox: pz.x, oy: pz.y };
+  const end = () => { el.classList.remove('zdrag'); el.onpointermove = el.onpointerup = el.onpointercancel = el.onlostpointercapture = null; };
+  try { el.setPointerCapture(e.pointerId); } catch {} el.classList.add('zdrag');
+  el.onpointermove = (m) => { if (!(m.buttons & 1)) { end(); return; } pz.x = p0.ox + m.clientX - p0.x; pz.y = p0.oy + m.clientY - p0.y; zoomClamp(); zoomApply(); };   // 松手的那一下丢了（窗口外松开），下次移动就收尾
+  el.onpointerup = el.onpointercancel = el.onlostpointercapture = end;
+});
+$('#pBody').addEventListener('dblclick', (e) => { const el = zoomImgEl(); if (el && e.target === el && !zoomTouch()) { e.preventDefault(); zoomSmart(el, e.clientX, e.clientY); } });   // 关掉就卸载：里面的音视频、动画不在背后接着放；回话框还给大窗口或卡片
 // 焦点在预览页里时 Esc 到不了这里：预览端口发 HTML 时加了一小段脚本，把页面没用掉的 Esc 发过来。只认 #pFrame 和画布里的 iframe 发的
 // 画布里的网页发来的（Esc 两级）：推近 / 拖过时先回全景，已经在全景时再关预览
 addEventListener('message', (e) => {
