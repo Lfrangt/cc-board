@@ -576,6 +576,7 @@ fs.copyFileSync(path.join(HERE, '../autopilot.mjs'), path.join(TMP, 'autopilot.m
 fs.copyFileSync(path.join(HERE, '../remote.mjs'), path.join(TMP, 'remote.mjs'));       // 同理 import './remote.mjs'（手机远程）
 fs.copyFileSync(path.join(HERE, '../qr.mjs'), path.join(TMP, 'qr.mjs'));
 fs.copyFileSync(path.join(HERE, '../update.mjs'), path.join(TMP, 'update.mjs'));     // import './update.mjs'
+fs.copyFileSync(path.join(HERE, '../transcribe.mjs'), path.join(TMP, 'transcribe.mjs'));   // import './transcribe.mjs'（手机录音转文字，11/26）：少拷它，每一个改坏版的服务都在 import 那一行崩掉，整批都「红」却红在同一个错上，分不出各自被谁抓到
 fs.copyFileSync(path.join(HERE, '../ui.html'), path.join(TMP, 'ui.html'));           // 远程打开 / 要读它（没有它时远程首页 500，[10] 后面整段跟着红，改坏版就分不出是被哪一条抓到的）               // 同理 import './qr.mjs'
 // 端口按「第几路」（slot）分，不按改坏版的序号分（11/22 修）：state.test 一份用 T_PORT 到 T_PORT+1900（[10] 第 6 份服务 +900 的预览端口），
 // 原来 T_PORT = M_PORT + 序号，相邻两份只差 1，[4d] 的 +100…+102、[10] 的 +400…+950 会撞上隔壁那份。现在第 k 路固定用 M_PORT + k × SLOT，同时最多 4 路，
@@ -586,7 +587,7 @@ const run = ([name, [a, b, f = 'server.mjs']], slot) => new Promise((resolve) =>
   if (f === 'server.mjs') fs.writeFileSync(file, src.replace(a, b));
   else {                                             // 改坏的是 server.mjs 引用的文件：单独一个文件夹，原样的 server.mjs 旁边放改坏的那份
     const d = path.join(TMP, name); fs.mkdirSync(d, { recursive: true }); file = path.join(d, 'server.mjs'); fs.writeFileSync(file, src);
-    for (const g of ['projects.mjs', 'suggest.mjs', 'limits.mjs', 'accounts.mjs', 'route.mjs', 'preview.mjs', 'judge.mjs', 'org.mjs', 'autopilot.mjs', 'remote.mjs', 'qr.mjs', 'update.mjs', 'ui.html']) fs.copyFileSync(path.join(TMP, g), path.join(d, g));
+    for (const g of ['projects.mjs', 'suggest.mjs', 'limits.mjs', 'accounts.mjs', 'route.mjs', 'preview.mjs', 'judge.mjs', 'org.mjs', 'autopilot.mjs', 'remote.mjs', 'qr.mjs', 'update.mjs', 'transcribe.mjs', 'ui.html']) fs.copyFileSync(path.join(TMP, g), path.join(d, g));
     fs.writeFileSync(path.join(d, f), SRC[f].replace(a, b));
   }
   let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(Number(process.env.M_PORT || 4770) + slot * SLOT) } });

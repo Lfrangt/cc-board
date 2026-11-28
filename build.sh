@@ -1,9 +1,9 @@
 #!/bin/zsh
 # 把总控台打成一个 macOS 应用，装到 ~/Applications/总控台.app
 #   ./build.sh          编译 + 打包 + 安装（装完要重新点一次「允许控制 Ghostty」）
-#   ./build.sh update   只把界面和服务的代码（十一个文件）换成新版，不动应用本身（不用重新授权）
+#   ./build.sh update   只把界面和服务的代码（十六个文件）换成新版，不动应用本身（不用重新授权）
 # English: no argument = compile the Swift shell, sign it ad hoc, install it (macOS asks again before it may control Ghostty);
-#          `update`   = copy server.mjs / ui.html / projects.mjs / suggest.mjs / limits.mjs / statusline-tap.mjs / accounts.mjs / route.mjs / preview.mjs / judge.mjs / org.mjs / autopilot.mjs / remote.mjs / qr.mjs / update.mjs into the data dir and restart the service. No rebuild, no re-authorization.
+#          `update`   = copy server.mjs / ui.html / projects.mjs / suggest.mjs / limits.mjs / statusline-tap.mjs / accounts.mjs / route.mjs / preview.mjs / judge.mjs / org.mjs / autopilot.mjs / remote.mjs / qr.mjs / update.mjs / transcribe.mjs into the data dir and restart the service. No rebuild, no re-authorization.
 # NODE=/path/to/node overrides the node that checks syntax (the app looks for Node 22+ on its own, see app/node.swift).
 #   ./build.sh stage    只编译打包到 build/，不装、不动数据目录（release/release.sh 用）。Compile into build/ only; install nothing.
 # CCBOARD_APP_NAME=cc-board 换成公开版的名字和包信息（app/public-info.sh）；不设就是「总控台」，和以前一样。
@@ -15,7 +15,7 @@ NAME="${CCBOARD_APP_NAME:-总控台}"; STAGE="build/$NAME.app"; DEST="$HOME/Appl
 LIVE="$HOME/Library/Application Support/cc-board/app"
 # 两条路（./build.sh、./build.sh update）都走这里。先删 .bundle-version：公开 dmg 装过、后来改用 build.sh 装的机器，
 # 这个记号会留着旧版本号，服务就照样每天查 GitHub、提示「安装新版」；删了才是「build.sh 装的从不检查」（update.mjs、server.mjs 的 UPDATE_CUR）
-push_live() { mkdir -p "$LIVE"; /bin/rm -f "$LIVE/.bundle-version"; /bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs judge.mjs org.mjs autopilot.mjs remote.mjs qr.mjs update.mjs "$LIVE/"; }
+push_live() { mkdir -p "$LIVE"; /bin/rm -f "$LIVE/.bundle-version"; /bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs judge.mjs org.mjs autopilot.mjs remote.mjs qr.mjs update.mjs transcribe.mjs "$LIVE/"; }
 if [ "$1" = "update" ]; then
   /usr/bin/grep -q 'TMUX_SOCKET' server.mjs || { echo "server.mjs 还是 11/16 之前的 tmux -L ccboard 写法（没有 TMUX_SOCKET），拒绝上线：先合并 sock-fix" >&2; exit 1; }
   "$NODE" --check server.mjs
@@ -32,6 +32,7 @@ if [ "$1" = "update" ]; then
   "$NODE" --check remote.mjs       # 同上：手机远程的三道拦（Host、能碰哪些接口、设备凭证）
   "$NODE" --check qr.mjs           # 同上：配对二维码
   "$NODE" --check update.mjs       # 同上：检查新版本（公开安装包）
+  "$NODE" --check transcribe.mjs   # 同上：手机录音转文字；少拷它，server.mjs 的 import 失败，整个服务起不来（11/26 这个文件自己就因为一个正则字面量里混进了行分隔符，读不进来过一次）
   push_live
   PID=$(/usr/bin/curl -s -m 2 http://127.0.0.1:${CCBOARD_PORT:-4747}/health | /usr/bin/sed -n 's/.*"pid":\([0-9]*\).*/\1/p')
   if [ -n "$PID" ] && /bin/ps -o command= -p "$PID" | /usr/bin/grep -q "server.mjs"; then kill "$PID"; echo "updated; service restarting"; else echo "updated (service not running)"; fi
@@ -40,7 +41,7 @@ fi
 rm -rf build; mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
 /usr/bin/swiftc -O -swift-version 5 -target arm64-apple-macos13 -framework Cocoa -framework WebKit app/main.swift app/node.swift app/bundlecode.swift -o "$STAGE/Contents/MacOS/ccboard"
 /bin/cp app/Info.plist "$STAGE/Contents/Info.plist"
-/bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs judge.mjs org.mjs autopilot.mjs remote.mjs qr.mjs update.mjs "$STAGE/Contents/Resources/"
+/bin/cp server.mjs ui.html projects.mjs suggest.mjs limits.mjs statusline-tap.mjs accounts.mjs route.mjs preview.mjs judge.mjs org.mjs autopilot.mjs remote.mjs qr.mjs update.mjs transcribe.mjs "$STAGE/Contents/Resources/"
 [ -f app/AppIcon.icns ] && /bin/cp app/AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
 [ "$NAME" = "总控台" ] || /bin/sh app/public-info.sh "$STAGE" "$NAME"
 /usr/bin/codesign --force --sign - "$STAGE" >/dev/null 2>&1

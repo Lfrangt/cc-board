@@ -50,7 +50,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseSuggest, promptEmpty } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
 import { codexLimits, claudeLimits, geminiLimits, purgeTaps, limitPins, parseLimitsPin, TAP_PREFIX } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件），和 Gemini API 余额的估算
@@ -62,6 +62,7 @@ import { startPreview, kindOf, mimeOf, readText, serveFile, listGallery, canon, 
 import { buildOrg } from './org.mjs';
 import { pathsIn, RP_TTL, RP_KEEP, rpKeyOk, hiddenPath, parseHidIdle, pushWould, parseApns, pushToken, pushEnv, pushKinds, pushItems, pushPayload, apnsJwt, apnsVerdict, parseRemote, gate, allowed, checkDevice, newCode, useCode, newDevice, loadDevices, PAIR_HTML, PAIR_MS } from './remote.mjs';   // 远程准入、配对和推送纯规则
 import { parseUpdateConf, createUpdater } from './update.mjs';               // 公开安装包检查新版本、自动下载（只连 github.com，config 的 updateCheck / autoUpdate）
+import { parseAudio, createTranscriber, runGroup, voiceEnv, voiceSetup, parseVoiceHotwords, hotwordArg, sweepVoice, MAX_BODY, TOO_LONG, BUSY } from './transcribe.mjs';           // 手机录音转文字：手机只录、传上来，转写在这台 Mac 上本地做（vidscribe，不联网不花钱）
 import { qrSvg } from './qr.mjs';                                               // 配对链接画成二维码（零依赖）
 import { parseAutoConfig, autoArgs, autoInput, parseAuto, hardStop, autoMessage, isAutoPrompt, autoBlock, quotaHold, KW_TEXT, isKeepWarm, parseKeepWarm, keepWarmDue, kwPaneGate } from './autopilot.mjs';   // 自动续跑：哪些窗口能替他把灰字建议发出去、先问小模型                                         // 架构视图：哪个窗口归哪个窗口管（规则全在那里，这里只备料）
 
@@ -77,6 +78,7 @@ const TOKEN_FILE = path.join(DATA, '.token');
 const ARCHIVE_FILE = path.join(DATA, 'archive.json');
 const DELETED_DIR = path.join(DATA, 'deleted');
 const UPLOAD_DIR = path.join(DATA, 'uploads');          // 粘贴 / 拖进来的附件存这里，30 天后清
+const VOICE_TMP = path.join(DATA, 'voice-tmp');                 // 转写时的临时文件夹（每次一个，转完删）
 const UPLOAD_LOG_EXT = new Set(['.jpg', '.jpeg', '.png', '.heic', '.heif', '.gif', '.webp', '.tiff', '.tif', '.bmp', '.mov', '.mp4', '.m4v', '.pdf', '.txt', '.md', '.csv', '.json', '.zip', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.key', '.pages', '.numbers', '.m4a', '.mp3', '.wav']);   // 远程上传的日志只记这些扩展名，别的记 other
 const LIMITS_DIR = path.join(DATA, 'limits');           // statusline-tap.mjs 在各个 Claude 会话里取走的额度，一个会话一个文件
 const LIMITS_MS = Number(process.env.CCBOARD_LIMITS_MS) || 30000;   // 额度半分钟读一遍：它按「周」算，不用比这更勤
@@ -234,7 +236,7 @@ function parseReviewBatch(v) {
 }
 let CONFIG_OK = false;                  // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], limitsPin: null, accountFallback: null, org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf(), reviewBatchSec: REVIEW_BATCH_DEF };
+  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], limitsPin: null, accountFallback: null, voiceHotwords: [], org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf(), reviewBatchSec: REVIEW_BATCH_DEF };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
@@ -250,6 +252,7 @@ const CONFIG = (() => {
     const gemini = parseGemini(c.gemini);              // 写错只关这一项（同 remote / apns），不连累整份
     const geminiLedgers = parseGeminiLedgers(c.geminiLedgers);   // 同上
     const lp = parseLimitsPin(c.limitsPin); if (lp.error) console.log(`config ${CONFIG_FILE}：limitsPin 不用（${lp.error}），额度收起时照默认钉住`);   // 顶栏额度收起时钉住哪几条（11/24 ng 车）：写错只关这一项
+    const vh = parseVoiceHotwords(c.voiceHotwords); if (vh.error) console.log(`config ${CONFIG_FILE}：voiceHotwords 不用（${vh.error}），录音转文字只用默认热词`);   // 录音转文字追加的热词（私人的词放这里，不进代码；11/27 FIX-1）：写错只关这一项
     // 默认号到顶才退回哪个号（11/22 Khalil：「我之后新建的任务开到主号」）：写错只关这一项，不连累整份（同 remote / apns）
     const fbr = parseFallback(c.accountFallback, accounts, defaultAccount);
     if (fbr.error) console.log(`config ${CONFIG_FILE}：accountFallback 不用（${fbr.error}），默认号到顶也不退`);
@@ -258,8 +261,8 @@ const CONFIG = (() => {
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，limitsPin=${lp.pin ? lp.pin.length : '默认'}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns), limitsPin: lp.pin, reviewBatchSec: parseReviewBatch(c.reviewBatchSec) };   // remote / apns / limitsPin / reviewBatchSec 写错各自关闭（回默认），不抛
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，limitsPin=${lp.pin ? lp.pin.length : '默认'}，voiceHotwords=${vh.list.length}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, voiceHotwords: vh.list, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns), limitsPin: lp.pin, reviewBatchSec: parseReviewBatch(c.reviewBatchSec) };   // remote / apns / limitsPin / reviewBatchSec 写错各自关闭（回默认），不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -458,6 +461,20 @@ function run(cmd, args, { input, timeout = 15000, env, maxBuffer = 8 << 20 } = {
   });
 }
 const osa = (script, args = [], timeout) => run('/usr/bin/osascript', ['-', ...args], { input: script, timeout });
+// 转写工具：vidscribe（Qwen3-ASR，本机跑）。选哪个、超时多久由 voiceSetup 定（试验服务才认 CCBOARD_VIDSCRIBE / CCBOARD_VOICE_TIMEOUT_MS，线上永远是下面这个路径和 90 秒）。
+// 起进程的环境显式补 PATH（~/.local/bin、/opt/homebrew/bin）和 HF_HUB_OFFLINE：从 Dock / 登录项 / 重启起来的服务只读 ~/.zprofile，PATH 里没有它们，每段录音都会转失败（11/27 FIX-1 M1）。
+const VOICE = voiceSetup({ sandbox: SANDBOX, env: process.env, home: HOME });
+const VIDSCRIBE = VOICE.bin;
+const voiceLog = (m) => console.log(`voice ${new Date().toISOString()} ${m}`);
+const transcriber = createTranscriber({ bin: VIDSCRIBE, exec: (cmd, args, o) => runGroup(cmd, args, { ...o, env: voiceEnv(HOME, process.env) }), workDir: VOICE_TMP, timeoutMs: VOICE.timeoutMs, hotwords: () => hotwordArg(CONFIG.voiceHotwords), log: voiceLog });
+// 服务上次被杀 / 崩溃 / 重启时，转写进程（自己当组长，不跟着走）和 voice-tmp/v-* 会留下；启动时清掉（11/27 FIX-1 S1）。只读模式不清：它可能和别的服务共用数据目录。
+// 什么时候清（FIX-2 N1）：只在 listen 成功以后（下面 server.listen 的回调里调）。同一个端口、同一个数据目录再起一份（外壳 0.8 秒 /health 没答上就会再起）时，第二份会 EADDRINUSE 退出，
+// 它在 listen 之前就清的话，会把第一份正在转的那组杀掉、voice-tmp 清空，手机收到「格式读不了」。ps 多取 ppid：只有组长的父进程是 1（launchd 收养）的才是孤儿，活服务起的组长父进程是 node。
+const sweepVoiceAtStart = () => {
+  if (READONLY) return;
+  let ps = ''; try { ps = execFileSync('/bin/ps', ['-axww', '-o', 'pid=,ppid=,pgid=,command='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }); } catch (e) { voiceLog(`sweep 读不了进程表（${String((e && e.message) || e).slice(0, 80)}），只清临时夹`); }
+  sweepVoice({ bin: VIDSCRIBE, workDir: VOICE_TMP, psText: ps, log: voiceLog });
+};
 let TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => fs.existsSync(p)) || 'tmux';
 // tmux 一律按会话找它住的那台：枚举时记下「会话名 → 套接字」；表里没有（刚开出来、枚举还没轮到）就看 tmux/<名字>.sock 在不在，不在才是老的 tmux.sock
 const sockOf = new Map();
@@ -3597,10 +3614,17 @@ function reply(res, code, body, type = 'application/json; charset=utf-8') {
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
   res.end(data);
 }
-function readBody(req, max = 400000) {
+// soft（只给 /api/transcribe 用，FIX-2 d）：超过上限不立刻掐断连接，让调用的人能回一句「录音太长了」——没有 Content-Length 的（chunked）请求事先看不出多长，只能读到超了才知道；
+// 之后的内容读掉丢掉（不存），最多再读 64 MiB，再多就掐断。
+function readBody(req, max = 400000, soft = false) {
   return new Promise((resolve, reject) => {
-    let n = 0; const parts = [];
-    req.on('data', (c) => { n += c.length; if (n > max) { reject(new Error('too big')); req.destroy(); } else parts.push(c); });
+    let n = 0, big = false; const parts = [];
+    req.on('data', (c) => {
+      n += c.length;
+      if (big) { if (n > max + 64 * 1024 * 1024) req.destroy(); return; }
+      if (n > max) { big = true; parts.length = 0; reject(Object.assign(new Error('too big'), { tooBig: true })); if (!soft) req.destroy(); }
+      else parts.push(c);
+    });
     req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(parts).toString('utf8') || '{}')); } catch (e) { reject(e); } });
     req.on('error', reject);
   });
@@ -3731,12 +3755,18 @@ const handle = async (req, res, via) => {
     }
     if (req.method !== 'POST') return reply(res, 405, { error: 'method' });
     if (READONLY) return reply(res, 403, { ok: false, error: '只读模式，不能改东西' });
-    const body = await readBody(req, u.pathname === '/api/upload' ? 48 * 1024 * 1024 : 400000);
+    if (u.pathname === '/api/transcribe') {         // 先看够不够格再收正文（11/27 FIX-1 S3 / S4）：忙着就别把几 MB 的 base64 收下来、解码、存盘再说「忙」；声明的长度就超了，也不收
+      if (transcriber.full) { if (rem && rem.dev) remoteLog(`act ${rem.dev.id} ${rem.login} POST ${pathOf(req)} busy`); return reply(res, 200, { ok: false, busy: true, error: BUSY }); }
+      if (Number(req.headers['content-length']) > MAX_BODY) return reply(res, 200, { ok: false, error: TOO_LONG });
+    }
+    let body;
+    try { body = await readBody(req, u.pathname === '/api/upload' ? 48 * 1024 * 1024 : u.pathname === '/api/transcribe' ? MAX_BODY : 400000, u.pathname === '/api/transcribe'); }   // 录音的体上限 = 允许的最大录音转成 base64 的长度，不再和照片一样放到 48 MiB
+    catch (e) { if (e && e.tooBig && u.pathname === '/api/transcribe') return reply(res, 200, { ok: false, error: TOO_LONG }); throw e; }   // 没写 Content-Length 的也要回「太长」（FIX-2 d）
     if (rem && rem.dev) {                            // 等正文的时候这台可能刚被撤销（审查 M1）：拿到正文再核一次，撤销了就不办
       if (devices.get(rem.dev.id) !== rem.dev) { remoteLog(`deny revoked-in-flight ${rem.dev.id} POST ${pathOf(req)}`, 'd:inflight:' + rem.dev.id); return reply(res, 401, { error: 'device', why: 'unknown device' }); }
       const sid8 = (/^[\w-]{1,8}/.exec(typeof body.sid === 'string' ? body.sid : '') || [''])[0];   // 只取字母数字横杠：正文里的换行不能伪造日志行
       let meta = '';                                 // B6 上传：只多记大小和扩展名，不记原名和内容
-      if (u.pathname === '/api/upload') {
+      if (u.pathname === '/api/upload' || u.pathname === '/api/transcribe') {
         const d = typeof body.data === 'string' ? body.data : '';   // 只量长度，不对几十 MB 的正文再跑正则、复制
         const n = d.startsWith('data:') ? d.length - d.indexOf(',') - 1 : d.length;
         const pad = d.endsWith('==') ? 2 : d.endsWith('=') ? 1 : 0;
@@ -3864,6 +3894,18 @@ const handle = async (req, res, via) => {
       try { dest = uploadPath(body.name || 'file'); } catch (e) { return reply(res, 200, { ok: false, error: String(e.message || e) }); }
       fs.writeFileSync(dest, buf, { mode: 0o600 });
       return reply(res, 200, { ok: true, ...fileInfo((await normalizeFile(dest)) || dest) });
+    }
+    if (u.pathname === '/api/transcribe') {         // 手机录的音：存到 uploads（转不出来时还在，能重试），在这台 Mac 上转成文字，回给手机放进输入框当草稿（不自动发）
+      const au = parseAudio(body);
+      if (!au.ok) return reply(res, 200, { ok: false, error: au.error });
+      let dest;
+      try { dest = uploadPath('voice' + au.ext); } catch (e) { return reply(res, 200, { ok: false, error: String(e.message || e) }); }
+      fs.writeFileSync(dest, au.buf, { mode: 0o600 });
+      const ac = new AbortController();              // 手机断开了（锁屏、切走、网断）：没人收结果，别再占着 2 GB 的模型（11/27 FIX-1 S2）。用 res 的 close：req 的 close 在请求读完就响，不代表连接断了
+      res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+      const t = await transcriber.transcribe(dest, { signal: ac.signal });
+      if (t.cancelled) return;                        // 连接已经没了，没处可回；音频还留在 uploads
+      return reply(res, 200, t.ok ? { ok: true, text: t.text, ms: t.ms, ...(t.truncated ? { truncated: true } : {}), ...fileInfo(dest) } : { ok: false, busy: t.busy === true, error: t.error, ...fileInfo(dest) });
     }
     if (u.pathname === '/api/pick') {               // 弹系统的选文件框；选的是磁盘上已有的文件，不用再传一遍
       const r = await osa(PICK_FILES, [String(body.prompt || '选要发给它的文件')], 600000);
@@ -4022,6 +4064,7 @@ server.on('error', (e) => { console.error('listen', e.message); process.exit(1);
 const preview = startPreview({ port: PREVIEW_PORT, home: HOME_REAL, log: (m) => console.log(`preview ${new Date().toISOString()} ${m}`) });
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`cc-board ${new Date().toISOString()} http://127.0.0.1:${PORT}/?k=${TOKEN} pid=${process.pid}`);
+  sweepVoiceAtStart();                               // 端口是自己的了才清上一次留下的转写进程组（FIX-2 N1）
   if (REMOTE.on && REMOTE_PORT_BAD) { remoteDown = 'bad port'; remoteLog(`listen 远程端口写错（${REMOTE_PORT_RAW.slice(0, 20)}），不听，手机连不上`); }
   else if (REMOTE.on) {                              // 远程端口：只在 remote 开着时听，也只听 127.0.0.1（tailscale serve 在本机转过来）。听不上不连累总控台本身
     const rs = http.createServer((req, res) => handle(req, res, 'remote'));

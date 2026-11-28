@@ -112,11 +112,11 @@ export function gate(h, R, method, via) {
 }
 
 // ───────────── 第二道：远程能碰哪些接口 ─────────────
-// 只给看和说话：状态、对话、发话、答选择框、开新任务、知道了、审完了、归档，加 B6 上传附件（11/25：手机传照片 / 文件，存进 uploads、回路径，跟 Mac 上粘贴同一个处理）。
+// 只给看和说话：状态、对话、发话、答选择框、开新任务、知道了、审完了、归档，加 B6 上传附件（11/25：手机传照片 / 文件，存进 uploads、回路径，跟 Mac 上粘贴同一个处理），加录音转文字（11/26：手机传一段音频，Mac 本地转成文字回给手机当草稿，不联网、不自动发）。
 // 删除、打开 / 选中文件、聚焦、去终端、选文件框、自动续跑、一起退出、预览、接回、取消、配对管理本身……不在表里的一律拒。按「方法 + 路径」整串查，不做前缀匹配。
 // 上传不限文件类型（Mac 上本来就不限）：能发话的设备已经能让窗口跑任意命令，类型白名单挡不住什么；它只决定字节落在 uploads、路径交给会话。
 export const REMOTE_API = new Set(['GET /api/state', 'GET /api/turns', 'GET /api/archive',
-  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/upload', 'POST /api/remote/push', 'POST /api/remote/preview']);
+  'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/upload', 'POST /api/transcribe', 'POST /api/remote/push', 'POST /api/remote/preview']);
 export const allowed = (method, pathname) => REMOTE_API.has(method + ' ' + pathname);
 
 // ───────────── 远程预览（C1，11/21）：只给这个会话对话里出现过的文件 ─────────────

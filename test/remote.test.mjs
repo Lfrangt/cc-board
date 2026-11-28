@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 ../remote.mjs（或命令行给的另一份，比如改坏版）。不起服务、不碰 tmux、不联网。
  * [OUTPUT]: 逐项打印 ok / FAIL，最后一行「结果：N 过，M 没过」，退出码 0 = 全过。带 --mutants 时改跑反向对照：造若干个改坏的 remote.mjs，每个都必须让本测试变红
  * [POS]: test/ 的「手机远程」规则测试（remote.mjs 的三道拦）。测：config 的 remote 什么算开、写错一律关且不抛；Host / 登录头 / Origin 怎么认；
- *        远程能碰的接口恰好那 11 个（11/21 加远程预览）；设备凭证、配对码、设备表；APNs 配置、令牌、锁屏类别、ES256 验签、失效判定与空闲放行。
+ *        远程能碰的接口恰好那 13 个（11/21 加远程预览，11/25 B6 上传，11/26 录音转文字）；设备凭证、配对码、设备表；APNs 配置、令牌、锁屏类别、ES256 验签、失效判定与空闲放行。
  *        11/25 待审阅推送（手表）：pushKinds 认设备声明的 kinds、pushItems 按设备滤 review、pushPayload 的 PUSH_REVIEW_ONE / _MANY / 混合、只含 review 不带 sound、设备表保留 push.review。
  *        接进 server.mjs 之后的端到端断言在 state.test.mjs 的 [10]，接线的改坏版在 mutants.mjs 的 remote-*。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -35,7 +35,8 @@ if (process.argv.includes('--mutants')) {
     'bad-host-skipped':     ["    if (!TS_HOST.test(x)) return off('remote.hosts 里有不是 *.ts.net 的名字：' + String(h).slice(0, 80));", "    if (!TS_HOST.test(x)) continue;"],
     'any-domain':           ["(?:\\\\.${LABEL})*\\\\.ts\\\\.net(?::\\\\d{1,5})?$`", "(?:\\\\.${LABEL})*(?::\\\\d{1,5})?$`"],
     'rp-api-missing':       ["'POST /api/remote/push', 'POST /api/remote/preview']", "'POST /api/remote/push']"],
-    'upload-api-missing':   ["'POST /api/archive', 'POST /api/upload', 'POST /api/remote/push'", "'POST /api/archive', 'POST /api/remote/push'"],
+    'transcribe-api-missing': ["'POST /api/upload', 'POST /api/transcribe', 'POST /api/remote/push'", "'POST /api/upload', 'POST /api/remote/push'"],
+    'upload-api-missing':   ["'POST /api/archive', 'POST /api/upload', 'POST /api/transcribe'", "'POST /api/archive', 'POST /api/transcribe'"],
     'rp-key-no-expiry':     ["!!it && it.exp > now && devs", "!!it && devs"],
     'rp-key-any-device':    [" && devs.get(it.dev.id) === it.dev && it.login", " && devs.has(it.dev.id) && it.login"],
     'rp-key-any-login':     [" && it.login === login;", ";"],
@@ -150,11 +151,11 @@ ok(g({ host: H, 'tailscale-user-login': LOGIN }, ON, 'POST').deny === 'no origin
 for (const o of ['http://' + H, 'https://evil.com', 'https://other.tail1a2b.ts.net', 'null', 'https://' + H + ':8443', 'https://' + H + '/']) ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: o }, ON, 'POST').deny === 'bad origin', 'Origin 是 ' + o + ' → 拒');
 ok(g({ host: H, 'tailscale-user-login': LOGIN, origin: 'https://evil.com' }).deny === 'bad origin', 'GET 带着别人的 Origin 也拒');
 
-console.log('\n第二道：远程能碰的接口恰好 12 个，按「方法 + 路径」整串查');
-const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/upload', 'POST /api/remote/push', 'POST /api/remote/preview'];
-ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 12, '原有九条加 B6 上传、设备推送登记、远程预览：放行，恰好这 12 个', [...R.REMOTE_API].join(','));
+console.log('\n第二道：远程能碰的接口恰好 13 个，按「方法 + 路径」整串查');
+const YES = ['GET /api/state', 'GET /api/turns', 'GET /api/archive', 'POST /api/send', 'POST /api/answer', 'POST /api/new', 'POST /api/ack', 'POST /api/processed', 'POST /api/archive', 'POST /api/upload', 'POST /api/transcribe', 'POST /api/remote/push', 'POST /api/remote/preview'];
+ok(YES.every((x) => R.allowed(...x.split(' '))) && R.REMOTE_API.size === 13, '原有九条加 B6 上传、录音转文字、设备推送登记、远程预览：放行，恰好这 13 个', [...R.REMOTE_API].join(','));
 const NO = ['POST /api/delete', 'POST /api/open', 'POST /api/reveal', 'POST /api/focus', 'POST /api/attach', 'POST /api/pick', 'POST /api/crash', 'POST /api/auto', 'POST /api/preview', 'POST /api/unarchive', 'POST /api/cancel',
-  'POST /api/remote/pair', 'POST /api/remote/revoke', 'GET /api/remote/devices', 'POST /api/remote/claim', 'GET /health', 'GET /api/send', 'POST /api/state', 'GET /api/state/', 'GET /API/STATE', 'GET /api/state%20', 'GET /api/constructor', 'GET constructor', 'HEAD /api/state', 'OPTIONS /api/send'];
+  'POST /api/remote/pair', 'POST /api/remote/revoke', 'GET /api/remote/devices', 'POST /api/remote/claim', 'GET /health', 'GET /api/send', 'GET /api/transcribe', 'POST /api/transcribe/', 'POST /api/Transcribe', 'POST /api/state', 'GET /api/state/', 'GET /API/STATE', 'GET /api/state%20', 'GET /api/constructor', 'GET constructor', 'HEAD /api/state', 'OPTIONS /api/send'];
 const leak = NO.filter((x) => R.allowed(...x.split(' ')));
 ok(leak.length === 0, '删除、打开 / 选中文件、聚焦、去终端、选文件框、一起退出、自动续跑、预览、接回、取消、配对管理（含 claim，它另走一条路）、/health、换了方法、结尾斜杠、大小写、原型上的名字：一律不放', JSON.stringify(leak));
 

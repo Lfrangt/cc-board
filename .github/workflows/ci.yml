@@ -15,13 +15,14 @@ jobs:
         with:
           node-version: 22
       - run: brew install tmux
-      - run: node --check server.mjs && node --check projects.mjs && node --check suggest.mjs && node --check limits.mjs && node --check statusline-tap.mjs && node --check accounts.mjs && node --check route.mjs && node --check preview.mjs && node --check judge.mjs && node --check org.mjs && node --check autopilot.mjs && node --check update.mjs
+      - run: node --check server.mjs && node --check projects.mjs && node --check suggest.mjs && node --check limits.mjs && node --check statusline-tap.mjs && node --check accounts.mjs && node --check route.mjs && node --check preview.mjs && node --check judge.mjs && node --check org.mjs && node --check autopilot.mjs && node --check update.mjs && node --check transcribe.mjs
       - run: node test/projects.test.mjs
       - run: node test/suggest.test.mjs
       - run: node test/limits.test.mjs
       - run: node test/route.test.mjs
       - run: node test/accounts.test.mjs
       - run: node test/update.test.mjs
+      - run: node test/transcribe.test.mjs   # 假 vidscribe；不带 --real（真引擎要 2 GB 内存和本机的模型）
       - run: node test/autopilot.test.mjs
       - run: node test/judge.test.mjs
       - run: node test/org.test.mjs
