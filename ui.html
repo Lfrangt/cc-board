@@ -30,6 +30,8 @@
         架构图有两种摆法（顶栏「层级 | 放射」，ccb_orgshape）：层级是上面这一张；放射（#org.map）是同一份 org、同一批方块，你和总管在圆心、每个项目一个扇区、窗口按上下级一圈圈往外，
         orgMapLayout()（纯函数）算每个方块在哪，orgMapPaint() / orgMapArrange() 摆上去，orgMapLines() 画线，画布能拖能缩放（orgV、orgMapApply / orgMapFit / orgMapZoom）。
         文件清单的 ± 用 openDiff 按需读取逐笔补丁；复用 #preview、来源卡片底栏。正文画布与字色均来自主题 token。
+        玻璃（11/27 乙「只加材质」）：顶栏、封面回话框（.reply .fld）、底下那排点（.pager）、新任务弹窗用 :root 的 --g-fill / --g-fill-2 / --blur / --g-rim / --g-shadow，墙上的卡从顶栏下面滚过；底、卡片、墨线不动。
+        封面最前面那张在跑的卡正文是歌词式进展：lyFeed() 每拍把那个窗口当前的 tool / note 记进页面内存里的 7 条环形缓冲（lyBuf，服务不改），fillBody() → lyPaint() / lyPlace() 摆位，layout() 经 lySync() 跟着换前面那张；没有进度条。
  [PROTOCOL]: Update this header on change, then check CLAUDE.md
 -->
 <html lang="zh-CN">
@@ -80,6 +82,13 @@
   --blur: saturate(180%) blur(20px);
   --shadow-pop: 0 10px 32px light-dark(rgba(0,0,0,.14), rgba(0,0,0,.55)), 0 0 0 1px var(--hair-2);
   --shadow-now: 0 24px 64px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.62)), 0 0 0 1px var(--hair-2);
+  /* 玻璃（乙）的派生量：都从上面已有的值混出来，不是新颜色 */
+  --line-g: color-mix(in srgb, var(--ink-solid) 9%, transparent);
+  --g-fill: color-mix(in srgb, var(--surface) 72%, transparent);
+  --g-fill-2: color-mix(in srgb, var(--raised) 84%, transparent);
+  --rim-hi: light-dark(var(--surface), color-mix(in srgb, var(--text) 34%, transparent));
+  --g-rim: linear-gradient(180deg, var(--rim-hi), color-mix(in srgb, var(--rim-hi) 40%, transparent) 24%, color-mix(in srgb, var(--rim-hi) 12%, transparent) 70%, color-mix(in srgb, var(--rim-hi) 45%, transparent));
+  --g-shadow: 0 0 0 .5px var(--line-g), var(--drop);
   --r-card: 8px; --r-cover: 10px; --r-ctl: 6px; --r-badge: 4px; --r-pill: 980px;
   --ease: cubic-bezier(.4,0,.6,1); --ease-out: cubic-bezier(.25,.1,.3,1);
   --spring: linear(0, 0.0827, 0.2515, 0.4328, 0.5933, 0.7215, 0.8172, 0.885, 0.9309, 0.9607, 0.9793, 0.9903, 0.9964, 0.9996, 1.001, 1, 1);
@@ -775,8 +784,39 @@ body.org main:has(#org.map){overflow:hidden}
 .omctl{position:absolute;right:16px;bottom:16px;z-index:20}
 .omctl button{min-width:28px;justify-content:center}
 @media (max-width:700px){body.org #org{padding-top:18px} .orow{flex-direction:column;align-items:stretch;width:auto;min-width:0;gap:24px;padding-top:0} .ocol{width:auto} .obus{display:none}}
+/* 玻璃（11/27 乙「只加材质」）：只给浮在内容上的控件——顶栏（封面、墙都是）、封面卡片里的回话框、底下那排点、新任务弹窗。底、卡片、卡片的墨线照旧。
+   质感：半透明底 + 背景模糊（--blur）、顶沿 1px 受光边（::before 上亮下淡，mask 只留 1px 的边）、一层软影子（--g-shadow）。浅色深色都由 :root 里的 light-dark() 定 */
+.bar,.pager,body.flow .card .reply .fld,#newDlg{-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--g-shadow)}
+.bar,.pager,body.flow .card .reply .fld{background:var(--g-fill)}
+#newDlg{background:var(--g-fill-2)}
+.bar::before,.pager::before,body.flow .card .reply .fld::before,#newDlg::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;background:var(--g-rim);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+/* 顶栏：墙上的卡从它下面滚过去（墙的格子高度本来就按 --bar-h 扣，上边距补回同样多，第一屏的位置不变）；底边一根细线 */
+.bar{border-bottom-color:var(--line-g)}
+body.wall main{inset:0;padding-top:calc(var(--bar-h) + var(--gap));scroll-padding-top:calc(var(--bar-h) + var(--gap))}
+body.wall .blank{top:var(--bar-h)}
+/* 额度条：靠墨色透明度分已用 / 未用；用到 85% 的琥珀（.lq.warn）更具体，照旧 */
+.lq .mtr{background:color-mix(in srgb,var(--text) 12%,transparent)}
+.lq .mtr i{background:color-mix(in srgb,var(--text) 55%,transparent)}
+/* 封面回话框：玻璃在包着输入框的 .fld 上（textarea 没有 ::before）；输入框自己的底和边退掉，指上去、获得焦点时的边照旧 */
+body.flow .card .reply .fld{position:relative;border-radius:var(--r-cover)}
+body.flow .card .reply textarea{background:transparent;border-color:transparent;border-radius:inherit}
+body.flow .card .reply textarea:hover:not(:focus):not(:disabled){border-color:var(--hair-2)}
+body.flow .card .reply textarea:focus{border-color:var(--hair-3)}
+/* 底下那排点收进一枚玻璃胶囊 */
+.pager{left:0;right:0;width:max-content;max-width:calc(100% - 28px);margin:0 auto;padding:3px 6px;border-radius:var(--r-pill)}
+/* 歌词式进展：封面最前面那张在跑的卡，正文是这个窗口最近几条 tool / note（lyFeed），一行行往上走。
+   当前一行 100% 墨，上一行 58%，再往上 50%，最上面用遮罩淡出；只动 transform / opacity。下面不写「第 N 步」 */
+.lyr{position:relative;height:300px;-webkit-mask-image:linear-gradient(transparent,#000 42%);mask-image:linear-gradient(transparent,#000 42%)}
+.body.lyb{display:flex;flex-direction:column;justify-content:flex-end}
+.body.lyb .lyr{flex:none}
+.ln{position:absolute;left:0;right:0;bottom:0;font-size:21px;line-height:1.42;font-weight:600;letter-spacing:-.014em;color:var(--text);opacity:.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;
+  transition:transform var(--d-move) var(--spring),opacity var(--d-move) var(--ease-out)}
+.ln.r0{opacity:1} .ln.r1{opacity:.58}
+.ln.out{transition:transform var(--d2) var(--ease),opacity var(--d2) var(--ease)}
+.enter{animation:enter var(--d3) var(--ease-out) both}
+@keyframes enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @media (max-width:700px){.hint,.brand,.lim,.limbtn{display:none} .bar{gap:8px;padding-left:10px;padding-right:10px} .seg button{padding:0 8px} :root{--cw:calc(100vw - 28px)} .arow{flex-wrap:wrap}.arow .t{flex-basis:100%}}
-@media (prefers-reduced-motion:reduce){*{animation:none!important} dialog,dialog[open]{transform:none} .card{transition-property:opacity,filter!important} .halo{transition-property:opacity!important}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important} dialog,dialog[open]{transform:none} .card{transition-property:opacity,filter!important} .halo{transition-property:opacity!important} .ln{transition:none!important}}
 </style>
 </head>
 <body class="flow">
@@ -999,7 +1039,6 @@ const RULES = [
   [/^这个文件不在了：(.+)$/, 'This file no longer exists: $1'],
   [/^「(.*)」超过 30 MB，没加$/, '“$1” is over 30 MB, skipped'],
   [/^归档 = 停掉会话、对话保留，可恢复。删除后对话记录保留 (\d+) 天。$/, 'Archive stops the session and keeps the conversation. Deleted transcripts are kept for $1 days.'],
-  [/^(.+) · 第 (\d+) 步$/, (m, a, n) => T(a) + ' · step ' + n],
   [/^读 (.+)$/, 'Read $1'], [/^改 (.+)$/, 'Edit $1'], [/^派子任务：(.*)$/, 'Subagent: $1'], [/^搜索：(.*)$/, 'Search: $1'], [/^用技能 (.+)$/, 'Skill $1'], [/^给 (.+) 发消息$/, 'Message $1'],
   // 架构视图（11/16 khalil-a0）：「你」那一行、职级旁边的数、组名、第三行、悬停时的依据
   [/^(\d+) 个窗口$/, (m, n) => n + (n === '1' ? ' window' : ' windows')], [/^(\d+) 个在跑$/, '$1 running'], [/^(\d+) 件事等你$/, (m, n) => n + (n === '1' ? ' needs you' : ' need you')],
@@ -1383,6 +1422,75 @@ function bodyHTML(s, v) {
   return h;
 }
 
+// ── 歌词式进展：封面最前面那张在跑的卡，正文换成这个窗口最近几条 tool / note，一行行往上走 ──
+// 来源只是每一拍 /api/state 里这个窗口当前的 tool 和 note（服务不改）：页面内存里每个窗口留最近 LY_N 条，各自和自己上一拍一样、或和最后一条一样就不加。
+// 换前面那张、换视图由 layout() 经 lySync() 再走一遍 fillBody()；不在跑（待审阅、要你处理……）的卡照 bodyHTML 原样
+const LY_N = 7, LY_GAP = 12, lyBuf = new Map();
+function lyFeed(s, v) {
+  if (v.k !== 'busy' || v.bg) return;
+  let b = lyBuf.get(s.sid); if (!b) lyBuf.set(s.sid, b = { lines: [], n: 0, note: null, tool: null });
+  const push = (t) => { if (!t || (b.lines.length && b.lines[b.lines.length - 1].t === t)) return; b.lines.push({ n: ++b.n, t }); if (b.lines.length > LY_N) b.lines.shift(); };
+  const note = s.note ? firstSentence(s.note) : '', tool = s.tool ? T(s.tool) : '';
+  if (note !== b.note) { b.note = note; push(note); }
+  if (tool !== b.tool) { b.tool = tool; push(tool); }
+}
+const lyOn = (c) => mode === 'flow' && !!c.s && !!c.v && c.v.k === 'busy' && !c.v.bg && c.v.why !== 'stall' && c.el.isConnected && !c.el.classList.contains('side');
+function fillBody(c) {
+  const s = c.s, v = c.v, el = c.el, body = $('.body', el), hd = $('.head', el);
+  if (lyOn(c)) {
+    if (c.lyOut) { clearTimeout(c.lyOut); c.lyOut = 0; body.dataset.k = ''; }
+    if (hd.textContent) hd.textContent = '';          // 它说的那句已经是歌词里的一行，卡头不再重复
+    lyPaint(c, body); return;
+  }
+  if (c.lyOut) return;                                 // 歌词正在往上淡出，到点再换成交付的正文
+  if (body.dataset.k === 'ly' && v.k !== 'busy' && mode === 'flow' && !el.classList.contains('side') && !calm.matches) { lyLeave(c, body); return; }
+  const cv = coverOf(s, v); if (hd.textContent !== cv.head) hd.textContent = cv.head;
+  if (body.classList.contains('lyb')) body.classList.remove('lyb');
+  const key = [v.k, s.status, s.resultAt, s.noteAt, s.ask ? JSON.stringify(s.ask) : '', s.screen || '', s.dialog ? JSON.stringify(s.dialog.options) : '', v.why, s.alert ? s.alert.key : '', v.alert,
+    v.need === 'review' && Array.isArray(s.wrote) && s.wrote.length ? JSON.stringify([s.wrote, s.wroteMore]) : ''].join('|');
+  if (body.dataset.k !== key) { const keep = body.dataset.k && body.dataset.k.split('|')[0] === v.k ? body.scrollTop : 0; body.dataset.k = key; body.innerHTML = L(bodyHTML(s, v)); body.scrollTop = keep; }
+  const tick = $('.tick', body);
+  if (tick) { const tk = T(s.tool || '思考中'); if (tick.textContent !== tk) tick.textContent = tk; }     // 只写在用的工具：「第 N 步」11/27 Khalil 说多余，还要多久在卡头（预计 HH:MM 交）
+}
+function lyPaint(c, body) {
+  const s = c.s, b = lyBuf.get(s.sid), lines = b ? b.lines : [];
+  let box = body.dataset.k === 'ly' ? body.firstElementChild : null; const fresh = !box;
+  if (fresh) { body.dataset.k = 'ly'; if (!body.classList.contains('lyb')) body.classList.add('lyb'); body.innerHTML = '<div class="lyr"></div>'; body.scrollTop = 0; box = body.firstElementChild; }
+  const want = new Set(lines.map((x) => String(x.n)));
+  for (const e of [...box.children]) if (!want.has(e.dataset.n)) e.remove();
+  const have = new Set([...box.children].map((e) => e.dataset.n)); let added = false;
+  for (const x of lines) if (!have.has(String(x.n))) {
+    const e = document.createElement('div'); e.className = 'ln'; e.dataset.n = x.n; e.textContent = x.t;
+    if (!fresh && !calm.matches) { e.style.transform = 'translateY(30px)'; e.style.opacity = '0'; }    // 新的一行从下面滑上来
+    box.appendChild(e); added = true;
+  }
+  if (fresh || added || box.dataset.w !== String(box.clientWidth)) lyPlace(box, !fresh);
+}
+// 从最新一行往上摞：每行的位置按真实行高（最多两行）算。刚换上来的一整组、减弱动态效果时直接到位
+function lyPlace(box, animate) {
+  const ls = [...box.children], n = ls.length, hs = ls.map((e) => e.offsetHeight), move = animate && !calm.matches;   // 先读行高：顺带把新行「在下面、透明」的起点定下来，过渡才有起点
+  let acc = 0; const off = new Array(n);
+  for (let i = n - 1; i >= 0; i--) { off[i] = acc; acc += hs[i] + LY_GAP; }
+  ls.forEach((e, i) => {
+    const cls = 'ln r' + Math.min(n - 1 - i, 2); if (e.className !== cls) e.className = cls;
+    if (!move) e.style.transition = 'none';
+    e.style.transitionDelay = move ? i * 45 + 'ms' : '0ms';        // 往下每行晚 45ms
+    e.style.transform = 'translateY(' + -off[i] + 'px)'; e.style.opacity = '';
+  });
+  if (!move) { void box.offsetHeight; for (const e of ls) e.style.transition = ''; }
+  box.dataset.w = box.clientWidth;
+}
+// 交付了（在最前面、从在跑变成别的）：歌词往上淡出，420ms 后换成交付的正文，卡头和正文淡入
+function lyLeave(c, body) {
+  [...body.querySelectorAll('.ln')].forEach((e, i) => { e.classList.add('out'); e.style.transitionDelay = i * 30 + 'ms'; e.style.opacity = '0'; e.style.transform += ' translateY(-14px)'; });
+  c.lyOut = setTimeout(() => {
+    c.lyOut = 0; body.dataset.k = ''; fillBody(c);
+    if (lyOn(c) || mode !== 'flow' || c.el.classList.contains('side') || calm.matches) return;
+    for (const x of [$('.head', c.el), body]) { x.classList.add('enter'); setTimeout(() => x.classList.remove('enter'), 400); }   // 动画是 both：不摘掉会一直压着「退到旁边时正文淡到 .28」
+  }, 420);
+}
+function lySync() { for (const c of cards.values()) if (c.s && c.v && (lyOn(c) || $('.body', c.el).dataset.k === 'ly')) fillBody(c); }
+
 // ── 这一轮改了哪些文件（11/16 P1-9）、两个窗口同时在写一个仓库（P1-4）──
 // 服务给每个会话：wrote [{ path（~ 开头）, n }]（这一轮用 Edit / Write / MultiEdit / NotebookEdit / apply_patch 写过的，新的一轮开始才清）、wroteMore（没列出来的个数）、
 // collide [{ repo, with: [{ sid, name }] }]（30 分钟内墙上另一个窗口也往同一个 git 仓库里写过）。这里只照着画，不自己判断
@@ -1498,7 +1606,7 @@ function makeCard(sid) {
     '<h2 class="title" title="双击放大（⌘O）"></h2><p class="head"></p><p class="ask" hidden></p><p class="clash" hidden></p>' +
     '<p class="you"></p><div class="body"></div>' +
     '<div class="ap" hidden></div><div class="sg" hidden></div>' +
-    '<div class="reply"><div class="atts"></div><textarea rows="1" aria-label="回它一句"></textarea><span class="ghost" aria-hidden="true" hidden><span class="gt"></span><kbd>Tab</kbd></span>' +
+    '<div class="reply"><div class="atts"></div><div class="fld"><textarea rows="1" aria-label="回它一句"></textarea></div><span class="ghost" aria-hidden="true" hidden><span class="gt"></span><kbd>Tab</kbd></span>' +
     '<button class="clip" aria-label="加附件" title="加图片或文件，也可以直接粘贴或拖进来">' + ICON.clip + '</button><button class="send" aria-label="发送">' + ICON.send + '</button></div>' +
     '<div class="sl" role="button" tabindex="0" title="点一下展开成整卡"></div>');
   $('.sl', el).addEventListener('keydown', (e) => { if (!e.target.closest('button') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openStrip(sid); } });
@@ -1623,7 +1731,7 @@ function layout() {
     h.style.transform = el.style.transform; h.style.zIndex = el.style.zIndex; h.style.opacity = el.style.opacity;
     el.classList.add('haloed');
   };
-  if (mode !== 'flow') { for (const c of cards.values()) { const el = c.el; if (el.classList.contains('side')) el.classList.remove('side'); if (el.style.length) el.style.cssText = ''; if (c.halo || el.classList.contains('haloed')) halo(c, false); } return; }   // 只清真有的：以前每次轮询给每张卡重写一遍 class 和内联样式（71 张卡 = 每 1.5 秒 200 多次属性改动）
+  if (mode !== 'flow') { for (const c of cards.values()) { const el = c.el; if (el.classList.contains('side')) el.classList.remove('side'); if (el.style.length) el.style.cssText = ''; if (c.halo || el.classList.contains('haloed')) halo(c, false); } lySync(); return; }   // 只清真有的：以前每次轮询给每张卡重写一遍 class 和内联样式（71 张卡 = 每 1.5 秒 200 多次属性改动）
   const i0 = Math.max(0, order.indexOf(cur)); const cw = Math.min(760, innerWidth - (innerWidth <= 700 ? 28 : 120));
   // 旁边那张整张露出来、不压在中间那张上：窗口够宽就并排放，不够宽就缩小（最小 0.46 倍）；再往外的叠在它后面露一条边
   const s1 = Math.max(0.46, Math.min(0.74, (innerWidth / 2 - 30 - cw / 2) / cw)), x1 = cw / 2 + 18 + cw * s1 / 2;
@@ -1652,6 +1760,7 @@ function layout() {
   if (pos.dataset.k !== dk) { pos.dataset.k = dk; pos.innerHTML = order.map((id, i) => { const c2 = cards.get(id), v = c2.v || {};
     const gl = nGroups > 1 && (i === 0 || cards.get(order[i - 1]).g.key !== c2.g.key) ? '<button class="pg" data-go="' + esc(id) + '">' + esc(T(c2.g.name)) + '</button>' : '';
     return gl + '<button data-go="' + esc(id) + '" class="' + dotOf(v) + (id === cur ? ' cur' : '') + '" title="' + esc(cardTitle(c2) + ' · ' + T(v.label || '')) + '" aria-label="' + esc(cardTitle(c2)) + '"></button>'; }).join('') + foldList.map((g) => '<button class="pg folded" data-fold="' + esc(g.key) + '" title="' + esc(T('展开')) + '">' + esc(T(g.name)) + ' ' + g.n + '</button>').join(''); }
+  lySync();
 }
 
 // ── 按项目分组 ──
@@ -1988,7 +2097,7 @@ function paint(st) {
     let c = cards.get(s.sid); if (!c) { c = { el: makeCard(s.sid) }; cards.set(s.sid, c); }
     if (sentAt[s.sid] && (s.status === 'busy' || ms(s.promptAt) >= sentAt[s.sid] - 3000)) { if (s.status !== 'busy' && s.done && ms(s.resultAt) > sentAt[s.sid]) delete sentAt[s.sid]; }
     if (opened.has(s.sid) && opened.get(s.sid) !== (s.resultAt || '')) opened.delete(s.sid);
-    c.s = s; const v = view(s), wasLive = !!(c.v && c.v.live); c.v = v; workGrace(c, wasLive, paintNow); if (v.live) nBusy++; if (v.need === 'reply') nReply++; if (v.need === 'review') nReview++; if (v.k === 'ask') nAsk++;
+    c.s = s; const v = view(s), wasLive = !!(c.v && c.v.live); c.v = v; lyFeed(s, v); workGrace(c, wasLive, paintNow); if (v.live) nBusy++; if (v.need === 'reply') nReply++; if (v.need === 'review') nReview++; if (v.k === 'ask') nAsk++;
     if (v.alert) { nStop++; hot.set(s.sid + '|' + s.alert.key, { title: s.title, why: v.why }); }
     const el = c.el, strip = stripOf(s.sid, c), opn = mode === 'wall' && quietCard(c) && opened.has(s.sid);
     const cls = 'card s-' + v.k + (v.need ? ' s-' + v.need : v.quiet ? ' s-' + v.quiet : '') + (v.alert ? ' alert' : '') + (v.bg ? ' bg' : '') + (el.classList.contains('side') ? ' side' : '') + (strip ? ' strip' : '') + (opn ? ' opened' : '') + (strip && el.classList.contains('s1') ? ' s1' : ''); if (el.className !== cls) el.className = cls;
@@ -2012,17 +2121,11 @@ function paint(st) {
     const you = $('.you', el); const yk = s.prompt || '';
     if (you.dataset.k !== yk) { you.dataset.k = yk; const auto = yk.startsWith(AUTO_MARK), said = auto ? T(autoBody(yk)) || yk : yk;
       you.innerHTML = '<span class="who">' + T(auto ? '自动续跑' : '你') + '</span>' + (s.prompt ? esc(cut(said, 400)) : T('还没给它派过活')); }
-    const cv = coverOf(s, v), hd = $('.head', el), ak = $('.ask', el), dn = $('.done', el);
-    if (hd.textContent !== cv.head) hd.textContent = cv.head;
+    const cv = coverOf(s, v), ak = $('.ask', el), dn = $('.done', el);
     if (ak.dataset.k !== cv.ask) { ak.dataset.k = cv.ask; ak.hidden = !cv.ask; ak.innerHTML = cv.ask ? '<b>↩</b>' + esc(cv.ask) : ''; }
     paintClash($('.clash', el), s, bySid);
     const dl = v.need ? T(v.need === 'reply' ? '先放着' : '审完了') : v.snoozed ? T('不放了') : ''; if (dn.textContent !== dl) dn.textContent = dl; if (dn.hidden === !!dl) dn.hidden = !dl;
-    const key = [v.k, s.status, s.resultAt, s.noteAt, s.ask ? JSON.stringify(s.ask) : '', s.screen || '', s.dialog ? JSON.stringify(s.dialog.options) : '', v.why, s.alert ? s.alert.key : '', v.alert,
-      v.need === 'review' && Array.isArray(s.wrote) && s.wrote.length ? JSON.stringify([s.wrote, s.wroteMore]) : ''].join('|');
-    const body = $('.body', el);
-    if (body.dataset.k !== key) { const keep = body.dataset.k && body.dataset.k.split('|')[0] === v.k ? body.scrollTop : 0; body.dataset.k = key; body.innerHTML = L(bodyHTML(s, v)); body.scrollTop = keep; }
-    const tick = $('.tick', body);
-    if (tick) { const tk = T(s.tool || '思考中') + (LANG === 'en' ? ' · step ' + s.steps : ' · 第 ' + s.steps + ' 步'); if (tick.textContent !== tk) tick.textContent = tk; }
+    fillBody(c);
     const rp = el._rp, ta = $('textarea', rp), bt = $('.send', rp);
     const ph = T(v.k === 'ask' ? '它在等你选，选完才能回话' : !s.channel ? '没对上它的终端标签，从菜单去终端里回' : v.k === 'busy' ? '它在忙，发了会排队' : '接着说，回车发送');
     if (ta.placeholder !== ph) ta.placeholder = ph;
@@ -2092,7 +2195,7 @@ function paint(st) {
     list.push({ id, el: c.el, rank: 1, t: x.lostAt, i: list.length });
   }
   const keep = new Set(list.map((x) => x.id));
-  for (const [id, c] of cards) if (!keep.has(id)) { if (c.workTimer) clearTimeout(c.workTimer); if (docked && docked.sid === id) undock(); if (c.halo) c.halo.remove(); c.el.remove(); cards.delete(id); }   // 弹层里正借着它的回话框：先收回，弹层底栏跟着收起
+  for (const [id, c] of cards) if (!keep.has(id)) { if (c.workTimer) clearTimeout(c.workTimer); if (c.lyOut) clearTimeout(c.lyOut); lyBuf.delete(id); if (docked && docked.sid === id) undock(); if (c.halo) c.halo.remove(); c.el.remove(); cards.delete(id); }   // 弹层里正借着它的回话框：先收回，弹层底栏跟着收起
 
   // 排序：谁完成了谁到前面。正在卡片里打字时先不挪，免得字打一半卡片跑了。
   const typing = document.activeElement && document.activeElement.tagName === 'TEXTAREA' && document.activeElement.closest('.card');

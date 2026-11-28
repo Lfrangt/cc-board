@@ -16,6 +16,8 @@
  *        canvasSeg() 验画布（11/24 canvas 车，从 ui-workbench/canvas-preview/check/check.mjs 移来，B 的项删掉）：文件夹摆成 A 全景、推近只有它能点、Esc 两级（网页里经 ESC_HOOK / 外层）、← → 0、拖动、ctrl + 滚轮、
  *        「提示条不挡任何框」在 A 全景 / 推近 / C 上各查一次（C 另用 2 台手机 + 窗口高 700）、顶栏「并排看全部版本」A ↔ C、正文「画布 · N 个」、vN.html 的入口、关掉时 iframe 置空再拆、英文；
  *        UI_ONLY=canvas 单跑时 Chromium、WebKit 都跑（CV_ENGINES 可改），整套里只跑 Chromium；CV_HTML 换整页做改坏对照；截图放 <OUT>/canvas/。
+ *        glassSeg() 验玻璃（11/27 乙「只加材质」）：顶栏（封面、墙）、封面回话框、底下那排点、新任务弹窗算出来的 backdrop-filter 不是 none、有受光边；在跑的最前卡是歌词（1 / 0.58 / 0.5、最近 7 条），在跑的卡都不写「第 N 步」、还要多久在卡头、
+ *        没有进度条、减弱动态效果时歌词行没有过渡、待审阅和退到旁边的卡照旧；UI_ONLY=glass 单跑，GL_HTML 换整页做红阶段与改坏对照；截图放 <OUT>/glass-*.png。
  *        只读页面 + 点「先不管」和筛选，不往任何会话里发话；新段的发送与自动续跑请求拦在浏览器里。真应用是 Safari 内核，这里测的是 Chrome 内核。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
@@ -2953,7 +2955,135 @@ async function diffSeg() {
   }
 }
 
+// ── 玻璃 · 乙「只加材质」（11/27）：UI_ONLY=glass；GL_HTML 换整页做红阶段 / 改坏对照 ──
+// 玻璃只给浮在内容上的控件：顶栏（封面、墙）、封面卡片里的回话框（.reply .fld）、底下那排点（.pager）、新任务弹窗；底、卡片、卡片的墨线照旧。
+// 封面最前面那张在跑的卡（run）正文换成歌词式进展：页面内存里每个窗口最近 7 条不同的 tool / note，最新一行 1、上一行 0.58、再往上 0.5；
+// 11/27 晚 作者：「第 N 步 · 还要 N 分钟」放在下面多余 → 在跑的卡（歌词卡、旁边、墙上）都不写「第 N 步」，还要多久只在卡头「运行中 · N 分钟 · 预计 HH:MM 交」；
+// 卡头不再重复那句 note；没有进度条；系统减弱动态效果时歌词不滑、直接到位；待审阅的卡（tidyWork）、退到旁边的在跑卡样子不变。
+// 在浏览器里改 /api/state 的应答：run 的 tool / note 按 G 给（服务不改），每改一次 refresh() 拉一拍，和线上一样走轮询那条路。
+async function glassSeg() {
+  console.log('\n[玻璃 · glass]');
+  const RUN = FX.sids.run, REV = FX.sids.tidyWork;
+  await srvClear([REV]);      // 前面的段可能把它记成了处理过：从待审阅开始
+  const N1 = '先把 ui.html 从头读一遍。', N2 = '改完了，跑一遍检查。';
+  const open = async ({ scheme = 'dark', reduce = false, mode = 'flow' } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2, reducedMotion: reduce ? 'reduce' : 'no-preference' });
+    await ctx.addInitScript((m) => { try { localStorage.setItem('ccb_mode', JSON.stringify(m)); } catch (e) {} }, mode);
+    const page = await ctx.newPage(), errs = [], G = { tool: 'Read', note: N1, eta: { at: new Date(Date.now() - 5 * 60000).toISOString(), mins: 30 } };   // eta：窗口 5 分钟前报的「还要 30 分钟」
+    page.on('pageerror', (e) => errs.push(String(e))); page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await page.route('**/api/state*', async (route) => { let r, j; try { r = await fullState(route); j = await r.json(); } catch { return route.abort().catch(() => {}); }
+      for (const x of j.sessions || []) if (x.sid === RUN) { x.status = 'busy'; x.tool = G.tool; x.note = G.note; x.eta = G.eta; if (!x.steps) x.steps = 7; }
+      await route.fulfill({ response: r, json: j }); });
+    if (process.env.GL_HTML) {
+      const html = fs.readFileSync(process.env.GL_HTML, 'utf8').replace('__TOKEN__', new URL(FX.url).searchParams.get('k'));
+      await page.route((u) => u.pathname === '/', async (route) => { const r = await route.fetch(); await route.fulfill({ response: r, body: html, contentType: 'text/html; charset=utf-8' }); });
+    }
+    await page.goto(FX.url + '&lang=zh'); await page.waitForSelector('.card'); await sleep(2600);
+    return { ctx, page, errs, G };
+  };
+  const front = (page, sid) => page.evaluate((sid) => { go(sid, true); return !!document.querySelector('.card[data-sid="' + sid + '"]:not(.side)'); }, sid);
+  const step = async (page, G, tool, note, wait = 1400) => { G.tool = tool; if (note) G.note = note; await page.evaluate(() => refresh()); await sleep(wait); };
+  // 四样控件算出来的材质：backdrop-filter、受光边（::before）、底色的透明度、影子
+  const glassOf = (page) => page.evaluate(() => {
+    const g = (e) => { if (!e) return null; const cs = getComputedStyle(e), b = getComputedStyle(e, '::before'), bg = cs.backgroundColor;
+      return { bf: cs.backdropFilter, rim: b.content, rimBg: b.backgroundImage, alpha: (() => { const m = bg.match(/\/\s*([\d.]+)\s*\)$/) || bg.match(/^rgba\([^)]*,\s*([\d.]+)\)$/); return m ? +m[1] : 1; })(), bg, sh: cs.boxShadow }; };
+    return { bar: g(document.querySelector('header.bar')), reply: g(document.querySelector('.card:not(.side) .reply .fld')), pager: g(document.querySelector('.pager')),
+      dlg: g(document.querySelector('#newDlg')), wallReply: document.body.classList.contains('wall') ? g(document.querySelector('.card .reply .fld')) : null };
+  });
+  const isGlass = (x) => !!x && x.bf !== 'none' && /blur\(20px\)/.test(x.bf) && x.rim === '""' && /gradient/.test(x.rimBg) && x.alpha < 1 && x.sh !== 'none';
+  // 一张卡的正文：歌词行（字、算出来的不透明度、过渡）、歌词下面还有没有那一行、卡头、正文里有没有原来那几样
+  const lyOf = (page, sid) => page.evaluate((sid) => {
+    const c = document.querySelector('.card[data-sid="' + sid + '"]'); if (!c) return { missing: true };
+    const b = c.querySelector('.body'), ls = [...b.querySelectorAll('.lyr > .ln')], tk = b.querySelector('.lyr ~ .tick'), hd = c.querySelector('.head'), s = last.sessions.find((x) => x.sid === sid);
+    const p = document.createElement('i'); p.style.color = 'var(--text-3)'; document.body.append(p); const t3 = getComputedStyle(p).color; p.remove();
+    const anims = document.getAnimations().filter((a) => a.effect && a.effect.target && a.effect.target.classList && a.effect.target.classList.contains('ln'));
+    return { front: !c.classList.contains('side'), lyb: b.classList.contains('lyb'), lines: ls.map((e) => e.textContent), op: ls.map((e) => +getComputedStyle(e).opacity),
+      trans: ls.map((e) => { const cs = getComputedStyle(e); return { p: cs.transitionProperty, d: cs.transitionDuration }; }),
+      tick: tk ? tk.textContent : null, tickFont: tk ? getComputedStyle(tk).fontFamily : '', tickColor: tk ? getComputedStyle(tk).color : '', t3, steps: s ? s.steps : null,
+      head: hd.textContent, headShown: getComputedStyle(hd).display !== 'none', lbl: [...b.querySelectorAll('.lbl')].map((e) => e.textContent), md: !!b.querySelector('.md'), wrote: !!b.querySelector('.wrote'),
+      plainTick: (b.querySelector('.tick') || {}).textContent || '', cardText: c.textContent, meta: c.querySelector('.meta').textContent,
+      anims: anims.map((a) => a.transitionProperty || a.animationName || ''), prog: document.querySelectorAll('.prog,progress,[role="progressbar"]').length, eta: document.body.innerText.includes('约还要') };
+  }, sid);
+  const count = (s, t) => s.split(t).length - 1;
+
+  { // 深色、封面：四样玻璃；在跑的最前卡换成歌词
+    const { ctx, page, errs, G } = await open({ scheme: 'dark' });
+    ok(await front(page, RUN), 'glass：run（在跑）翻到最前面'); await sleep(900);
+    await step(page, G, 'Read', N1);                 // 和上一拍一样：不加
+    await step(page, G, 'Edit');
+    await step(page, G, 'Bash', N2);
+    const a = await lyOf(page, RUN);
+    same(a.lines, [N1, 'Read', 'Edit', N2, 'Bash'], 'glass：歌词是这个窗口每拍的 note / tool，和上一条一样的不加，最新的在最下面');
+    ok(a.front && a.lyb && a.op.length >= 3 && JSON.stringify(a.op.slice(-3)) === JSON.stringify([0.5, 0.58, 1]) && a.op.slice(0, -3).every((x) => x === 0.5),
+      'glass：最新一行不透明度 1、上一行 0.58、再往上 0.5', JSON.stringify({ front: a.front, lyb: a.lyb, op: a.op }));
+    ok(a.tick === null && a.plainTick === '' && !/第 \d+ 步/.test(a.cardText) && /^运行中 · /.test(a.meta) && /预计 (明天 )?\d{2}:\d{2} 交$/.test(a.meta),
+      'glass：歌词下面不再有「第 N 步」那一行；还要多久只在卡头（运行中 · N 分钟 · 预计 HH:MM 交）', JSON.stringify({ tick: a.tick, plain: a.plainTick, steps: a.steps, meta: a.meta }));
+    ok(!a.head && !a.headShown && !a.lbl.length && !a.md && count(a.cardText, N2) === 1, 'glass：卡头那句 note 不再出现，正文没有「现在 + note」那一段，那句话在卡上只出现一次（歌词里）', JSON.stringify({ head: a.head, lbl: a.lbl, md: a.md, n: count(a.cardText, N2) }));
+    ok(a.prog === 0 && !a.eta, 'glass：页面上没有进度条元素，也没有「约还要 N 分钟」', JSON.stringify({ prog: a.prog, eta: a.eta }));
+    // 新的一行从下面滑上来：刚加上时正在跑 transform 的过渡
+    G.tool = 'Grep'; await page.evaluate(() => refresh());
+    await page.waitForFunction((sid) => [...document.querySelectorAll('.card[data-sid="' + sid + '"] .lyr > .ln')].some((e) => e.textContent === 'Grep'), RUN, { timeout: 5000 }).catch(() => {});
+    const mv = await lyOf(page, RUN);
+    ok(mv.anims.includes('transform') && mv.trans.every((t) => /transform/.test(t.p) && parseFloat(t.d) > 0), 'glass：新的一行进来时歌词在动（只过渡 transform / opacity）', JSON.stringify({ anims: mv.anims, trans: mv.trans.slice(-2) }));
+    await sleep(1200);
+    // 环形缓冲：最多 7 条
+    G.tool = 'T6';
+    await page.evaluate(async (sid) => { while (polling) await new Promise((r) => setTimeout(r, 20)); clearTimeout(pollT);      // 没有在路上的那一拍：不然它晚到会把 Grep 再塞进来
+      for (let k = 0; k <= 6; k++) { const st = structuredClone(last); st.sessions.find((x) => x.sid === sid).tool = 'T' + k; paint(st); } }, RUN);
+    await sleep(1200); const rb = await lyOf(page, RUN);
+    ok(rb.lines.length === 7 && rb.lines[6] === 'T6' && rb.lines.every((t, i) => i === 0 || t !== rb.lines[i - 1]), 'glass：每个窗口只留最近 7 条（环形缓冲），相邻两条不重复', JSON.stringify(rb.lines));
+    await page.evaluate(() => refresh()); await sleep(600);
+    await page.screenshot({ path: path.join(OUT, 'glass-flow-dark.png') });
+    const g = await glassOf(page);
+    ok(isGlass(g.bar), 'glass：顶栏 backdrop-filter 不是 none，有顶沿受光边和半透明底', JSON.stringify(g.bar));
+    ok(isGlass(g.reply), 'glass：封面卡片里的回话框 backdrop-filter 不是 none，有受光边和半透明底', JSON.stringify(g.reply));
+    ok(isGlass(g.pager), 'glass：底下那排小圆点 backdrop-filter 不是 none，有受光边和半透明底', JSON.stringify(g.pager));
+    await page.click('#newBtn'); await sleep(500);
+    const gd = await glassOf(page);
+    ok(await page.evaluate(() => document.querySelector('#newDlg').open) && isGlass(gd.dlg), 'glass：「新任务」弹窗 backdrop-filter 不是 none，有受光边和半透明底', JSON.stringify(gd.dlg));
+    await page.screenshot({ path: path.join(OUT, 'glass-new-dark.png') });
+    await page.keyboard.press('Escape'); await sleep(400);
+    ok(errs.length === 0, 'glass（深色、封面）：没有控制台错误或页面异常', errs.join(' | '));
+    await ctx.close();
+  }
+  { // 浅色、封面：待审阅的卡、退到旁边的在跑卡还是原来的样子
+    const { ctx, page, errs } = await open({ scheme: 'light' });
+    ok(await front(page, REV), 'glass：tidyWork（待审阅）翻到最前面'); await sleep(1500);
+    const r = await lyOf(page, REV), run = await lyOf(page, RUN);
+    ok(/^待审阅/.test(r.meta) && r.front && !r.lyb && !r.lines.length && !!r.head && r.headShown && r.wrote && r.md && r.lbl.some((t) => /^交付 · /.test(t)),
+      'glass：待审阅的卡照旧：卡头一句结论、「这一轮改了 N 个文件」、交付正文，没有歌词', JSON.stringify({ meta: r.meta, lyb: r.lyb, lines: r.lines, head: r.head, lbl: r.lbl }));
+    ok(!run.front && !run.lyb && !run.lines.length && run.lbl.includes('现在') && run.plainTick === 'Read' && !/第 \d+ 步/.test(run.cardText),
+      'glass：退到旁边的在跑卡照旧是「现在 + note + tool」，tool 后面不再接「第 N 步」；歌词只给最前面那张', JSON.stringify({ front: run.front, lbl: run.lbl, tick: run.plainTick }));
+    const g = await glassOf(page);
+    ok(isGlass(g.bar) && isGlass(g.reply) && isGlass(g.pager), 'glass（浅色）：顶栏、回话框、底下那排点也是玻璃', JSON.stringify([g.bar, g.reply, g.pager].map((x) => x && x.bg)));
+    await page.screenshot({ path: path.join(OUT, 'glass-flow-light.png') });
+    ok(errs.length === 0, 'glass（浅色、封面）：没有控制台错误或页面异常', errs.join(' | '));
+    await ctx.close();
+  }
+  { // 墙：顶栏一样是玻璃；墙上卡片里的回话框不加；没有歌词
+    const { ctx, page, errs } = await open({ scheme: 'dark', mode: 'wall' });
+    const g = await glassOf(page), run = await lyOf(page, RUN);
+    ok(isGlass(g.bar), 'glass（墙）：顶栏 backdrop-filter 不是 none', JSON.stringify(g.bar));
+    ok(!!g.wallReply && g.wallReply.bf === 'none' && g.wallReply.rim !== '""', 'glass（墙）：墙上卡片里的回话框不加玻璃', JSON.stringify(g.wallReply));
+    ok(!run.lyb && !run.lines.length && run.plainTick === 'Read' && !/第 \d+ 步/.test(run.cardText), 'glass（墙）：墙上在跑的卡没有歌词，「现在」末尾只写 tool、不接「第 N 步」', JSON.stringify({ lyb: run.lyb, lines: run.lines, tick: run.plainTick }));
+    ok(errs.length === 0, 'glass（墙）：没有控制台错误或页面异常', errs.join(' | '));
+    await ctx.close();
+  }
+  { // 系统设置「减弱动态效果」：歌词不滑，直接到位，过渡全关
+    const { ctx, page, errs, G } = await open({ scheme: 'dark', reduce: true });
+    ok(await front(page, RUN), 'glass（减弱动态效果）：run 翻到最前面'); await sleep(900);
+    G.tool = 'Grep'; await page.evaluate(() => refresh());
+    await page.waitForFunction((sid) => [...document.querySelectorAll('.card[data-sid="' + sid + '"] .lyr > .ln')].some((e) => e.textContent === 'Grep'), RUN, { timeout: 5000 }).catch(() => {});
+    const a = await lyOf(page, RUN);
+    ok(a.lines.includes('Grep') && a.trans.length > 0 && a.trans.every((t) => t.p === 'none' || t.d.split(',').every((d) => parseFloat(d) === 0)) && a.anims.length === 0,
+      'glass（减弱动态效果）：歌词行的 transition 是 none / 0s，新的一行直接到位、没有在跑的动画', JSON.stringify({ lines: a.lines, trans: a.trans.slice(-2), anims: a.anims }));
+    ok(JSON.stringify(a.op.slice(-3)) === JSON.stringify([0.5, 0.58, 1]), 'glass（减弱动态效果）：三档不透明度照样是 1 / 0.58 / 0.5', JSON.stringify(a.op));
+    ok(errs.length === 0, 'glass（减弱动态效果）：没有控制台错误或页面异常', errs.join(' | '));
+    await ctx.close();
+  }
+}
 try {
+  if (process.env.UI_ONLY === 'glass') { await glassSeg(); console.log('\n（UI_ONLY=glass：只跑了「玻璃 · 歌词式进展」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'diff') { await diffSeg(); console.log('\n（UI_ONLY=diff：只跑逐笔改动，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'eta') { await etaSeg(); console.log('\n（UI_ONLY=eta：只跑了「预计交付」这一段，不是整套）'); throw ONLY_DONE; }
   if (process.env.UI_ONLY === 'undo') { await undoSeg(); console.log('\n（UI_ONLY=undo：只跑了「撤销、↑ 取回上一句」这一段，不是整套）'); throw ONLY_DONE; }
@@ -4484,6 +4614,7 @@ try {
   await remotePreviewCheck();   // 远程预览（C1 / C1.1）：远程模式里点路径、/rp/ 取文件、图集、拒绝只提示
   await updateSeg();
   await diffSeg();
+  await glassSeg();        // 玻璃 · 歌词式进展（11/27 乙「只加材质」）
   await deltaCheck();      // 只回变过的（拉数据瘦身）：会真的归档一个夹具会话，所以放在最后
 } catch (e) { if (e !== ONLY_DONE) throw e; } finally { await browser.close(); }
 console.log(`\n界面结果：${pass} 过，${fail} 没过；截图在 ${OUT}`);
