@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 不依赖任何模块。调用方（server.mjs 的 /api/new）给 provider、model、effort、tier 四个值；带了派活单的，再给 brief、routeNew 的结果和请求另带的 prompt。
- * [OUTPUT]: 导出 TIERS（档位表）、TIER_NAMES、routeNew()；BRIEF_FIELDS（派活单七栏）、BRIEF_MARK、BRIEF_MAX、briefNew()、briefClash()。
+ * [OUTPUT]: 导出 TIERS（档位表）、TIER_NAMES、routeNew()；BRIEF_FIELDS（派活单七栏）、BRIEF_MARK、BRIEF_MAX、briefNew()、briefClash()；parseDroidModels()（droid exec --help 的模型清单）、droidPick()（核 Droid 的 model / effort）。
  *           routeNew 返回 { ok: true, tier, model, effort, why } 或 { ok: false, error }；briefNew 返回 { ok: true, text } 或 { ok: false, error, missing, problems }；briefClash 返回 prompt 里顶格写栏名的那一行（最多 40 个字）或 null。
  * [POS]: 新窗口「用哪个模型、多大强度」的唯一决策点。server.mjs 在 /api/new 里先过它，再把结果交给 newSession。
  *        它不起进程、不读文件、不读 config，所以 test/route.test.mjs 可以直接断言。档位由开窗口的一方声明，这里不从任务文字里猜。
@@ -183,4 +183,50 @@ export function briefNew(brief, rt, prompt = '') {
     return { ok: false, error: '派活单太长，没开窗口：' + msg, missing: [], problems: [msg] };
   }
   return { ok: true, text: out };
+}
+
+// ───────────── Droid（Factory）的模型和强度：清单从 `droid exec --help` 读，不写死 ─────────────
+// 交互版 droid 没有 -m / -r，模型和强度只能经 --settings <文件> 给（{"model", "reasoningEffort"}）；能选什么以它自己的帮助为准：
+// 「Available Models:」一行一个 `  <id>  <显示名>`（默认那个带 (default)，停用的带 [Deprecated]），「Model details:」按显示名给每个模型认的强度和默认强度。
+// 停用的和 auto（Factory 自己挑模型，没有强度）不列。读不出来就是空清单，Droid 只能「默认」。
+const DROID_ID = /^[a-z0-9][\w.\-]{0,63}$/i, DROID_EFFORT = /^[a-z]{2,10}$/;
+export function parseDroidModels(help) {
+  const lines = String(help || '').split('\n'), models = [], seen = new Set();
+  let defaultModel = null;
+  const at = lines.findIndex((l) => /^Available Models:\s*$/.test(l));
+  if (at < 0) return { models, defaultModel };
+  for (let i = at + 1; i < lines.length && lines[i].trim(); i++) {
+    const m = lines[i].match(/^\s+(\S+)\s{2,}(\S.*?)\s*$/); if (!m) continue;
+    const id = m[1]; let name = m[2];
+    if (/\[Deprecated\]/i.test(name) || id === 'auto' || seen.has(id) || !DROID_ID.test(id)) continue;
+    const def = /\s*\(default\)$/i.test(name); name = name.replace(/\s*\(default\)$/i, '').slice(0, 60);
+    seen.add(id); models.push({ id, name, efforts: [], defaultEffort: null });
+    if (def && !defaultModel) defaultModel = id;
+  }
+  const dt = lines.findIndex((l) => /^Model details:\s*$/.test(l)), by = new Map();
+  for (let i = dt + 1; dt >= 0 && i < lines.length && lines[i].trim(); i++) {
+    const m = lines[i].match(/^\s*-\s+(.+?):\s+supports reasoning:\s*(Yes|No);\s*supported:\s*\[([^\]]*)\];\s*default:\s*(\S+)\s*$/i);
+    if (m && !by.has(m[1])) by.set(m[1], { yes: /^yes$/i.test(m[2]), list: m[3].split(',').map((x) => x.trim()).filter((x) => DROID_EFFORT.test(x)), def: m[4] });
+  }
+  for (const x of models) {
+    const d = by.get(x.name); if (!d || !d.yes) continue;
+    x.efforts = d.list; x.defaultEffort = d.list.includes(d.def) ? d.def : null;
+  }
+  return { models, defaultModel };
+}
+// /api/new 给 Droid 的 model / effort：model 要在清单里，effort 要是这个 model 认的（没给 model 按默认模型核）。不认的报错、不开窗口，写明哪个值不认、能选什么。
+// 返回 { ok: true, model, effort }（没给的是空串）或 { ok: false, error }
+export function droidPick({ model, effort } = {}, list = {}) {
+  const ms = list.models || [];
+  if ((model != null && typeof model !== 'string') || (effort != null && typeof effort !== 'string')) return { ok: false, error: 'Droid 的 model / effort 要是字符串' };
+  const m = text(model), e = text(effort), shown = (x) => x.slice(0, 40);
+  if (!m && !e) return { ok: true, model: '', effort: '' };
+  if (!ms.length) return { ok: false, error: 'Droid 的模型清单没读到（droid exec --help），现在只能用默认模型和强度' };
+  const x = ms.find((y) => y.id === (m || list.defaultModel));
+  if (m && !x) return { ok: false, error: 'Droid 不认模型「' + shown(m) + '」，能选：' + ms.map((y) => y.id).join('、') };
+  if (e) {
+    if (!x) return { ok: false, error: 'Droid 的清单里没有默认模型，核不了强度「' + shown(e) + '」：先选一个模型' };
+    if (!x.efforts.includes(e)) return { ok: false, error: 'Droid 的 ' + x.id + (m ? '' : '（默认模型）') + ' 不认强度「' + shown(e) + '」' + (x.efforts.length ? '，能选：' + x.efforts.join('、') : '，它没有强度可选') };
+  }
+  return { ok: true, model: m, effort: e };
 }

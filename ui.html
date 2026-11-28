@@ -988,7 +988,7 @@ const EN = {
   '这个文件不在了': 'This file is gone', '没有这段对话记录': 'No transcript for this conversation', '这里点的路径远程看不了，点卡片或对话里的': 'Paths here cannot be previewed remotely; use the ones on a card or in a conversation',
   '上一张': 'Previous', '上一张（←）': 'Previous (←)', '下一张': 'Next', '下一张（→）': 'Next (→)', '这些图都打不开了': 'None of these images could be opened',
   '预览还没准备好，过一秒再点': 'Preview is not ready yet, try again in a second', '文件太大，只显示了开头 1 MB。': 'File is large; showing the first 1 MB only.',
-  '最近一条回复用的': 'used by its latest reply', '开窗口时定的': 'set when the window was opened',
+  '最近一条回复用的': 'used by its latest reply', '开窗口时定的': 'set when the window was opened', 'Droid 这个会话的设置里记的': "from this Droid session's settings",
   'Gemini 模型：窗口还是 Claude Code，只是模型换成 Gemini，走 gemini-gateway 按量计费，不占 Claude 的额度。没有强度，不能选账号，也没有 Code Mode。': 'Gemini model: the window is still Claude Code, only the model is Gemini. It runs through gemini-gateway and is billed per use, so it does not count against your Claude quota. No effort setting, no account choice, no Code Mode.',
   'Code Mode（实验）': 'Code Mode (experimental)', 'Claude 写脚本一次跑多个工具，适合大范围搜索、同一种改动改很多文件；这个窗口不能用 Remote Control。': 'Claude writes a script that runs several tools in one go. Suits wide searches and the same change across many files. This window can’t use Remote Control.',
   '这个窗口开着 Code Mode（实验）：Claude 写脚本一次跑多个工具，不能用 Remote Control': 'This window runs Code Mode (experimental): Claude writes a script that runs several tools in one go; no Remote Control',
@@ -1228,11 +1228,11 @@ function modelName(id) {
 }
 // Code Mode 的窗口（服务给的 codeMode：记录里最后一条 repl-mode）在最前面多一段「Code」，一根墨线隔开（11/17）
 function setModel(el, s) {
-  const m = modelName(s.model), ef = /^[a-z]{2,10}$/.test(s.effort || '') ? s.effort : '', cm = s.codeMode === true && s.provider !== 'codex';
-  const key = m || ef || cm ? [s.model, ef, s.provider, cm ? 'cm' : ''].join('|') : '';
+  const m = s.provider === 'droid' && s.modelName ? { name: s.modelName, ver: '' } : modelName(s.model), ef = /^[a-z]{2,10}$/.test(s.effort || '') ? s.effort : '', cm = s.codeMode === true && s.provider !== 'codex' && s.provider !== 'droid';   // Droid 的显示名由服务按 droid 的清单给
+  const key = m || ef || cm ? [s.model, ef, s.provider, cm ? 'cm' : '', s.provider === 'droid' ? s.modelName || '' : ''].join('|') : '';
   if (el.dataset.k === key) return; el.dataset.k = key; el.hidden = !key; el.classList.toggle('cm', cm); if (!key) { el.textContent = ''; el.removeAttribute('title'); return; }
   el.innerHTML = (cm ? '<span class="cm">Code</span>' : '') + (m ? '<span class="mn">' + esc(m.name) + '</span>' + (m.ver ? '<span class="mv"> ' + esc(m.ver) + '</span>' : '') : '') + (ef ? '<span class="me">' + (m ? ' · ' : '') + esc(ef) + '</span>' : '');
-  const used = m || ef ? [s.model ? T('模型') + ' ' + s.model : '', ef ? T('强度') + ' ' + ef : ''].filter(Boolean).join(' · ') + ' — ' + T(s.provider === 'codex' ? '开窗口时定的' : '最近一条回复用的') : '';
+  const used = m || ef ? [s.model ? T('模型') + ' ' + s.model : '', ef ? T('强度') + ' ' + ef : ''].filter(Boolean).join(' · ') + ' — ' + T(s.provider === 'codex' ? '开窗口时定的' : s.provider === 'droid' ? 'Droid 这个会话的设置里记的' : '最近一条回复用的') : '';
   el.title = [used, cm ? T('这个窗口开着 Code Mode（实验）：Claude 写脚本一次跑多个工具，不能用 Remote Control') : ''].filter(Boolean).join('\n');
 }
 const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
@@ -2104,7 +2104,7 @@ function paint(st) {
     const bk = v.back ? '1' : '0'; if (el.dataset.back !== bk) el.dataset.back = bk;
     const vis = mode === 'flow' || match(v); if (el.hidden === vis) el.hidden = !vis; if (vis) shown++;
     const tt = $('.title', el); if (tt.textContent !== s.title) tt.textContent = s.title;
-    const tg = $('.tag', el); const tgv = s.provider === 'codex' ? 'Codex' : ''; if (tg.textContent !== tgv) { tg.textContent = tgv; tg.hidden = !tgv; }
+    const tg = $('.tag', el); const tgv = s.provider === 'codex' ? 'Codex' : s.provider === 'droid' ? 'Droid' : s.provider === 'antigravity' ? 'Antigravity' : ''; if (tg.textContent !== tgv) { tg.textContent = tgv; tg.hidden = !tgv; }
     const mt0 = T(v.bg ? '后台在跑 · ' + dur(s.statusAt || s.resultAt, st.now) : v.k === 'busy' ? (v.why === 'stall' ? '运行中 · ' + Math.round((s.quiet || 0) / 60000) + ' 分钟没动静' : '运行中 · ' + dur(s.turnAt || s.promptAt, st.now))
       : v.k === 'stopped' ? '停住了 · ' + WHY[v.why] : v.snoozed ? '先放着 · 到 ' + clockOf(s.snooze.until, st.now) : v.k === 'done' ? v.label + ' · ' + when(s.resultAt, st.now, true) : v.label);
     const eta = v.bg || (v.k === 'busy' && v.why !== 'stall') ? etaText(s.eta, st.now) : '', mt = eta ? mt0 + ' · ' + eta : mt0;   // 它自己报的预计：只在真在跑的时候接上
@@ -2168,7 +2168,7 @@ function paint(st) {
     const key = (ask ? 'd:' + JSON.stringify(p.dialog.options) + p.dialog.question : 'boot:' + p.screen);
     if (c.el.hidden === vis) c.el.hidden = !vis; const bk = ask ? '0' : '1'; if (c.el.dataset.back !== bk) c.el.dataset.back = bk;
     if (c.el.dataset.k !== key) { c.el.dataset.k = key;
-      c.el.innerHTML = L('<div class="chead"><span class="meta">' + (ask ? '等你选' : '启动中') + '</span>' + (p.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '<button class="ib shrink" data-act="shrink" aria-label="收成一条" title="收成一条">' + ICON.shrink + '</button></div><h2 class="title" style="cursor:default">' + esc(/^恢复/.test(p.prompt) ? cut(p.prompt, 40) : '新任务') + '</h2><p class="head">' + (ask ? '开工前要你先选一下' : '正在后台启动，几秒后出现在这里。') + '</p>' +
+      c.el.innerHTML = L('<div class="chead"><span class="meta">' + (ask ? '等你选' : '启动中') + '</span>' + (p.provider === 'codex' ? '<span class="tag">Codex</span>' : p.provider === 'droid' ? '<span class="tag">Droid</span>' : p.provider === 'antigravity' ? '<span class="tag">Antigravity</span>' : '') + '<button class="ib shrink" data-act="shrink" aria-label="收成一条" title="收成一条">' + ICON.shrink + '</button></div><h2 class="title" style="cursor:default">' + esc(/^恢复/.test(p.prompt) ? cut(p.prompt, 40) : '新任务') + '</h2><p class="head">' + (ask ? '开工前要你先选一下' : '正在后台启动，几秒后出现在这里。') + '</p>' +
         '<p class="you" style="cursor:default"><span class="who">你</span>' + esc(p.prompt || '没写任务，空会话') + '</p><div class="body">' +
         (ask ? '<div class="lbl">开工前要你先选一下 · ' + esc(p.cwd.replace(HOME, '~')) + '</div>' + dialogHTML(p.dialog)
           : '<div class="empty">正在后台启动，几秒后出现在这里。</div>' + (p.screen ? '<div class="lbl" style="margin-top:12px">它现在停在</div><pre class="screen">' + esc(p.screen) + '</pre>' : '')) +
@@ -2189,7 +2189,7 @@ function paint(st) {
     const vis = mode === 'flow' || filter === 'all' || filter === 'stop' || filter === 'todo'; if (vis) shown++;
     if (c.el.hidden === vis) c.el.hidden = !vis; if (c.el.dataset.back !== '0') c.el.dataset.back = '0'; const key = 'gone:' + x.lostAt + (x.crash ? ':' + x.crash : ''); const gw = x.crash ? WHY_LONG.crash : WHY_LONG.gone;   // 一起退出的（闲着的也在）不说「做到一半」
     if (c.el.dataset.k !== key) { c.el.dataset.k = key; c.el.className = 'card s-stopped alert' + (c.el.classList.contains('side') ? ' side' : '');
-      c.el.innerHTML = L('<div class="chead"><span class="meta">停住了 · 进程退出</span>' + (x.provider === 'codex' ? '<span class="tag">Codex</span>' : '') + '</div><h2 class="title" style="cursor:default">' + esc(x.title || '') + '</h2><p class="head">' + gw + '</p>' +
+      c.el.innerHTML = L('<div class="chead"><span class="meta">停住了 · 进程退出</span>' + (x.provider === 'codex' ? '<span class="tag">Codex</span>' : x.provider === 'droid' ? '<span class="tag">Droid</span>' : x.provider === 'antigravity' ? '<span class="tag">Antigravity</span>' : '') + '</div><h2 class="title" style="cursor:default">' + esc(x.title || '') + '</h2><p class="head">' + gw + '</p>' +
         '<p class="you" style="cursor:default"><span class="who">你</span>' + esc(cut(x.prompt || '没有记录到你说的话', 400)) + '</p><div class="body"><div class="why">' + gw + '</div>' +
         '<div class="row"><button class="bordered" data-x="revive">接回来</button><button class="plain" data-x="detail">看对话</button><button class="plain" data-x="ack">知道了</button></div></div>'); }
     list.push({ id, el: c.el, rank: 1, t: x.lostAt, i: list.length });
@@ -2267,7 +2267,7 @@ function crashLine(c) {                  // → [主句, 小字, 按钮]；按�
   const prog = '已接回 ' + c.done + ' / ' + c.n;
   if (c.state === 'running') return ['正在一个一个接回', prog, [['stop', '停下', 'plain']]];
   if (c.state === 'waiting') return ['负载 ' + c.load + '，等降到 ' + c.max + ' 以下再接', prog, [['stop', '停下', 'plain']]];
-  if (c.state === 'stopped') return [(c.why === 'load' ? '负载一直没降，停在第 ' : '停在第 ') + c.next + ' 个', prog, [['restore', '接着接回', 'bordered'], ['dismiss', '先不管', 'plain']]];
+  if (c.state === 'stopped') return [(c.why === 'load' ? '负载一直没降，停在第 ' : c.why === 'human' ? 'Antigravity 的要你本人点，停在第 ' : '停在第 ') + c.next + ' 个', prog, [['restore', '接着接回', 'bordered'], ['dismiss', '先不管', 'plain']]];
   if (c.state === 'done') return [c.fail ? '接回了 ' + c.done + ' 个，' + c.fail + ' 个没接成' : c.n + ' 个都接回了', '', [['dismiss', '知道了', 'plain']]];
   return [hm(c.at) + ' 有 ' + c.n + ' 个窗口一起退出了', '对话都还在，可以一个一个接回来', [['restore', '全部接回', 'bordered'], ['dismiss', '先不管', 'plain']]];
 }
@@ -2617,16 +2617,25 @@ function fillNew() {
   const p = P[pick.provider];
   // 模型是下拉菜单：默认 + 这一家认得的几个。以前存过列表之外的写法（完整的模型名）也留一项，不替你丢掉
   // 存的是 Gemini 模型、但服务这回不报了（config 的 gemini 关了、脚本不在）：当没选，不留一项点了只会被服务拒的
-  const gList = p.geminiModels || [], mPick = (pick.model || {})[pick.provider] || '', mNow = /^gemini-/.test(mPick) && !gList.includes(mPick) ? '' : mPick;
+  // Droid：清单是服务读 droid exec --help 得来的，存过的不在清单里就当没选（服务会拒，不留一项必拒的）
+  // 「Gemini 模型不在列表就清空」只对 claude：Antigravity 自己的模型名也是 gemini- 开头，不在 claude 的 Gemini 名单里，不能每次打开都替它清掉
+  const isD = pick.provider === 'droid', dNames = p.modelNames || {};
+  const gList = p.geminiModels || [], mPick = (pick.model || {})[pick.provider] || '', mNow = isD ? ((p.models || []).includes(mPick) ? mPick : '') : pick.provider === 'claude' && /^gemini-/.test(mPick) && !gList.includes(mPick) ? '' : mPick;
   const mAll = (p.models || []).concat(mNow && !(p.models || []).includes(mNow) ? [mNow] : []);
-  const mName = (m) => { const n = modelName(m); return /^gemini-/.test(m) && n ? n.name : /^[a-z]+$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m; };
+  const mName = (m) => { if (isD) return dNames[m] || m; if (p.modelLabels && typeof p.modelLabels[m] === 'string') return p.modelLabels[m]; const n = modelName(m); return /^gemini-/.test(m) && n ? n.name : /^[a-z]+$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m; };   // 服务给了名字表（Antigravity）就用它
   const mOpt = (m) => '<option value="' + esc(m) + '">' + esc(mName(m)) + '</option>';
   // 服务报了 Gemini 模型：下拉里分「Claude」「Gemini」两组（Gemini 是模型，不是第三个「交给谁」）；没报就和以前一样一长串
-  const mHtml = gList.length ? '<optgroup label="Claude">' + mAll.filter((m) => !gList.includes(m)).map(mOpt).join('') + '</optgroup><optgroup label="Gemini">' + gList.map(mOpt).join('') + '</optgroup>' : mAll.map(mOpt).join('');
+  // Droid 的几十个模型按 id 的前缀分 Claude / GPT / Gemini / 其他，组内照 droid 自己列的顺序
+  const dFam = (m) => (/^claude-/.test(m) ? 0 : /^gpt-/.test(m) ? 1 : /^gemini-/.test(m) ? 2 : 3);
+  const mHtml = isD ? ['Claude', 'GPT', 'Gemini', T('其他')].map((g, i) => { const ms = mAll.filter((m) => dFam(m) === i); return ms.length ? '<optgroup label="' + esc(g) + '">' + ms.map(mOpt).join('') + '</optgroup>' : ''; }).join('')
+    : gList.length ? '<optgroup label="Claude">' + mAll.filter((m) => !gList.includes(m)).map(mOpt).join('') + '</optgroup><optgroup label="Gemini">' + gList.map(mOpt).join('') + '</optgroup>' : mAll.map(mOpt).join('');
   $('#nModel').innerHTML = L('<option value="">默认' + (p.defaultModel ? '（' + esc(mName(p.defaultModel)) + '）' : '') + '</option>' + mHtml);
   $('#nModel').value = mNow;
-  $('#nEffort').innerHTML = L('<option value="">默认' + (p.defaultEffort ? '（' + esc(p.defaultEffort) + '）' : '') + '</option>' + (p.efforts || []).map((e) => '<option value="' + esc(e) + '">' + esc(e) + '</option>').join(''));
-  $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
+  if (isD) droidEfforts((pick.effort || {}).droid || '');
+  else {
+    $('#nEffort').innerHTML = L('<option value="">默认' + (p.defaultEffort ? '（' + esc(p.defaultEffort) + '）' : '') + '</option>' + (p.efforts || []).map((e) => '<option value="' + esc(e) + '">' + esc(e) + '</option>').join(''));
+    $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
+  }
   // 账号：config.json 里登记了 accounts 才出现。默认 = config 的 defaultAccount（写它的名字），没设就是当前登录的号；钥匙串里还没有 token 的号列出来但不能选
   const A = p.accounts || [], dA = A.find((a) => a.id === p.defaultAccount);
   const aNow = $('#newDlg').open ? $('#nAcct').value : '';   // 弹窗开着时换「交给谁」再回来，保留这一次选的；重新打开一律回到默认（下面重写选项会把值清掉，先记下）
@@ -2643,11 +2652,20 @@ function syncGem() {
   if (g && !gemWas) { pick.effort = pick.effort || {}; pick.effort[pick.provider] = $('#nEffort').value; }   // 切走之前先记下他调的强度
   if (!g && gemWas) $('#nEffort').value = (pick.effort || {})[pick.provider] || '';
   gemWas = g;
-  $('#nEffortField').style.display = g ? 'none' : ''; $('#nGemField').hidden = !g;
+  const noEff = !(P.efforts || []).length && !Object.keys(P.effortsByModel || {}).length;   // Droid 的强度按模型给（effortsByModel），efforts 是空的：有按模型的就不收
+  $('#nEffortField').style.display = g || noEff ? 'none' : ''; $('#nGemField').hidden = !g;   // 这一家根本没有强度可选（Antigravity 写在模型名里；Droid 没读到模型清单时）也收起
   $('#nAcctField').style.display = !g && (P.accounts || []).length ? '' : 'none';
   const cmHide = pick.provider !== 'claude' || g; $('#nCmField').hidden = cmHide; if (cmHide) setCm(false);   // Code Mode 只有 Claude Code 的 Claude 模型有：选了 Codex 或 Gemini 就收起，并关掉（看不见的开关不能还开着）
 }
 $('#nModel').addEventListener('change', syncGem);
+// Droid 的强度跟着模型走：每个模型认的不一样（droid exec --help 的 Model details），「默认」写这个模型自己的默认；换了模型、原来选的强度它不认，回到默认
+function droidEfforts(want) {
+  const p = ((last && last.providers) || {}).droid || {}, m = $('#nModel').value || p.defaultModel || '';
+  const list = (p.effortsByModel || {})[m] || [], def = (p.defaultEffortByModel || {})[m] || '', cur = want === undefined ? $('#nEffort').value : want;
+  $('#nEffort').innerHTML = L('<option value="">默认' + (def ? '（' + esc(def) + '）' : '') + '</option>' + list.map((e) => '<option value="' + esc(e) + '">' + esc(e) + '</option>').join(''));
+  $('#nEffort').value = list.includes(cur) ? cur : '';
+}
+$('#nModel').addEventListener('change', () => { if (pick.provider === 'droid') droidEfforts(); });
 $('#nProv').addEventListener('click', (e) => { const b = e.target.closest('[data-prov]'); if (!b || b.disabled) return; keepPick(); pick.provider = b.dataset.prov; fillNew(); });
 // Code Mode 开关（11/17 Khalil 本人要的）：只对这一次开的这一个窗口。默认关，每次打开弹窗都回到关，不记上一次（不进 ccb_new）
 function setCm(on) { const b = $('#nCm'), v = on ? 'true' : 'false'; if (b.getAttribute('aria-checked') !== v) b.setAttribute('aria-checked', v); }   // function 声明：fillNew() 先于这一行被调也认得
@@ -2666,7 +2684,8 @@ function openNew(proj) {
 async function goNew() {
   const prompt = $('#nPrompt').value.trim(), cwd = '~';      // 不问放哪个文件夹：都开在主目录，服务会让它自己找项目文件夹
   keepPick(); $('#nGo').disabled = true; let r; const nFiles = newHold.atts.length;
-  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: gemPick() ? '' : pick.effort[pick.provider] || '', account: pick.provider === 'claude' && !gemPick() ? $('#nAcct').value || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
+  const dm = pick.provider === 'droid' ? { ...(pick.model.droid ? { model: pick.model.droid } : {}), ...(pick.effort.droid ? { effort: pick.effort.droid } : {}) } : null;   // Droid：没选的不带（不带 = 和以前一样的命令行）
+  try { const files = await uploadAtts(newHold.atts); r = await api('/api/new', dm ? { prompt, cwd, files, project: newIn, provider: 'droid', ...dm } : { prompt, cwd, files, project: newIn, provider: pick.provider, model: pick.model[pick.provider] || '', effort: gemPick() ? '' : pick.effort[pick.provider] || '', account: pick.provider === 'claude' && !gemPick() ? $('#nAcct').value || '' : '', ...(pick.provider === 'claude' ? { codeMode: cmOn() } : {}) }); }
   catch (e) { r = { ok: false, error: e && /附件|MB/.test(e.message || '') ? e.message : '总控台服务没应答' }; }
   $('#nGo').disabled = false;
   if (r.ok) { $('#nPrompt').value = ''; saveDraft(NEW_DRAFT, ''); newHold.atts = []; drawAtts(newHold, $('#nAtts')); $('#newDlg').close(); if (!prompt && !nFiles) focusNew = r.name; refresh(); if (fellText(r)) toast(fellText(r), { ms: 6000 }); } else { $('#nMsg').textContent = T(r.error || '没开起来'); $('#nMsg').style.color = 'var(--danger)'; }
@@ -2682,8 +2701,10 @@ let focusNew = null, wantFocus = null, pickNext = null;
 async function openBlank() {
   const P = (last && last.providers) || {}; const pv = P[pick.provider] && P[pick.provider].ok ? pick.provider : 'claude';
   // 记着的是 Gemini 模型：照样开成 Gemini（只带模型、不带强度）；服务这回已经不报它了（config 关了 gemini）就当默认，不去撞一条必拒的请求
-  const mm0 = (pick.model || {})[pv] || '', mm = /^gemini-/.test(mm0) && !(((P.claude || {}).geminiModels) || []).includes(mm0) ? '' : mm0;
-  let r; try { r = await api('/api/new', { prompt: '', cwd: '~', provider: pv, model: mm, effort: /^gemini-/.test(mm) ? '' : (pick.effort || {})[pv] || '', account: '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
+  const mm0 = (pick.model || {})[pv] || '', mm = pv === 'claude' && /^gemini-/.test(mm0) && !(((P.claude || {}).geminiModels) || []).includes(mm0) ? '' : mm0;   // 只对 claude（Antigravity 的模型名也是 gemini- 开头）
+  const dp = P.droid || {}, dm0 = pv === 'droid' ? (dp.models || []).includes(mm0) ? mm0 : '' : '', de0 = pv === 'droid' ? (pick.effort || {}).droid || '' : '';
+  const dBody = pv === 'droid' ? { ...(dm0 ? { model: dm0 } : {}), ...(de0 && ((dp.effortsByModel || {})[dm0 || dp.defaultModel] || []).includes(de0) ? { effort: de0 } : {}) } : null;   // Droid 记着的模型 / 强度这回不在清单里就不带
+  let r; try { r = await api('/api/new', dBody ? { prompt: '', cwd: '~', provider: 'droid', ...dBody } : { prompt: '', cwd: '~', provider: pv, model: mm, effort: /^gemini-/.test(mm) ? '' : (pick.effort || {})[pv] || '', account: '' }); } catch (e) { r = { ok: false, error: '总控台服务没应答' }; }
   if (r.ok) { focusNew = r.name; toast(fellText(r) || '新会话启动中'); refresh(); } else toast(r.error || '没开起来');
 }
 window.ccbBlank = openBlank;
@@ -3452,7 +3473,7 @@ function orgWhy(sid, M, st) {
 // 第三行：短名（和标题不一样时：「khalil-p2 派的」、悬停的依据都用短名称呼窗口）· 模型 · 上下文 · 几个子 agent 在跑 · 这一轮谁派的（只在跑的时候写）
 function orgMeta(s, v, M) {
   const m = modelName(s.model), f = M.nd(s.sid).for, sn = shortName(s), t = String(s.title || '');
-  return [sn && !t.includes(sn) ? sn : '', s.provider === 'codex' ? ['Codex', m ? m.name : ''].filter(Boolean).join(' ') : m ? m.name + (m.ver ? ' ' + m.ver : '') : '',
+  return [sn && !t.includes(sn) ? sn : '', s.provider === 'codex' ? ['Codex', m ? m.name : ''].filter(Boolean).join(' ') : s.provider === 'droid' ? ['Droid', s.modelName || (m ? m.name + (m.ver ? ' ' + m.ver : '') : '')].filter(Boolean).join(' ') : s.provider === 'antigravity' ? ['Antigravity', s.model || ''].filter(Boolean).join(' ') : m ? m.name + (m.ver ? ' ' + m.ver : '') : '',
     typeof s.ctx === 'number' && s.ctx > 0 ? T(ctxText(s.ctx)) : '',
     s.sub > 0 ? T(s.sub + ' 个子 agent 在跑') : '',
     !v.live ? '' : f === 'you' ? T('你派的') : typeof f === 'string' && f !== s.sid && M.S.has(f) ? T(shortName(M.S.get(f)) + ' 派的') : ''].filter(Boolean).join(' · ');

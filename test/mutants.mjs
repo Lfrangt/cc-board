@@ -28,7 +28,7 @@
 // 用法：node test/mutants.mjs        （全部改坏版，一次跑 M_JOBS 个、默认 4 个，每个是一整份 state.test）；node test/mutants.mjs 名字,名字 只跑这几个；端口占 M_PORT 到 M_PORT + M_JOBS × 2000
 import fs from 'node:fs'; import path from 'node:path'; import { spawn } from 'node:child_process';
 const HERE = path.dirname(new URL(import.meta.url).pathname);
-const SRC = Object.fromEntries(['server.mjs', 'preview.mjs', 'autopilot.mjs', 'remote.mjs'].map((f) => [f, fs.readFileSync(path.join(HERE, '..', f), 'utf8')]));
+const SRC = Object.fromEntries(['server.mjs', 'preview.mjs', 'autopilot.mjs', 'remote.mjs', 'agy.mjs'].map((f) => [f, fs.readFileSync(path.join(HERE, '..', f), 'utf8')]));
 const src = SRC['server.mjs'];
 const MUTANTS = {
   "unarchive-account-not-wrapped": [": wrapLaunch(acct, cm ? withCodeMode(cl) : cl);", ": cm ? withCodeMode(cl) : cl;"],
@@ -114,6 +114,17 @@ const MUTANTS = {
   // 11/16 子会话标记：服务不清 tmux 全局环境里继承来的 CLAUDE* 变量
   'tmux-env-not-scrubbed': ["  fastLoop(); slowLoop(); suggestLoop(); limitsLoop(); scrubTmuxEnv();", "  fastLoop(); slowLoop(); suggestLoop(); limitsLoop();"],
   // 被测服务不认 CCBOARD_TMUX_SOCKET（11/16 两次全体崩溃的修复）。故意指向一个不存在的 -S 套接字，不写回 -L ccboard：改坏版本身不能把隐患带回来
+  // Antigravity（11/27，[7d-3] / [8] 抓）：只认他本人的两道闸、tap 报回 idle 才收交付、tap 不留邮箱、删除不挪 agy 的记录
+  'agy-new-no-human-gate': ["const human = !!req.headers.origin || !!rem, bad = agyReject(body, human, agyModels && agyModels.ids);", "const human = true, bad = agyReject(body, human, agyModels && agyModels.ids);"],
+  'agy-send-no-human-gate': ["  if (s0.provider === 'antigravity') { const bad = agyReject({}, human); if (bad) return { ok: false, error: bad }; }\n", ""],
+  'agy-no-settle': ["    if (!sv.busy && st.lastText) { st.result = st.lastText; st.resultAt = st.lastTextAt; st.done = true; st.note = null; st.tool = null; }", ""],
+  'agy-tap-keeps-email': ["confirm: p.tool_confirmation_pending === true,", "confirm: p.tool_confirmation_pending === true, email: p.email,", 'agy.mjs'],
+  'agy-delete-moves': ["  const file = agy ? null : (it && it.file)", "  const file = (it && it.file)"],
+  // FIX-1（win-1b 审）：一起退出后的「全部接回」、归档 / 删除、选择框，碰 agy 都只认他本人
+  'agy-crash-ignores-origin': ["crashAction(String(body.id || ''), String(body.action || ''), !!req.headers.origin));", "crashAction(String(body.id || ''), String(body.action || ''), true));"],
+  'agy-restore-queue-takes-agy': ["&& !tried.includes(sid) && (human || it.provider !== 'antigravity'); })", "&& !tried.includes(sid) && (human || true); })"],
+  'agy-archive-no-human-gate': ["isAgySid(String(body.sid || ''))) { const bad = agyReject({}, !!req.headers.origin || !!rem);", "isAgySid(String(body.sid || ''))) { const bad = '';"],
+  'agy-answer-no-human-gate': ["if (Object.hasOwn(agys, name)) { const bad = agyReject({}, !!req.headers.origin || !!rem);", "if (false) { const bad = agyReject({}, !!req.headers.origin || !!rem);"],
   'tmux-socket-ignored': ["const TMUX_SOCKET = (SANDBOX && process.env.CCBOARD_TMUX_SOCKET) || path.join(HOME, '.cc-board', 'tmux.sock');", "const TMUX_SOCKET = '/dev/null/ccb-mutant.sock';"],
   'kw-turn-counts': ["      if (isKeepWarm(text)) { if (st.open) return; st.inKw = true; st.kwAt = d.timestamp;", "      if (false && isKeepWarm(text)) { if (st.open) return; st.inKw = true; st.kwAt = d.timestamp;"],   // 11/20 总管保温（win-99）
   'kw-reply-delivers': ["      if (st.inKw) {                                         // 保温那一轮的回复", "      if (false) {                                         // 保温那一轮的回复"],   // 11/20 总管保温（win-99）
@@ -561,7 +572,10 @@ const MUTANTS = {
   'limits-pin-bad-kills-config': ['if (lp.error) console.log(', "if (lp.error) throw new Error('limitsPin'); if (lp.error) console.log("],
   'rp-gal-order-only':   ["  if (idOf(dir) !== id) return { why: 'missing' };                    // 列的时候文件夹被换掉了：不给\n  const media = rpBind(dir, id, g.media);", "  const media = []; for (const m of g.media) { let s; try { s = fs.lstatSync(m.real, { bigint: true }); } catch { continue; } if (s.isFile()) media.push({ ...m, id: s.dev + ':' + s.ino }); }\n  if (idOf(dir) !== id) return { why: 'missing' };", 'server.mjs'],
 };
-for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
+// 点名只跑几个时只核这几个的原文（11/27：线上已有 5 个改坏版的原文对不上，一个对不上就整份退出，连点名的几个也跑不了）；全跑照旧全核
+const pickEarly = process.argv[2] ? new Set(process.argv[2].split(',')) : null;
+if (pickEarly) for (const k of pickEarly) if (!MUTANTS[k]) throw new Error(`没有叫 ${k} 的改坏版`);
+for (const [name, [a, , f = 'server.mjs']] of Object.entries(MUTANTS)) { if (pickEarly && !pickEarly.has(name)) continue; const n = SRC[f].split(a).length - 1; if (n !== 1) throw new Error(`${name}: 要替换的原文在 ${f} 里出现 ${n} 次（应当正好 1 次）`); }
 // 这一次运行自己的临时目录（11/22 修：原来几份同时跑共用 test/.tmp/mutants，先跑完的一份把别人的改坏版删了）。原文核对过了才建，核不过不留空目录
 fs.mkdirSync(path.join(HERE, '.tmp'), { recursive: true }); const TMP = fs.mkdtempSync(path.join(HERE, '.tmp', 'mutants-'));
 fs.copyFileSync(path.join(HERE, '../projects.mjs'), path.join(TMP, 'projects.mjs'));   // 改坏版 import './projects.mjs'，要放在它旁边
@@ -576,6 +590,7 @@ fs.copyFileSync(path.join(HERE, '../autopilot.mjs'), path.join(TMP, 'autopilot.m
 fs.copyFileSync(path.join(HERE, '../remote.mjs'), path.join(TMP, 'remote.mjs'));       // 同理 import './remote.mjs'（手机远程）
 fs.copyFileSync(path.join(HERE, '../qr.mjs'), path.join(TMP, 'qr.mjs'));
 fs.copyFileSync(path.join(HERE, '../update.mjs'), path.join(TMP, 'update.mjs'));     // import './update.mjs'
+fs.copyFileSync(path.join(HERE, '../agy.mjs'), path.join(TMP, 'agy.mjs'));               // import './agy.mjs'（Antigravity，11/27）：同上
 fs.copyFileSync(path.join(HERE, '../transcribe.mjs'), path.join(TMP, 'transcribe.mjs'));   // import './transcribe.mjs'（手机录音转文字，11/26）：少拷它，每一个改坏版的服务都在 import 那一行崩掉，整批都「红」却红在同一个错上，分不出各自被谁抓到
 fs.copyFileSync(path.join(HERE, '../ui.html'), path.join(TMP, 'ui.html'));           // 远程打开 / 要读它（没有它时远程首页 500，[10] 后面整段跟着红，改坏版就分不出是被哪一条抓到的）               // 同理 import './qr.mjs'
 // 端口按「第几路」（slot）分，不按改坏版的序号分（11/22 修）：state.test 一份用 T_PORT 到 T_PORT+1900（[10] 第 6 份服务 +900 的预览端口），
@@ -587,7 +602,7 @@ const run = ([name, [a, b, f = 'server.mjs']], slot) => new Promise((resolve) =>
   if (f === 'server.mjs') fs.writeFileSync(file, src.replace(a, b));
   else {                                             // 改坏的是 server.mjs 引用的文件：单独一个文件夹，原样的 server.mjs 旁边放改坏的那份
     const d = path.join(TMP, name); fs.mkdirSync(d, { recursive: true }); file = path.join(d, 'server.mjs'); fs.writeFileSync(file, src);
-    for (const g of ['projects.mjs', 'suggest.mjs', 'limits.mjs', 'accounts.mjs', 'route.mjs', 'preview.mjs', 'judge.mjs', 'org.mjs', 'autopilot.mjs', 'remote.mjs', 'qr.mjs', 'update.mjs', 'transcribe.mjs', 'ui.html']) fs.copyFileSync(path.join(TMP, g), path.join(d, g));
+    for (const g of ['projects.mjs', 'suggest.mjs', 'limits.mjs', 'accounts.mjs', 'route.mjs', 'preview.mjs', 'judge.mjs', 'org.mjs', 'autopilot.mjs', 'remote.mjs', 'qr.mjs', 'update.mjs', 'transcribe.mjs', 'agy.mjs', 'ui.html']) fs.copyFileSync(path.join(TMP, g), path.join(d, g));
     fs.writeFileSync(path.join(d, f), SRC[f].replace(a, b));
   }
   let out = ''; const p = spawn(process.execPath, [path.join(HERE, 'state.test.mjs'), file], { env: { ...process.env, T_PORT: String(Number(process.env.M_PORT || 4770) + slot * SLOT) } });

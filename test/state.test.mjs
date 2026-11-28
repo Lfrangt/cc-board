@@ -446,6 +446,79 @@ fs.writeFileSync(path.join(BIN, 'autojudge'), '#!/bin/sh\nexec "' + NODE + '" "'
 // 不限时的话往上走 15 层要 4.5 秒以上。其余地方用真的 /usr/sbin/lsof 和 /bin/ps
 fs.writeFileSync(path.join(BIN, 'lsof-fast'), '#!/bin/sh\nprintf "p100000\\nf3\\n"\n', { mode: 0o755 });
 fs.writeFileSync(path.join(BIN, 'ps-slow'), '#!/bin/sh\n/bin/sleep 0.3\necho $(( $4 + 1 ))\n', { mode: 0o755 });
+// 假的 droid（[7d-2]）：每次启动把参数追加进 argv.droid（每个参数以 \0 结尾，一次以 \036\0 收尾），在假主目录的 ~/.factory/sessions/<文件夹把 / 换成 ->/<会话号>.jsonl 里
+// 照真 Droid 的样子写 session_start + 他的话；argv.droid-go 出现后再写一次改文件、一句交付和 agent_turn_outcome，然后睡着不退。--resume 只记参数、接着睡
+// droid exec --help 印 fixture-droid-help.txt（不记进 argv.droid，问了几次记在 argv.droid-help）。带 --settings 的：照真 Droid 在记录旁边写 <会话号>.settings.json，
+// 请求 gemini-3.5-flash 时原样写 test/fixture-droid-session-settings.json（真 Droid 写的那份：gemini-4-hydrogen、low；Factory 会把请求的模型换掉，卡片要以这份为准）。
+// 参数照真 Droid 认 --：-- 后面的都是任务。记录照真 Droid 的样子：第一条 user 消息是 llm_only 的 <system-reminder>，他的话在后面那条。
+// 任务里带 [trust] / [trust-2] / [trust-again] / [late]：先画「Trust this folder?」那一屏（[trust-2]、[late] 少了「Exit without trusting」，autoTrust 不按），
+// 收到回车（每次记一个 E 进 argv.droid-enter）清屏，1.5 秒后才写记录；多按的回车也记得下。[trust-again]：第一下回车不认（框照画），第二下才过
+fs.writeFileSync(path.join(BIN, 'droid.mjs'), `import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto';
+const a = process.argv.slice(2), dd = a.indexOf('--'), fl = dd >= 0 ? a.slice(0, dd) : a, val = (k) => { const i = fl.indexOf(k); return i >= 0 ? fl[i + 1] : null; }, FL = new Set(['--cwd', '--resume', '--auto', '--settings']);
+if (a[0] === 'exec' && a.includes('--help')) { fs.appendFileSync(process.env.T_ARGV + '.droid-help', 'h'); process.stdout.write(fs.readFileSync(${JSON.stringify(path.join(HERE, 'fixture-droid-help.txt'))}, 'utf8')); process.exit(0); }
+const cwd = val('--cwd') || process.cwd(), resume = val('--resume'), pos = dd >= 0 ? a.slice(dd + 1) : a.filter((x, i) => !FL.has(x) && !FL.has(a[i - 1]));
+fs.writeFileSync(process.env.T_ARGV + '.droid-home', process.env.HOME);
+const dir = path.join(process.env.HOME, '.factory/sessions', cwd.replace(/\\//g, '-')); fs.mkdirSync(dir, { recursive: true });
+const id = resume || crypto.randomUUID(), f = path.join(dir, id + '.jsonl'), t = () => new Date().toISOString();
+const w = (o) => fs.appendFileSync(f, JSON.stringify(o) + '\\n');
+let set = null; try { set = val('--settings') ? JSON.parse(fs.readFileSync(val('--settings'), 'utf8')) : null; } catch {}
+const task = pos.length ? pos[pos.length - 1] : '', again = /\\[trust-again\\]/.test(task), trust = /\\[trust-2\\]|\\[late\\]/.test(task) ? 2 : /\\[trust\\]/.test(task) || again ? 3 : 0;
+function start() {
+  if (set) fs.writeFileSync(path.join(dir, id + '.settings.json'), set.model === 'gemini-3.5-flash' ? fs.readFileSync(${JSON.stringify(path.join(HERE, 'fixture-droid-session-settings.json'))}, 'utf8') : JSON.stringify({ model: set.model || 'claude-opus-5-5', reasoningEffort: set.reasoningEffort || 'medium', autonomyLevel: 'low', providerLock: 'google' }));
+  if (resume) return;
+  w({ type: 'session_start', id, title: 'fake droid', cwd });
+  w({ type: 'message', id: 'u0', timestamp: t(), message: { role: 'user', visibility: 'llm_only', content: [{ type: 'text', text: '<system-reminder>夹具：只给模型看的环境说明</system-reminder>' }] } });
+  if (pos.length) w({ type: 'message', id: 'u1', timestamp: t(), message: { role: 'user', content: [{ type: 'text', text: pos[pos.length - 1].replace(/<([/]?)system-reminder>/g, '&lt;$1system-reminder&gt;') }] } });   // 照真 Droid：任务里的 <system-reminder> 标签转义后才存
+  const iv = setInterval(() => { if (!fs.existsSync(process.env.T_ARGV + '.droid-go')) return; clearInterval(iv);
+    w({ type: 'message', id: 'a1', timestamp: t(), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Edit', input: { file_path: cwd + '/droid.txt' } }] } });
+    w({ type: 'message', id: 'u2', timestamp: t(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'ok' }] } });
+    w({ type: 'message', id: 'a2', timestamp: t(), message: { role: 'assistant', content: [{ type: 'text', text: 'Droid 夹具做完了' }] } });
+    w({ type: 'agent_turn_outcome', turnId: 't1', reason: 'completed', resultKind: 'success' }); }, 200);
+}
+if (trust) {
+  process.stdout.write('\\x1b[2J\\x1b[H' + ['╭────────────────────────────╮', '│ Trust this folder?', '│ ' + cwd, '│', '│ > 1. Trust this folder', trust === 3 ? '│   2. Exit without trusting' : '│   2. Leave', '│', '│ Enter to confirm · Esc to exit', '╰────────────────────────────╯'].join('\\r\\n') + '\\r\\n');
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  let n = 0;
+  process.stdin.on('data', (b) => { for (const c of String(b)) if (c === '\\r' || c === '\\n') { fs.appendFileSync(process.env.T_ARGV + '.droid-enter', 'E'); if (++n === (again ? 2 : 1)) { process.stdout.write('\\x1b[2J\\x1b[H> '); setTimeout(start, 1500); } } });
+} else start();
+setTimeout(() => process.exit(0), 240000);
+`);
+fs.writeFileSync(path.join(BIN, 'droid'), '#!/bin/sh\ncase "$1" in exec) exec "' + NODE + '" "' + path.join(BIN, 'droid.mjs') + '" "$@";; esac\nfor a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV.droid"; done; printf \'\\036\\0\' >> "$T_ARGV.droid"\nexec "' + NODE + '" "' + path.join(BIN, 'droid.mjs') + '" "$@"\n', { mode: 0o755 });
+// 假的 agy（[7d-3]）：每次启动把参数追加进 argv.agy（同 droid 的写法）；agy models 打两行模型表、记一次 argv.agy-models。
+// 照真 agy 1.5.18 的样子：读 --settings 文件里的 statusLine 命令，每次状态变就用 sh -c 跑它、把状态 JSON 从 stdin 交过去（带一个假邮箱，看总控台扔不扔）。
+// 对话记录按第三方解析器给的格式写在假主目录 ~/.gemini/antigravity-cli/brain/<会话号>/.system_generated/logs/transcript.jsonl，每写一步整份重写（真 agy 在 CHECKPOINT 会整份重写）。
+// -i <任务>：第一句 → working；argv.agy-go 出现后写一段边做边说 + 一次改文件 + 一段交付 + CHECKPOINT → idle。终端里收到的每一行当他说的一句：含「要确认」的报 tool_confirmation_pending，
+// 等 argv.agy-ok 出现再交付；别的马上回「收到：<那句>」。--conversation <会话号>：接着原来那份记录、报 idle，接着睡
+fs.writeFileSync(path.join(BIN, 'agy.mjs'), `import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
+const a = process.argv.slice(2), val = (k) => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : null; }, A = process.env.T_ARGV;
+if (a[0] === 'models') { fs.appendFileSync(A + '.agy-models', 'x'); process.stdout.write('gemini-4-neon-high\\tGemini 4 Neon (High)\\nclaude-opus-5-5-high\\tClaude Opus 5.5 (High)\\n'); process.exit(0); }
+fs.writeFileSync(A + '.agy-home', process.env.HOME);
+const cmd = JSON.parse(fs.readFileSync(val('--settings'), 'utf8')).statusLine.command, cwd = process.cwd();
+let cid = val('--conversation') || '', state = 'initializing', confirm = false;
+const tp = () => path.join(process.env.HOME, '.gemini/antigravity-cli/brain', cid, '.system_generated/logs/transcript.jsonl');
+const tap = () => { const r = spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8', timeout: 5000, input: JSON.stringify({ agent_state: state, conversation_id: cid, session_id: cid ? 's-' + cid.slice(0, 4) : '', transcript_path: cid ? tp() : path.join(process.env.HOME, '.gemini/antigravity/brain/.system_generated/logs/transcript.jsonl'), cwd, workspace: cwd,
+  model: { id: 'Gemini 4 Neon (High)', display_name: 'Gemini 4 Neon (High)', effort: 'high' }, context_window: { used_percentage: 3 }, quota: { 'gemini-5h': { remaining_fraction: 0.9 } }, tool_confirmation_pending: confirm, pending_input_count: 0, email: 'fake-user@example.com', version: '1.5.18' }) });
+  fs.appendFileSync(A + '.agy-line', (r.stdout || '') + (r.status === 0 ? '' : ' rc=' + r.status) + '\\n'); };
+const lines = cid && fs.existsSync(tp()) ? fs.readFileSync(tp(), 'utf8').split('\\n').filter(Boolean) : [];
+const w = (o) => { lines.push(JSON.stringify({ step_index: lines.length, created_at: new Date().toISOString(), status: 'DONE', ...o })); fs.mkdirSync(path.dirname(tp()), { recursive: true }); const t = tp() + '.tmp'; fs.writeFileSync(t, lines.join('\\n') + '\\n'); fs.renameSync(t, tp()); };
+const said = (text) => { if (!cid) cid = crypto.randomUUID(); state = 'working'; w({ source: 'USER_EXPLICIT', type: 'USER_INPUT', content: '<USER_REQUEST>\\n' + text + '\\n</USER_REQUEST>\\n<ADDITIONAL_METADATA>cursor: ' + cwd + '</ADDITIONAL_METADATA>' }); tap(); };
+const answer = (text) => { w({ source: 'MODEL', type: 'PLANNER_RESPONSE', content: text }); w({ source: 'SYSTEM', type: 'CHECKPOINT', content: '' }); state = 'idle'; confirm = false; tap(); };
+const waitFor = (f, then) => { const iv = setInterval(() => { if (!fs.existsSync(f)) return; clearInterval(iv); fs.unlinkSync(f); then(); }, 200); };
+tap();
+const first = val('-i');
+if (cid) { state = 'idle'; tap(); }
+else if (first) { said(first); waitFor(A + '.agy-go', () => {
+  w({ source: 'MODEL', type: 'PLANNER_RESPONSE', content: '先改一个文件', tool_calls: [{ name: 'write_to_file', args: { TargetFile: cwd + '/agy.txt' } }] });
+  w({ source: 'MODEL', type: 'CODE_ACTION', content: 'wrote agy.txt', tool_calls: [{ name: 'write_to_file', args: { TargetFile: cwd + '/agy.txt' } }] });
+  answer('Antigravity 夹具做完了'); }); }
+else { state = 'idle'; tap(); }
+let buf = ''; process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const t = buf.slice(0, i).replace(/\\r$/, '').trim(); buf = buf.slice(i + 1); if (!t) continue;
+  fs.appendFileSync(A + '.agy-said', t + '\\n'); said(t);
+  if (/要确认/.test(t)) { confirm = true; tap(); waitFor(A + '.agy-ok', () => answer('确认过了')); } else setTimeout(() => answer('收到：' + t), 300); } });
+setTimeout(() => process.exit(0), 240000);
+`);
+fs.writeFileSync(path.join(BIN, 'agy'), '#!/bin/sh\nif [ "$1" != models ]; then for a in "$@"; do printf \'%s\\0\' "$a" >> "$T_ARGV.agy"; done; printf \'\\036\\0\' >> "$T_ARGV.agy"; fi\nexec "' + NODE + '" "' + path.join(BIN, 'agy.mjs') + '" "$@"\n', { mode: 0o755 });
 // ── 起服务 ──
 const logFile = path.join(ROOT, 'server.out'); const out = fs.openSync(logFile, 'w');
 const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !['TMUX', 'TMUX_PANE', 'CCBOARD_APNS_URL', 'CCBOARD_APNS_KEY_FILE', 'CCBOARD_ACCOUNT', 'CLAUDE_CODE_OAUTH_TOKEN'].includes(k))), CCBOARD_TMUX_SOCKET: TSOCK, CCBOARD_REMOTE_PORT: String(PORT + 50), CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_PID: '424242', HOME: FH, CCBOARD_PORT: String(PORT), TMUX_TMPDIR: TMUXDIR, CCBOARD_STALL_MS: '3000', CCBOARD_SUGGEST_MS: '800', CCBOARD_LIMITS_MS: '800', CCBOARD_TIDY_FAST_MS: '3000', CCBOARD_TIDY_FYI_MS: String(H), CCBOARD_TIDY_REVIEW_MS: String(2 * H), CCBOARD_TIDY_SMART_MS: String(H / 4), CCBOARD_JUDGE: path.join(BIN, 'judge'), J_LOG: JLOG, PATH: BIN + ':/usr/bin:/bin:/usr/sbin:/sbin', T_ARGV: ARGV, CCBOARD_SECURITY: path.join(BIN, 'security'), CCBOARD_CHIEF_MS: '1000', CCBOARD_PRUNE_MS: '6000', CCBOARD_REPL_CHUNK: '64',
@@ -489,7 +562,7 @@ env.CCBOARD_DATA = path.join(FH, 'Library/Application Support/cc-board'); delete
 const DATA0 = path.join(FH, 'Library/Application Support/cc-board'); fs.mkdirSync(DATA0, { recursive: true });
 const CHIEF = path.join(ROOT, 'chief-state.json');
 const SEAT = path.join(ROOT, 'seat-other.txt');   // org.seats（11/17 win-49）：点名「其他」这一组的现任负责人；开头不建（没点名），[1c] 末尾写进去再改坏、删掉
-fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true, autoTidy: !process.argv.includes('--ui'), tidyJudge: !process.argv.includes('--ui'), accounts: [{ id: 'good', name: '旧号' }, { id: 'none', name: '还没存 token 的号' }], org: { chief: CHIEF, seats: { other: SEAT, fretflow: path.join(ROOT, 'no-such-seat.txt'), 'bad key!': '/x' } }, autoContinue: process.argv.includes('--ui') ? false : { maxRun: 2 } }));   // --ui：界面测试点「审完了」，不能让服务把卡收走
+fs.writeFileSync(path.join(DATA0, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(HERE, 'fixture-config.json'), 'utf8')), autoTrust: true, codex: true, droid: true, antigravity: true, autoTidy: !process.argv.includes('--ui'), tidyJudge: !process.argv.includes('--ui'), accounts: [{ id: 'good', name: '旧号' }, { id: 'none', name: '还没存 token 的号' }], org: { chief: CHIEF, seats: { other: SEAT, fretflow: path.join(ROOT, 'no-such-seat.txt'), 'bad key!': '/x' } }, autoContinue: process.argv.includes('--ui') ? false : { maxRun: 2 } }));   // --ui：界面测试点「审完了」，不能让服务把卡收走
 // 架构场景：点名总管的文件（照 ~/Projects/assistant/state.json 的样子：session_id + generation）；hint 是负责人 peerDone 开的（spawn.json 按 tmux 名记）
 fs.writeFileSync(CHIEF, JSON.stringify({ window: 'w-projC', session_id: S.projC.sid, generation: 3 }));
 if (S.hint.tmux) fs.writeFileSync(path.join(DATA0, 'spawn.json'), JSON.stringify({ [S.hint.tmux]: { by: S.peerDone.sid, at: Date.now() }, ...(S.atKid && S.atKid.tmux ? { [S.atKid.tmux]: { by: S.atParent.sid, at: Date.now() } } : {}) }));
@@ -563,6 +636,13 @@ const rq = (port, method, p, headers = {}, body) => new Promise((resolve) => {
   if (data) r.write(data); r.end();
 });
 const log = () => fs.readFileSync(logFile, 'utf8');
+// [7d-2] / [8]：假 droid 每次启动收到的参数
+const droidRuns = () => { let t = ''; try { t = fs.readFileSync(ARGV + '.droid', 'utf8'); } catch {} return t.split('\u001e\u0000').filter(Boolean).map((r) => r.split('\u0000').slice(0, -1)); };
+let DSID = null;
+// [7d-3] / [8]：假 agy 每次开窗口收到的参数（agy models 不记）、问模型表的次数；ASID = 归档留给 [8] 的那个 Antigravity 会话
+const agyRuns = () => { let t = ''; try { t = fs.readFileSync(ARGV + '.agy', 'utf8'); } catch {} return t.split('\u001e\u0000').filter(Boolean).map((r) => r.split('\u0000').slice(0, -1)); };
+const agyModelCalls = () => { try { return fs.readFileSync(ARGV + '.agy-models', 'utf8').length; } catch { return 0; } };
+let ASID = null, AFILE = null;
 
 let pass = 0, fail = 0;
 const ok = (cond, name, extra = '') => { if (cond) { pass++; console.log('  ok   ' + name); } else { fail++; console.log('  FAIL ' + name + (extra ? '  → ' + extra : '')); } };
@@ -2050,6 +2130,280 @@ try {
   n1 = await post('/api/new', { prompt: '用 Codex 做', cwd: '~', provider: 'codex', model: 'bad model!' });
   ok(!n1.body.ok && /写法不对/.test(n1.body.error || ''), '选 Codex：过了开关，走到核对模型名那一步', JSON.stringify(n1.body));
 
+  console.log('\n[7d-2] config 里 droid 打开：开 Droid 窗口、墙上的忙 / 闲（只看记录）、归档后 --resume 接回；不接的参数一律报错');
+  const DBIN = path.join(BIN, 'droid'), DSESS = path.join(FH, '.factory/sessions', CWD.replace(/\//g, '-'));
+  const droidLines = () => log().split('\n').filter((l) => l.startsWith('droid '));
+  ok(droidLines().some((l) => l.endsWith(' bin ' + DBIN)), '服务按登录 shell 找到的 droid 是 BIN 里的假命令（真的 droid 够不着）', droidLines().join(' | '));
+  const fakeDroid = droidLines().some((l) => l.endsWith(' bin ' + DBIN));
+  st = await get('/api/state');
+  ok(st.providers && st.providers.droid && st.providers.droid.ok === true && st.providers.droid.label === 'Droid', '「交给谁」里有 Droid（找到了命令）', JSON.stringify(st.providers && st.providers.droid));
+  const pv0 = (st.providers && st.providers.droid) || {}, nMod = (droidLines().map((l) => l.match(/ models (\d+) default claude-opus-5-5$/)).find(Boolean) || [])[1];
+  ok(fs.existsSync(ARGV + '.droid-help') && Number(nMod) > 40 && Array.isArray(pv0.models) && pv0.models.length === Number(nMod), '服务启动时问了 droid exec --help（假 droid 印 fixture-droid-help.txt）：日志记下读出几个模型、默认是谁，和 providers 里的条数一样', JSON.stringify({ nMod, n: (pv0.models || []).length }));
+  ok((pv0.models || []).includes('gemini-3.1-pro-preview') && !pv0.models.includes('deepseek-v4-pro') && !pv0.models.includes('auto') && pv0.defaultModel === 'claude-opus-5-5'
+    && JSON.stringify((pv0.effortsByModel || {})['gemini-3.1-pro-preview']) === '["low","medium","high"]' && (pv0.modelNames || {})['gemini-3.1-pro-preview'] === 'Gemini 3.1 Pro' && (pv0.defaultEffortByModel || {})['claude-opus-5-5'] === 'medium' && Array.isArray(pv0.efforts) && pv0.efforts.length === 0,
+  'providers.droid：models 有 gemini-3.1-pro-preview、没有停用的和 auto，默认 claude-opus-5-5；强度跟着模型走（effortsByModel），efforts 是空的', JSON.stringify({ m: (pv0.models || []).slice(0, 4), d: pv0.defaultModel, e: (pv0.effortsByModel || {})['gemini-3.1-pro-preview'] }));
+  const dBad = {};
+  for (const [k, extra] of [['autoHigh', { auto: 'high' }], ['autoBad', { auto: 'yes' }], ['model', { model: 'gpt-5' }], ['tier', { tier: 'light' }], ['effort', { effort: 'off' }], ['account', { account: 'good' }], ['codeMode', { codeMode: true }], ['brief', { brief: {} }],
+    ['modelNone', { model: '不存在' }], ['gemXhigh', { model: 'gemini-3.1-pro-preview', effort: 'xhigh' }]])
+    dBad[k] = (await post('/api/new', { prompt: '不该开', cwd: CWD, provider: 'droid', ...extra })).body;
+  ok(dBad.autoHigh.ok === false && /auto 只能是 low 或 medium/.test(dBad.autoHigh.error || '') && dBad.autoBad.ok === false && /auto 只能是/.test(dBad.autoBad.error || ''), 'Droid 的 auto 只认 low / medium：high、乱写的都报错', JSON.stringify([dBad.autoHigh, dBad.autoBad]));
+  ok(/模型/.test(dBad.model.error || '') && /档位/.test(dBad.tier.error || '') && /强度/.test(dBad.effort.error || '') && /账号/.test(dBad.account.error || '') && /Code Mode/.test(dBad.codeMode.error || '') && /派活单/.test(dBad.brief.error || '')
+    && ['model', 'tier', 'effort', 'account', 'codeMode', 'brief'].every((k) => dBad[k].ok === false), 'Droid 不认清单外的模型、默认模型不认的强度；不接档位 / 账号 / Code Mode / 派活单：给了就报错（档位在 routeNew 翻成 Claude 的模型之前就拦下）', JSON.stringify(dBad));
+  ok(dBad.modelNone.ok === false && /^Droid 不认模型「不存在」，能选：claude-fable-5\.1、.*gemini-3\.1-pro-preview/.test(dBad.modelNone.error || '') && dBad.gemXhigh.ok === false && dBad.gemXhigh.error === 'Droid 的 gemini-3.1-pro-preview 不认强度「xhigh」，能选：low、medium、high',
+    'model:「不存在」、gemini-3.1-pro-preview + xhigh：拒，报错点名那个值、列出能选的', JSON.stringify([dBad.modelNone.error && dBad.modelNone.error.slice(0, 60), dBad.gemXhigh.error]));
+  ok(droidRuns().length === 0, '被拒的都没起 droid', JSON.stringify(droidRuns()));
+  if (!fakeDroid) ok(false, '找到的不是假 droid：后面不开 Droid 窗口（不能碰真的 droid）');
+  else {
+    const dn = (await post('/api/new', { prompt: 'Droid 夹具任务', cwd: CWD, provider: 'droid', auto: 'low' })).body;
+    ok(dn.ok === true && /^ccb-/.test(dn.name || '') && dn.auto === 'low', 'Droid：开窗口成功，应答带 auto', JSON.stringify(dn));
+    const run1 = await until(() => droidRuns()[0], 10000);
+    ok(JSON.stringify(run1) === JSON.stringify(['--cwd', CWD, '--auto', 'low', '--', 'Droid 夹具任务']), 'Droid 的命令行：droid --cwd <文件夹> --auto low -- "<任务>"（任务前一律加 --；明确给了文件夹，不附找文件夹的说明）', JSON.stringify(run1));
+    let dc = await until(async () => (await get('/api/state')).sessions.find((x) => x.provider === 'droid' && x.tmux === dn.name));
+    ok(dc && dc.status === 'busy' && dc.prompt === 'Droid 夹具任务', '记录里只有他的话、还没有 agent_turn_outcome：卡片上墙、provider droid、在忙', JSON.stringify(dc && { s: dc.status, p: dc.prompt }));
+    ok(dc && /^[0-9a-f-]{36}$/.test(dc.sid) && fs.existsSync(path.join(DSESS, dc.sid + '.jsonl')), '会话号取自 ~/.factory/sessions/<文件夹>/ 里新出现那份记录的 session_start.id', dc && dc.sid);
+    let dHome = ''; try { dHome = fs.readFileSync(ARGV + '.droid-home', 'utf8'); } catch {}
+    ok(dHome === FH, '窗口里跑的是假 droid（它在假主目录里写记录）', dHome);
+    DSID = dc ? dc.sid : null;
+    fs.writeFileSync(ARGV + '.droid-go', '1');
+    dc = await until(async () => { const x = (await get('/api/state')).sessions.find((s) => s.tmux === dn.name); return x && x.status === 'idle' && x.done ? x : null; });
+    ok(dc && dc.status === 'idle' && dc.done === true && dc.result === 'Droid 夹具做完了' && dc.sid === DSID, '最后一条是 agent_turn_outcome：闲着、交付是它最后那句话', JSON.stringify(dc && { s: dc.status, r: dc.result }));
+    const dFile = path.join(DSESS, DSID + '.jsonl');
+    fs.appendFileSync(dFile, JSON.stringify({ type: 'message', id: 'u3', timestamp: new Date().toISOString(), message: { role: 'user', content: [{ type: 'text', text: '再改一处' }] } }) + '\n');
+    dc = await until(async () => { const x = (await get('/api/state')).sessions.find((s) => s.sid === DSID); return x && x.status === 'busy' ? x : null; }, 8000);
+    ok(dc && dc.status === 'busy' && dc.prompt === '再改一处', 'outcome 之后又来了他的一句话：又在忙', JSON.stringify(dc && { s: dc.status, p: dc.prompt }));
+    fs.appendFileSync(dFile, JSON.stringify({ type: 'message', id: 'a3', timestamp: new Date().toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: '改好了' }] } }) + '\n' + JSON.stringify({ type: 'agent_turn_outcome', turnId: 't2', reason: 'completed', resultKind: 'success' }) + '\n');
+    dc = await until(async () => { const x = (await get('/api/state')).sessions.find((s) => s.sid === DSID); return x && x.status === 'idle' && x.result === '改好了' ? x : null; }, 8000);
+    ok(!!dc, '又一条 outcome：回到闲着，交付换成新的那句', JSON.stringify(dc && { s: dc.status, r: dc.result }));
+    const tu = await get('/api/turns?sid=' + DSID);
+    ok(Array.isArray(tu.turns) && tu.turns.length === 2 && tu.turns[0].prompt === 'Droid 夹具任务' && tu.turns[1].results[0].text === '改好了', '放大看的对话按 Droid 的记录读：两轮、他的话和交付', JSON.stringify(tu));
+    const ar = (await post('/api/archive', { sid: DSID })).body;
+    const arDone = await until(async () => ((await get('/api/archive')).items || []).find((x) => x.sid === DSID && x.state === 'archived'), 20000);
+    const paneGone = spawnSync(TMUX_BIN, [...TMW(dn.name), 'has-session', '-t', dn.name], { env, stdio: 'ignore' }).status !== 0;
+    ok(ar.ok === true && !!arDone && paneGone && !(await get('/api/state')).sessions.some((x) => x.sid === DSID), '归档 Droid：留着（改过文件），窗口停掉、下墙', JSON.stringify({ ar, arDone, paneGone }));
+    const un = (await post('/api/unarchive', { sid: DSID })).body;
+    const run2 = await until(() => droidRuns()[1], 10000);
+    ok(un.ok === true && un.resumed === true && JSON.stringify(run2) === JSON.stringify(['--resume', DSID, '--cwd', CWD]), '接回 Droid：droid --resume <会话号> --cwd <文件夹>', JSON.stringify({ un, run2 }));
+    dc = await until(async () => (await get('/api/state')).sessions.find((x) => x.sid === DSID && x.tmux === un.name));
+    ok(dc && dc.provider === 'droid' && dc.status === 'idle' && dc.result === '改好了' && !((await get('/api/archive')).items || []).some((x) => x.sid === DSID), '接回后同一个会话号回到墙上（还是原来那份记录），归档列表里没了', JSON.stringify(dc && { p: dc.provider, s: dc.status, t: dc.tmux }));
+    await post('/api/archive', { sid: DSID });                        // [8] 用：关着 droid 时这条归档接不回来
+    ok(!!(await until(async () => ((await get('/api/archive')).items || []).find((x) => x.sid === DSID && x.state === 'archived'), 20000)), '再归档一次（留给 [8]）');
+    // 模型和强度（11/27）：写进 <数据目录>/droid-settings/<窗口>.json，--settings 给它；卡片以 Factory 自己记的 <会话号>.settings.json 为准
+    const DSET = path.join(DATA0, 'droid-settings'), archived = (sid) => until(async () => ((await get('/api/archive')).items || []).find((x) => x.sid === sid && x.state === 'archived'), 20000);
+    let n0 = droidRuns().length;
+    const dm = (await post('/api/new', { prompt: 'Droid 模型任务', cwd: CWD, provider: 'droid', model: 'gemini-3.1-pro-preview', effort: 'low' })).body, setF = path.join(DSET, (dm.name || '?') + '.json');
+    const runM = await until(() => droidRuns()[n0], 10000);
+    ok(dm.ok === true && dm.model === 'gemini-3.1-pro-preview' && dm.effort === 'low' && JSON.stringify(runM) === JSON.stringify(['--cwd', CWD, '--settings', setF, '--', 'Droid 模型任务']), 'Droid 选了模型和强度：droid --cwd <文件夹> --settings <数据目录>/droid-settings/<窗口>.json -- "<任务>"，应答带 model / effort', JSON.stringify({ dm, runM }));
+    let setBody = ''; try { setBody = fs.readFileSync(setF, 'utf8'); } catch {}
+    ok(setBody === '{"model":"gemini-3.1-pro-preview","reasoningEffort":"low"}' && (fs.statSync(setF).mode & 0o777) === 0o600, '设置文件里正好两个键 {model, reasoningEffort}，0600', setBody);
+    let dj = {}; try { dj = JSON.parse(fs.readFileSync(path.join(DATA0, 'droids.json'), 'utf8')); } catch {}
+    ok(dj[dm.name] && dj[dm.name].model === 'gemini-3.1-pro-preview' && dj[dm.name].effort === 'low' && dj[dm.name].settings === setF && log().split('\n').some((l) => l.startsWith('droid ') && l.endsWith(' ' + dm.name + ' new auto=- model=gemini-3.1-pro-preview effort=low')), 'droids.json 记下模型、强度和设置文件；日志一行 droid … new … model=… effort=…', JSON.stringify(dj[dm.name]));
+    const mc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dm.name && x.model));
+    ok(mc && mc.model === 'gemini-3.1-pro-preview' && mc.modelName === 'Gemini 3.1 Pro' && mc.effort === 'low', '卡片的模型 / 强度：读 <会话号>.settings.json，显示名取 droid 清单里的', JSON.stringify(mc && { m: mc.model, n: mc.modelName, e: mc.effort }));
+    if (mc) {
+      await post('/api/archive', { sid: mc.sid }); const ma = await archived(mc.sid);
+      let mad = null; try { mad = JSON.parse(fs.readFileSync(path.join(DATA0, 'archive.json'), 'utf8')).items[mc.sid].droid; } catch {}
+      ok(!!ma && mad && mad.model === 'gemini-3.1-pro-preview' && mad.effort === 'low' && !fs.existsSync(setF), '归档选过模型的 Droid：窗口停了就删掉它的设置文件（DROID_SET_DIR 下的 ccb-*.json）；archive.json 的条目里照旧记着模型和强度', JSON.stringify({ ma: !!ma, mad, left: fs.existsSync(setF) }));
+      n0 = droidRuns().length;
+      const um = (await post('/api/unarchive', { sid: mc.sid })).body, runR = await until(() => droidRuns()[n0], 10000);
+      ok(um.ok === true && JSON.stringify(runR) === JSON.stringify(['--resume', mc.sid, '--cwd', CWD]) && !fs.existsSync(setF), '接回选过模型的 Droid：命令行没有 --settings，也不重写设置文件（11/27 真 droid 实测：接回时会话自己的 <会话号>.settings.json 说了算）', JSON.stringify({ um, runR, left: fs.existsSync(setF) }));
+      const mr = um.ok ? await until(async () => (await get('/api/state')).sessions.find((x) => x.sid === mc.sid && x.tmux === um.name && x.model)) : null;
+      let dj2 = {}; try { dj2 = JSON.parse(fs.readFileSync(path.join(DATA0, 'droids.json'), 'utf8')); } catch {}
+      ok(mr && mr.model === 'gemini-3.1-pro-preview' && mr.effort === 'low' && dj2[um.name] && !('settings' in dj2[um.name]), '接回后卡片的模型 / 强度照旧读会话自己的 <会话号>.settings.json；droids.json 里这一条没有 settings', JSON.stringify({ m: mr && mr.model, e: mr && mr.effort, dj: dj2[um.name] }));
+      if (um.ok) { await post('/api/archive', { sid: mc.sid }); await archived(mc.sid); }
+    }
+    n0 = droidRuns().length;
+    const dh = (await post('/api/new', { prompt: 'Droid 换名任务', cwd: CWD, provider: 'droid', model: 'gemini-3.5-flash' })).body, setH = path.join(DSET, (dh.name || '?') + '.json');
+    const runH = await until(() => droidRuns()[n0], 10000);
+    let setHB = ''; try { setHB = fs.readFileSync(setH, 'utf8'); } catch {}
+    ok(dh.ok === true && JSON.stringify(runH) === JSON.stringify(['--cwd', CWD, '--settings', setH, '--', 'Droid 换名任务']) && setHB === '{"model":"gemini-3.5-flash"}', '只选了模型：设置文件里只有 model', JSON.stringify({ runH, setHB }));
+    const hc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dh.name && x.model === 'gemini-4-hydrogen'));
+    ok(hc && hc.model === 'gemini-4-hydrogen' && hc.modelName === null && hc.effort === 'low', '请求 gemini-3.5-flash、它的 <会话号>.settings.json 是 test/fixture-droid-session-settings.json（真 Droid 写的那份）：卡片写记下的 gemini-4-hydrogen 和 low（清单里没有，显示名交给界面；没请求强度，low 来自那份文件）', JSON.stringify(hc && { m: hc.model, n: hc.modelName, e: hc.effort }));
+    if (hc) {                                                         // 删除：<会话号>.jsonl 和旁边的 <会话号>.settings.json 一起挪进删除暂存处，设置文件删掉
+      const hj = path.join(DSESS, hc.sid + '.jsonl'), hs = path.join(DSESS, hc.sid + '.settings.json'), DDEL = path.join(DATA0, 'deleted');
+      const hd = (await post('/api/delete', { sid: hc.sid })).body;
+      let del = []; try { del = fs.readdirSync(DDEL).filter((f) => f.includes(hc.sid)); } catch {}
+      ok(hd.ok === true && hd.moved === true && !fs.existsSync(hj) && !fs.existsSync(hs) && del.some((f) => f.endsWith('-' + hc.sid + '.jsonl')) && del.some((f) => f.endsWith('-' + hc.sid + '.settings.json')) && !fs.existsSync(setH),
+        '删除 Droid 会话：记录和旁边的 <会话号>.settings.json 一起挪进 deleted/，总控台的设置文件删掉', JSON.stringify({ hd, del, j: fs.existsSync(hj), s: fs.existsSync(hs), set: fs.existsSync(setH) }));
+    }
+    // 信任框（autoTrust 开着）：三句都在才按一次回车；只对上两句一个键都不按，留在「启动中」卡片上给他选
+    const ENT = ARGV + '.droid-enter', ents = () => { try { return fs.readFileSync(ENT, 'utf8').length; } catch { return 0; } };
+    let e0 = ents();
+    const dt = (await post('/api/new', { prompt: '[trust] Droid 信任框', cwd: CWD, provider: 'droid' })).body;
+    const tc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dt.name), 20000);
+    await sleep(2500);
+    const tLines = log().split('\n').filter((l) => l.startsWith('trust ') && l.includes(' ' + dt.name + ' droid'));
+    ok(dt.ok === true && !!tc && ents() === e0 + 1 && tLines.length === 1 && / droid yes$/.test(tLines[0]), 'Droid 的「Trust this folder?」「> 1. Trust this folder」「Exit without trusting」都在：替他按一次回车（只一次），过了这一屏卡片上墙；日志一行 trust … droid yes', JSON.stringify({ ok: dt.ok, card: !!tc, enters: ents() - e0, tLines }));
+    if (tc) { await post('/api/archive', { sid: tc.sid }); await archived(tc.sid); }
+    e0 = ents();
+    const dq = (await post('/api/new', { prompt: '[trust-2] Droid 半个信任框', cwd: CWD, provider: 'droid' })).body;
+    const pq = await until(async () => ((await get('/api/state')).pending || []).find((x) => x.name === dq.name && x.dialog), 15000);
+    await sleep(3000);
+    ok(dq.ok === true && pq && JSON.stringify(pq.dialog.options) === '["Trust this folder","Leave"]' && pq.dialog.cursor === 0 && ents() === e0 && !log().includes(' ' + dq.name + ' droid yes'), '只对上两句（没有「Exit without trusting」）：一个键都不按；「启动中」卡片上有这个选择框（按 Droid 的「> 1. …」认）', JSON.stringify({ d: pq && pq.dialog, enters: ents() - e0 }));
+    const an = (await post('/api/answer', { name: dq.name, option: 0, text: 'Trust this folder' })).body;
+    const qc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dq.name), 20000);
+    ok(an.ok === true && ents() === e0 + 1 && !!qc, '在卡片上点「Trust this folder」：回车一次，过了这一屏卡片上墙', JSON.stringify({ an, enters: ents() - e0, card: !!qc }));
+    if (qc) { await post('/api/archive', { sid: qc.sid }); await archived(qc.sid); }
+    // 回车第一下没被收下（框还在）：隔约 1.5 秒再看一眼、再按，每次都记日志
+    e0 = ents();
+    const dg = (await post('/api/new', { prompt: '[trust-again] Droid 回车没收下', cwd: CWD, provider: 'droid' })).body;
+    const gc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dg.name), 20000);
+    await sleep(2500);
+    const gLines = log().split('\n').filter((l) => l.startsWith('trust ') && l.includes(' ' + dg.name + ' droid'));
+    const gGap = gLines.length === 2 ? Date.parse(gLines[1].split(' ')[1]) - Date.parse(gLines[0].split(' ')[1]) : -1;
+    ok(dg.ok === true && !!gc && ents() === e0 + 2 && gLines.length === 2 && gLines.every((l) => / droid yes/.test(l)) && gGap >= 1200, '信任框按了回车还在：隔约 1.5 秒再按一次（共 2 次），日志两行，过了这一屏卡片上墙', JSON.stringify({ enters: ents() - e0, gLines, gGap, card: !!gc }));
+    if (gc) { await post('/api/archive', { sid: gc.sid }); await archived(gc.sid); }
+    // 任务以 - 开头：-- 在它前面，auto 照旧是请求的那个
+    n0 = droidRuns().length;
+    const dx = (await post('/api/new', { prompt: '--auto=high 做点事', cwd: CWD, provider: 'droid', auto: 'low' })).body, runX = await until(() => droidRuns()[n0], 10000);
+    const xc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dx.name), 15000);
+    ok(dx.ok === true && dx.auto === 'low' && JSON.stringify(runX) === JSON.stringify(['--cwd', CWD, '--auto', 'low', '--', '--auto=high 做点事']) && xc && xc.prompt === '--auto=high 做点事', '任务是「--auto=high 做点事」：命令行里 -- 在它前面，auto 仍是 low；任务原样进记录', JSON.stringify({ dx, runX, p: xc && xc.prompt }));
+    if (xc) { await post('/api/archive', { sid: xc.sid }); await archived(xc.sid); }
+    // 开在主目录：发给 droid 的任务后面附了找文件夹的说明（<system-reminder>），真 Droid 存记录时把这个标签转义成 &lt;…&gt;（11/27 实测，假 droid 照做）。
+    // 认领要靠第一句话对上任务，卡片上的任务也不能带着转义后的说明
+    n0 = droidRuns().length;
+    const dhm = (await post('/api/new', { prompt: 'Droid 主目录任务', cwd: FH, provider: 'droid', auto: 'low' })).body, runHm = await until(() => droidRuns()[n0], 10000);
+    const hmc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dhm.name), 15000);
+    ok(dhm.ok === true && runHm && /<system-reminder>/.test(runHm[runHm.length - 1] || '') && hmc && hmc.prompt === 'Droid 主目录任务', '开在主目录：命令行的任务附了找文件夹的说明；记录里说明被转义成 &lt;system-reminder&gt; 也照样认领，卡片上的任务不带说明', JSON.stringify({ dhm, last: runHm && (runHm[runHm.length - 1] || '').slice(0, 40), p: hmc && hmc.prompt }));
+    if (hmc) { await post('/api/archive', { sid: hmc.sid }); await archived(hmc.sid); }
+    // 认领竞态：信任框挂着时它还不写记录，同一个文件夹里别处冒出来的 Droid 记录（同 cwd、他的话不同）不能被这个窗口认走；
+    // 对得上任务的有两份以上就这一拍不认、只记一次日志；回车之后它自己的记录出来，认的是自己那份。auto: '' 当没给
+    n0 = droidRuns().length;
+    const dl = (await post('/api/new', { prompt: '[late] Droid 认领', cwd: CWD, provider: 'droid', auto: '' })).body, runL = await until(() => droidRuns()[n0], 10000);
+    ok(dl.ok === true && !('auto' in dl) && JSON.stringify(runL) === JSON.stringify(['--cwd', CWD, '--', '[late] Droid 认领']), "auto: '' 当没给：照常开、命令行没有 --auto", JSON.stringify({ dl, runL }));
+    const pl = await until(async () => ((await get('/api/state')).pending || []).find((x) => x.name === dl.name && x.dialog), 15000);
+    const fake = (sid, text) => [{ type: 'session_start', id: sid, title: 'other droid', cwd: CWD },
+      { type: 'message', id: 'u0', timestamp: new Date().toISOString(), message: { role: 'user', visibility: 'llm_only', content: [{ type: 'text', text: '<system-reminder>别处的环境说明</system-reminder>' }] } },
+      { type: 'message', id: 'u1', timestamp: new Date().toISOString(), message: { role: 'user', content: [{ type: 'text', text } ] } }].map((o) => JSON.stringify(o)).join('\n') + '\n';
+    const OSID = crypto.randomUUID(), OF = path.join(DSESS, OSID + '.jsonl');
+    fs.writeFileSync(OF, fake(OSID, '别处开的 droid：不是这个窗口的任务'));
+    await sleep(4000);
+    let sl = await get('/api/state'), djL = {}; try { djL = JSON.parse(fs.readFileSync(path.join(DATA0, 'droids.json'), 'utf8')); } catch {}
+    ok(!!pl && !sl.sessions.some((x) => x.sid === OSID) && !sl.sessions.some((x) => x.tmux === dl.name) && djL[dl.name] && !djL[dl.name].file,
+      '信任框挂着时同一个文件夹里冒出一份别处的记录（同 cwd、第一句话不同）：不认领，墙上没有它的 sid，这个窗口还在「启动中」', JSON.stringify({ pend: !!pl, claimed: sl.sessions.filter((x) => x.provider === 'droid').map((x) => [x.tmux, x.sid.slice(0, 8)]), file: djL[dl.name] && djL[dl.name].file }));
+    const B1 = crypto.randomUUID(), B2 = crypto.randomUUID(), BF1 = path.join(DSESS, B1 + '.jsonl'), BF2 = path.join(DSESS, B2 + '.jsonl');
+    fs.writeFileSync(BF1, fake(B1, '[late] Droid 认领')); fs.writeFileSync(BF2, fake(B2, '[late] Droid 认领'));
+    await sleep(4000);
+    sl = await get('/api/state');
+    const amb = log().split('\n').filter((l) => l.startsWith('droid ') && l.includes(' ' + dl.name + ' 认领不了'));
+    ok(!sl.sessions.some((x) => x.sid === B1 || x.sid === B2 || x.tmux === dl.name) && amb.length === 1 && /2 份记录/.test(amb[0]), '两份记录的第一句话都和任务对得上：这一拍不认（几拍都不认），日志只记一次', JSON.stringify({ amb, claimed: sl.sessions.filter((x) => x.tmux === dl.name).map((x) => x.sid) }));
+    fs.rmSync(BF1, { force: true }); fs.rmSync(BF2, { force: true });
+    const al = (await post('/api/answer', { name: dl.name, option: 0, text: 'Trust this folder' })).body;
+    const lc = await until(async () => (await get('/api/state')).sessions.find((x) => x.tmux === dl.name), 20000);
+    ok(al.ok === true && lc && lc.sid !== OSID && lc.prompt === '[late] Droid 认领' && fs.existsSync(path.join(DSESS, lc.sid + '.jsonl')) && !(await get('/api/state')).sessions.some((x) => x.sid === OSID),
+      '回车之后它自己写了记录：认领的是自己那份（第一句话是这条任务），别处那份照旧没人认', JSON.stringify({ al, sid: lc && lc.sid, p: lc && lc.prompt }));
+    if (lc) { await post('/api/archive', { sid: lc.sid }); await archived(lc.sid); }
+    fs.rmSync(OF, { force: true });
+  }
+  console.log('\n[7d-3] config 里 antigravity 打开：只有他本人（带 Origin 的界面 / 配过对的手机）能开 Antigravity 窗口、发话、接回；忙闲看 tap，交付看 agy 的记录');
+  {
+    const ABIN = path.join(BIN, 'agy'), ADIR = path.join(DATA0, 'agy');
+    const postUi = async (p, body) => { const r = await fetch('http://127.0.0.1:' + PORT + p, { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://127.0.0.1:' + PORT }, body: JSON.stringify(body) }); return { code: r.status, body: await r.json() }; };
+    const agyLines = () => log().split('\n').filter((l) => l.startsWith('agy '));
+    const fakeAgy = agyLines().some((l) => l.includes(' bin ' + ABIN + ' '));
+    ok(fakeAgy && agyLines().some((l) => / bin \S+ models 2$/.test(l)), '服务按登录 shell 找到的 agy 是 BIN 里的假命令（真的 agy 够不着），模型表取到 2 个', agyLines().join(' | '));
+    ok(agyModelCalls() === 1, '模型表只问了 agy 一次（启动时；一天以内不再问）', agyModelCalls());
+    st = await get('/api/state');
+    const pa = st.providers && st.providers.antigravity;
+    ok(pa && pa.ok === true && pa.label === 'Antigravity' && JSON.stringify(pa.models) === '["gemini-4-neon-high","claude-opus-5-5-high"]' && pa.modelLabels && pa.modelLabels['gemini-4-neon-high'] === 'Gemini 4 Neon (High)' && Array.isArray(pa.efforts) && pa.efforts.length === 0,
+      '「交给谁」里有 Antigravity：模型和名字取自 agy models，没有强度可选', JSON.stringify(pa));
+    const aNo = (await post('/api/new', { prompt: '不该开', cwd: CWD, provider: 'antigravity' })).body;
+    ok(aNo.ok === false && /只能由他本人/.test(aNo.error || ''), '/api/new 没带 Origin（别的窗口 curl、总控台的自动化）：拒', JSON.stringify(aNo));
+    const aBad = {};
+    for (const [k, extra] of [['tier', { tier: 'light' }], ['effort', { effort: 'high' }], ['account', { account: 'good' }], ['codeMode', { codeMode: true }], ['brief', { brief: {} }], ['auto', { auto: 'low' }], ['model', { model: 'gpt-9' }]])
+      aBad[k] = (await postUi('/api/new', { prompt: '不该开', cwd: CWD, provider: 'antigravity', ...extra })).body;
+    ok(Object.values(aBad).every((x) => x.ok === false) && /档位/.test(aBad.tier.error) && /强度/.test(aBad.effort.error) && /账号/.test(aBad.account.error) && /Code Mode/.test(aBad.codeMode.error) && /派活单/.test(aBad.brief.error) && /auto/.test(aBad.auto.error) && /没有这个模型/.test(aBad.model.error),
+      '他本人开也不接档位 / 强度 / 账号 / Code Mode / 派活单 / auto / 模型表外的模型：给了就报错', JSON.stringify(aBad));
+    ok(agyRuns().length === 0, '被拒的都没起 agy', JSON.stringify(agyRuns()));
+    if (!fakeAgy) ok(false, '找到的不是假 agy：后面不开 Antigravity 窗口（不能碰真的 agy）');
+    else {
+      const an = (await postUi('/api/new', { prompt: 'Antigravity 夹具任务', cwd: CWD, provider: 'antigravity', model: 'gemini-4-neon-high' })).body;
+      ok(an.ok === true && /^ccb-/.test(an.name || '') && an.model === 'gemini-4-neon-high' && an.account === null, '他本人从界面开：开窗口成功', JSON.stringify(an));
+      const setF = path.join(ADIR, an.name + '.settings.json'), tapF = path.join(ADIR, an.name + '.tap.json');
+      const r1 = await until(() => agyRuns()[0], 10000);
+      ok(JSON.stringify(r1) === JSON.stringify(['--model', 'gemini-4-neon-high', '--settings', setF, '-i', 'Antigravity 夹具任务']), '命令行：agy --model <id> --settings <本窗口的设置文件> -i "<任务>"（任务原文照他写的，不附找文件夹的说明）', JSON.stringify(r1));
+      let sj = null; try { sj = JSON.parse(fs.readFileSync(setF, 'utf8')); } catch {}
+      ok(sj && Object.keys(sj).length === 1 && sj.statusLine && sj.statusLine.type === 'command' && sj.statusLine.command.includes("'tap' '" + tapF + "'"), '设置文件只挂一个 statusLine，命令是 agy.mjs tap <本窗口的 tap 文件>（数据目录带空格，单引号包着）', JSON.stringify(sj));
+      let ac = await until(async () => (await get('/api/state')).sessions.find((x) => x.provider === 'antigravity' && x.tmux === an.name));
+      ok(ac && ac.status === 'busy' && ac.prompt === 'Antigravity 夹具任务' && /^[0-9a-f-]{36}$/.test(ac.sid) && ac.model === 'Gemini 4 Neon (High)', 'tap 报了会话号 + working：卡片上墙、在忙、prompt 是 <USER_REQUEST> 里那句', JSON.stringify(ac && { s: ac.status, p: ac.prompt, sid: ac.sid, m: ac.model }));
+      let aHome = ''; try { aHome = fs.readFileSync(ARGV + '.agy-home', 'utf8'); } catch {}
+      let tapTxt = ''; try { tapTxt = fs.readFileSync(tapF, 'utf8'); } catch {}
+      let aLine = ''; try { aLine = fs.readFileSync(ARGV + '.agy-line', 'utf8'); } catch {}
+      ok(aHome === FH && tapTxt && !tapTxt.includes('fake-user@example.com') && /Gemini 4 Neon \(High\).*总控台在看/.test(aLine) && !/rc=/.test(aLine), '窗口里跑的是假 agy；tap 文件里没有邮箱；agy 底下那行状态是 tap 打印的、命令都退出 0', JSON.stringify({ aHome, tap: tapTxt.slice(0, 120), line: aLine.slice(0, 200) }));
+      ASID = ac ? ac.sid : null; AFILE = ASID ? path.join(FH, '.gemini/antigravity-cli/brain', ASID, '.system_generated/logs/transcript.jsonl') : null;
+      ok(ac && ac.file === AFILE, '对话记录认的是 tap 给的那份（brain/<会话号>/…/transcript.jsonl）', JSON.stringify(ac && ac.file));
+      const sNo = (await post('/api/send', { sid: ASID, text: '替他说一句' })).body;
+      let said = ''; try { said = fs.readFileSync(ARGV + '.agy-said', 'utf8'); } catch {}
+      ok(sNo.ok === false && /只能由他本人/.test(sNo.error || '') && !said.includes('替他说一句'), '/api/send 没带 Origin（自动化 / 别的窗口）：拒，一个字都没打进 agy', JSON.stringify(sNo));
+      fs.writeFileSync(ARGV + '.agy-go', '1');
+      ac = await until(async () => { const x = (await get('/api/state')).sessions.find((s) => s.sid === ASID); return x && x.status === 'idle' && x.done ? x : null; });
+      ok(ac && ac.result === 'Antigravity 夹具做完了' && ac.steps === 1 && ac.note === null && ac.alert === null, 'tap 报回 idle：交付是这一轮最后那段话（边做边说的那段不算），改文件算一步，不报「没做完」', JSON.stringify(ac && { r: ac.result, st: ac.steps, n: ac.note, al: ac.alert }));
+      const sOk = (await postUi('/api/send', { sid: ASID, text: '再改一处' })).body;
+      ok(sOk.ok === true && sOk.delivered === true, '他本人在卡片上发：发出去、核到送达', JSON.stringify(sOk));
+      ac = await until(async () => { const x = (await get('/api/state')).sessions.find((s) => s.sid === ASID); return x && x.status === 'idle' && x.result === '收到：再改一处' ? x : null; }, 10000);
+      ok(ac && ac.prompt === '再改一处', '又一轮：prompt 换成新那句，交付换成新的', JSON.stringify(ac && { p: ac.prompt, r: ac.result }));
+      const tu = await get('/api/turns?sid=' + ASID);
+      ok(Array.isArray(tu.turns) && tu.turns.length === 2 && tu.turns[0].prompt === 'Antigravity 夹具任务' && tu.turns[0].results.length === 1 && tu.turns[0].results[0].text === 'Antigravity 夹具做完了' && tu.turns[0].steps === 1 && tu.turns[1].results[0].text === '收到：再改一处',
+        '放大看的对话按 agy 的记录读：两轮，每轮只留最后那段交付', JSON.stringify(tu));
+      await postUi('/api/send', { sid: ASID, text: '这个要确认' });
+      ac = await until(async () => { const x = (await get('/api/state')).sessions.find((s) => s.sid === ASID); return x && x.status === 'waiting' && x.screen ? x : null; }, 12000);
+      ok(!!ac && typeof ac.screen === 'string' && ac.screen.length > 0, 'tap 报 tool_confirmation_pending：卡片是 waiting，屏幕留着给他看', JSON.stringify(ac && { s: ac.status, sc: !!ac.screen }));
+      let said0 = ''; try { said0 = fs.readFileSync(ARGV + '.agy-said', 'utf8'); } catch {}
+      const awNo = (await post('/api/answer', { name: an.name, option: 1 })).body;
+      await sleep(600); let said1 = ''; try { said1 = fs.readFileSync(ARGV + '.agy-said', 'utf8'); } catch {}
+      ok(awNo.ok === false && /只能由他本人/.test(awNo.error || '') && said1 === said0, '/api/answer 没带 Origin（别的窗口替他点「允许」）：拒，一个键都没按进 agy', JSON.stringify({ awNo, said: said1.slice(said0.length) }));
+      const sW = (await postUi('/api/send', { sid: ASID, text: '插一句' })).body;
+      ok(sW.ok === false && /选择框/.test(sW.error || ''), '等他点允许时不往里打字（会替他乱选）', JSON.stringify(sW));
+      fs.writeFileSync(ARGV + '.agy-ok', '1');
+      ac = await until(async () => { const x = (await get('/api/state')).sessions.find((s) => s.sid === ASID); return x && x.status === 'idle' && x.result === '确认过了' ? x : null; }, 10000);
+      ok(!!ac, '他在终端里点了允许：回到闲着、交付是那一轮的回复', JSON.stringify(ac && { s: ac.status, r: ac.result }));
+      const arNo = (await post('/api/archive', { sid: ASID })).body;
+      await sleep(1500);
+      const upNo = spawnSync(TMUX_BIN, [...TMW(an.name), 'has-session', '-t', an.name], { env, stdio: 'ignore' }).status === 0;
+      ok(arNo.ok === false && /只能由他本人/.test(arNo.error || '') && upNo && (await get('/api/state')).sessions.some((x) => x.sid === ASID) && !((await get('/api/archive')).items || []).some((x) => x.sid === ASID),
+        '/api/archive 没带 Origin（别的窗口 curl、总控台的自动化）：拒，窗口还开着、卡片还在、没进归档', JSON.stringify({ arNo, upNo }));
+      const ar = (await postUi('/api/archive', { sid: ASID })).body;
+      const arDone = await until(async () => ((await get('/api/archive')).items || []).find((x) => x.sid === ASID && x.state === 'archived'), 20000);
+      const paneGone = spawnSync(TMUX_BIN, [...TMW(an.name), 'has-session', '-t', an.name], { env, stdio: 'ignore' }).status !== 0;
+      const arP = (() => { try { return JSON.parse(fs.readFileSync(path.join(DATA, 'archive.json'), 'utf8')).items[ASID]?.provider; } catch { return null; } })();   // GET /api/archive 不带 provider，读存盘那份
+      ok(ar.ok === true && !!arDone && arP === 'antigravity' && paneGone && !fs.existsSync(setF) && !fs.existsSync(tapF) && fs.existsSync(AFILE), '归档 Antigravity：窗口停掉、下墙，本窗口的设置和 tap 文件清掉，agy 的记录原地不动', JSON.stringify({ ar, arDone: !!arDone, arP, paneGone, set: fs.existsSync(setF), tap: fs.existsSync(tapF) }));
+      const uNo = (await post('/api/unarchive', { sid: ASID })).body;
+      ok(uNo.ok === false && /只能由他本人/.test(uNo.error || '') && agyRuns().length === 1, '接回没带 Origin：拒，没起 agy', JSON.stringify(uNo));
+      const un = (await postUi('/api/unarchive', { sid: ASID })).body;
+      const r2 = await until(() => agyRuns()[1], 10000);
+      ok(un.ok === true && un.resumed === true && JSON.stringify(r2) === JSON.stringify(['--conversation', ASID, '--settings', path.join(ADIR, un.name + '.settings.json')]), '接回 Antigravity：agy --conversation <会话号> --settings <新窗口的设置文件>，不带任务、不打字', JSON.stringify({ un, r2 }));
+      ac = await until(async () => (await get('/api/state')).sessions.find((x) => x.sid === ASID && x.tmux === un.name && x.status === 'idle'));
+      ok(ac && ac.provider === 'antigravity' && ac.result === '确认过了' && !((await get('/api/archive')).items || []).some((x) => x.sid === ASID), '接回后同一个会话号回到墙上，交付从原来那份记录读回来，归档列表里没了', JSON.stringify(ac && { p: ac.provider, r: ac.result }));
+      // FIX-1 #1：一起退出以后的「全部接回」也只认他本人。三个 Antigravity 窗口一起没了 → 照常记成一起、横幅照常出来；
+      // 不带 Origin 的 /api/crash restore（别的窗口 curl、自动化）一个都不接、也不记成「没接成」，停下写「要你本人点」；他本人点了才接回
+      // 另开三个：刚归档又接回的 ASID 用不上（总控台自己停过的会话 120 秒内记在 leaving 里，再没了也不算意外退出）
+      const an3s = []; for (const k of ['二', '三', '四']) an3s.push((await postUi('/api/new', { prompt: 'Antigravity 夹具任务' + k, cwd: CWD, provider: 'antigravity' })).body);
+      const names3 = an3s.map((x) => x.name);
+      const three = await until(async () => { const ss = (await get('/api/state')).sessions.filter((x) => x.provider === 'antigravity' && names3.includes(x.tmux) && /^[0-9a-f-]{36}$/.test(x.sid || '')); return ss.length === 3 ? ss : null; }, 15000);
+      ok(an3s.every((x) => x.ok === true) && !!three, '夹具：另开三个 Antigravity 窗口，三张卡都上墙', JSON.stringify({ an3s, n: three && three.length }));
+      const sids3 = (three || []).map((x) => x.sid), runs3 = agyRuns().length;
+      for (const n of names3) spawnSync(TMUX_BIN, [...TMW(n), 'kill-server'], { env, stdio: 'ignore', timeout: 5000 });
+      const cr = await until(async () => { const s = await get('/api/state?peek=1'); const la = (s.lost || []).filter((x) => sids3.includes(x.sid)); return la.length === 3 && s.crash && la.every((x) => x.crash === s.crash.id) ? { la, crash: s.crash } : null; }, 25000);
+      ok(!!cr && cr.crash.n === 3 && cr.crash.state === 'new' && cr.la.every((x) => x.provider === 'antigravity'), '三个 Antigravity 窗口一起没了：记成一起退出，横幅照常出来（他点一下就能接回）', JSON.stringify(cr && { crash: cr.crash, la: cr.la.map((x) => x.provider) }));
+      const crId = cr ? cr.crash.id : 'none';
+      const rqNo = (await post('/api/crash', { id: crId, action: 'restore' })).body;
+      const cNo = await until(async () => { const s = await get('/api/state?peek=1'); return s.crash && s.crash.id === crId && s.crash.state === 'stopped' ? s.crash : null; }, 8000);
+      await sleep(2500);
+      const lostNo = ((await get('/api/state?peek=1')).lost || []).filter((x) => sids3.includes(x.sid)).length;
+      ok(rqNo.ok === true && cNo && cNo.why === 'human' && cNo.done === 0 && cNo.fail === 0 && agyRuns().length === runs3 && lostNo === 3,
+        '「全部接回」不是他本人点的（/api/crash 没带 Origin）：一个 Antigravity 都不接、不记没接成，横幅停下等他本人点', JSON.stringify({ rqNo, cNo, runs: agyRuns().length - runs3, lostNo }));
+      const rqUi = (await postUi('/api/crash', { id: crId, action: 'restore' })).body;
+      const cUi = await until(async () => { const s = await get('/api/state?peek=1'); return s.crash && s.crash.id === crId && s.crash.state === 'done' ? s.crash : null; }, 25000);
+      const rr = agyRuns().slice(runs3);
+      ok(rqUi.ok === true && cUi && cUi.done === 3 && cUi.fail === 0 && rr.length === 3 && sids3.every((sid) => rr.some((r) => r[0] === '--conversation' && r[1] === sid)),
+        '他本人点「全部接回」：三个都按 agy --conversation <会话号> 接回', JSON.stringify({ rqUi, cUi, rr }));
+      const back3 = await until(async () => { const ss = (await get('/api/state')).sessions.filter((x) => sids3.includes(x.sid)); return ss.length === 3 ? ss : null; }, 15000);
+      ok(!!back3 && back3.every((x) => x.provider === 'antigravity' && x.status === 'idle'), '接回的三张卡回到墙上、闲着', JSON.stringify(back3 && back3.map((x) => [x.sid.slice(0, 4), x.status])));
+      await postUi('/api/crash', { id: crId, action: 'dismiss' });
+      for (const sid of sids3) await postUi('/api/archive', { sid });   // 收掉这三个（只有他本人能收）
+      await postUi('/api/archive', { sid: ASID });                     // [8] 用：关着 antigravity 时这条归档接不回来
+      ok(!!(await until(async () => ((await get('/api/archive')).items || []).find((x) => x.sid === ASID && x.state === 'archived'), 20000)), '再归档一次（留给 [8]）');
+    }
+  }
   console.log('\n[7e] 输入框上的预判：读空闲会话的屏幕，灰字和「下一步 1/2/3」挂在 /api/state 的 suggest 上');
   // 假终端：把文件里的内容原样画到窗格里，文件一改就重画；它自己就是会话的进程（窗格里的进程号 = 登记的 pid）
   const SG = 'ccb-sug001', SGF = path.join(ROOT, 'sug-screen.txt');
@@ -3175,6 +3529,11 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
   env.CCBOARD_LSOF = path.join(BIN, 'lsof-fast'); env.CCBOARD_PS = path.join(BIN, 'ps-slow');     // 认调用方：ps 很慢、要往上走 15 层（见 BIN 那里的说明）
   const arcFile = path.join(DATA, 'archive.json'), arcJ = JSON.parse(fs.readFileSync(arcFile, 'utf8'));
   for (const [sid, title] of [[OLD_SID, '两小时前归档的'], [S.done.sid, '归档了却又在跑的']]) arcJ.items[sid] = { sid, title, cwd: CWD, state: 'archived', archivedAt: Date.now() - 2 * H };
+  // droid 关着：上次没来得及删的 Droid 归档（state archiving + drop，启动时接着办）只拿掉总控台的条目，~/.factory 里的记录和 <会话号>.settings.json 不挪
+  const DSESS8 = path.join(FH, '.factory/sessions', CWD.replace(/\//g, '-')), DROP8 = crypto.randomUUID(), dropJ8 = path.join(DSESS8, DROP8 + '.jsonl'), dropS8 = path.join(DSESS8, DROP8 + '.settings.json');
+  fs.mkdirSync(DSESS8, { recursive: true });
+  fs.writeFileSync(dropJ8, JSON.stringify({ type: 'session_start', id: DROP8, title: 'drop droid', cwd: CWD }) + '\n'); fs.writeFileSync(dropS8, '{"model":"claude-opus-5-5"}');
+  arcJ.items[DROP8] = { sid: DROP8, title: '没删完的 Droid', cwd: CWD, provider: 'droid', file: dropJ8, state: 'archiving', drop: true, archivedAt: Date.now() - 60000, stopAt: Date.now() - 1000 };
   fs.writeFileSync(arcFile, JSON.stringify(arcJ));
   const srv2 = spawn(NODE, [SERVER], { env, stdio: ['ignore', out2, out2] }); kids.push(srv2.pid);
   let up = false; for (let i = 0; i < 50 && !up; i++) { await sleep(200); try { up = (await (await fetch('http://127.0.0.1:' + PORT + '/health')).json()).ok === true; } catch {} }
@@ -3193,6 +3552,37 @@ draw(); setInterval(draw, 200); setTimeout(() => process.exit(0), 600000);   // 
   ok(st.providers && !st.providers.codex && !st.sessions.some((x) => x.provider === 'codex') && !(st.pending || []).some((x) => x.name === CDX), 'codex 关着：「交给谁」里没有 Codex；Codex 会话不上墙，也不当成「启动中」', JSON.stringify({ prov: Object.keys(st.providers || {}), codex: st.sessions.filter((x) => x.provider === 'codex').length, pend: (st.pending || []).map((x) => x.name) }));
   n1 = await post('/api/new', { prompt: '用 Codex 做', cwd: '~', provider: 'codex', model: 'bad model!' });
   ok(!n1.body.ok && /Codex 没有打开/.test(n1.body.error || ''), 'codex 关着：接口拒绝开 Codex 会话（在核对模型名之前）', JSON.stringify(n1.body));
+  ok(st.providers && !st.providers.droid && !st.sessions.some((x) => x.provider === 'droid') && !(st.pending || []).some((x) => x.provider === 'droid'), 'droid 关着：「交给谁」里没有 Droid；没有 Droid 卡片', JSON.stringify({ prov: Object.keys(st.providers || {}) }));
+  const runs8 = droidRuns().length;
+  const d8 = (await post('/api/new', { prompt: '用 Droid 做', cwd: CWD, provider: 'droid' })).body, d8t = (await post('/api/new', { prompt: '用 Droid 做', cwd: CWD, provider: 'droid', tier: 'light', auto: 'high' })).body;
+  ok(d8.ok === false && d8.error === 'Droid 没有打开（config.json 的 droid）' && d8t.ok === false && d8t.error === d8.error, 'droid 关着：接口拒绝开 Droid 会话（带档位、写错 auto 也先报没打开）', JSON.stringify([d8, d8t]));
+  if (DSID) {
+    const u8 = (await post('/api/unarchive', { sid: DSID })).body, t8d = await get('/api/turns?sid=' + DSID);
+    ok(u8.ok === false && u8.error === 'Droid 没有打开（config.json 的 droid）' && !t8d.turns, 'droid 关着：归档的 Droid 会话接不回来，它的对话记录也不读', JSON.stringify([u8, t8d]));
+    const dj8 = path.join(DSESS8, DSID + '.jsonl'), had8 = fs.existsSync(dj8), x8 = (await post('/api/delete', { sid: DSID })).body;
+    ok(had8 && x8.ok === true && x8.moved === false && fs.existsSync(dj8) && !((await get('/api/archive')).items || []).some((x) => x.sid === DSID),
+      'droid 关着：在归档列表里删掉 Droid 会话，只拿掉总控台的条目，~/.factory 里的记录原地不动', JSON.stringify({ had8, x8, still: fs.existsSync(dj8) }));
+  }
+  let drop8 = null, del8 = []; try { drop8 = (JSON.parse(fs.readFileSync(arcFile, 'utf8')).dropped || []).find((x) => x.sid === DROP8); } catch {}
+  try { del8 = fs.readdirSync(path.join(DATA, 'deleted')).filter((f) => f.includes(DROP8)); } catch {}
+  ok(drop8 && drop8.moved === false && fs.existsSync(dropJ8) && fs.existsSync(dropS8) && del8.length === 0,
+    'droid 关着：启动时接着删上次没删完的 Droid 归档（dropArchived），~/.factory 里的记录和 <会话号>.settings.json 都不挪进 deleted/', JSON.stringify({ drop8, del8, j: fs.existsSync(dropJ8), s: fs.existsSync(dropS8) }));
+  ok(droidRuns().length === runs8 && !fs.readFileSync(log2File, 'utf8').split('\n').some((l) => l.startsWith('droid ')), 'droid 关着：没起 droid，也不找 droid 命令', JSON.stringify(droidRuns().length - runs8));
+  ok(st.providers && !st.providers.antigravity && !st.sessions.some((x) => x.provider === 'antigravity') && !(st.pending || []).some((x) => x.provider === 'antigravity'), 'antigravity 关着：「交给谁」里没有 Antigravity；没有 Antigravity 卡片', JSON.stringify({ prov: Object.keys(st.providers || {}) }));
+  {
+    const runsA = agyRuns().length, mA = agyModelCalls();
+    const a8 = (await fetch('http://127.0.0.1:' + PORT + '/api/new', { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://127.0.0.1:' + PORT }, body: JSON.stringify({ prompt: '用 Antigravity 做', cwd: CWD, provider: 'antigravity', tier: 'light' }) }).then((r) => r.json()));
+    ok(a8.ok === false && a8.error === 'Antigravity 没有打开（config.json 的 antigravity）', 'antigravity 关着：他本人从界面开也拒（带档位也先报没打开）', JSON.stringify(a8));
+    if (ASID) {
+      const u8 = (await post('/api/unarchive', { sid: ASID })).body, t8a = await get('/api/turns?sid=' + ASID);
+      ok(u8.ok === false && u8.error === 'Antigravity 没有打开（config.json 的 antigravity）' && !t8a.turns, 'antigravity 关着：归档的 Antigravity 会话接不回来，它的对话记录也不读', JSON.stringify([u8, t8a]));
+      const d8n = (await post('/api/delete', { sid: ASID })).body;
+      ok(d8n.ok === false && /只能由他本人/.test(d8n.error || '') && ((await get('/api/archive')).items || []).some((x) => x.sid === ASID), '/api/delete 没带 Origin：Antigravity 的归档不删（关着 antigravity 也一样）', JSON.stringify(d8n));
+      const d8a = (await (await fetch('http://127.0.0.1:' + PORT + '/api/delete', { method: 'POST', headers: { 'x-ccboard': TOKEN, 'content-type': 'application/json', origin: 'http://127.0.0.1:' + PORT }, body: JSON.stringify({ sid: ASID }) })).json());
+      ok(d8a.ok === true && d8a.moved === false && AFILE && fs.existsSync(AFILE) && !((await get('/api/archive')).items || []).some((x) => x.sid === ASID), '删除 Antigravity 的归档：只拿掉卡片，agy 自己的记录不挪（文件名都叫 transcript.jsonl）', JSON.stringify({ d8a, f: AFILE && fs.existsSync(AFILE) }));
+    }
+    ok(agyRuns().length === runsA && agyModelCalls() === mA && !fs.readFileSync(log2File, 'utf8').split('\n').some((l) => l.startsWith('agy ')), 'antigravity 关着：没起 agy、没问模型表，也不找 agy 命令', JSON.stringify({ runs: agyRuns().length - runsA, models: agyModelCalls() - mA }));
+  }
   ok(st.limits && st.limits.codex === null && st.limits.claude.length === 2, 'codex 关着：顶栏没有 Codex 额度（rollout 还在磁盘上也不读）；Claude 的照常', JSON.stringify(st.limits && { codex: st.limits.codex, claude: (st.limits.claude || []).length }));
   const pj8 = (n) => ((by(st, n) || {}).project || {});
   ok(pj8('projC').key === 'other' && /^dir:fretflow/.test(pj8('projF').key || ''), '默认项目表是空的：登记过的组名不再出现，碰过的文件夹自成一组', JSON.stringify([pj8('projC'), pj8('projF')]));

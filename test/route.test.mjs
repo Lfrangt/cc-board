@@ -8,6 +8,7 @@
  *        派给和 tier / model 对不上就拒（没给 routeNew 的结果也按「请求里什么都没声明」核，不放行）。端到端（真开窗口、假 claude 记 argv）在 state.test.mjs 的 [7g-2]。
  *        FIX-1（11/24 15:5x 返修）：长串 100 ms 内返回（M1）；单个 \r 和 U+2028 / U+2029 / U+0085 / \v / \f 都当换行；看不见的字不算内容、也不拼进去；「无」剥一层括号或引号再比、多认 無 / 不适用 / 不涉及 / n.a.；
  *        占位后面带标点照拒；请求另带的 prompt 里又写一张派活单就拒（briefClash）；派给先认 tier X / model Y，认 Gemini 4 Neon、Opus5.5、全角；拼出来超过 BRIEF_MAX 字节就拒；表头按字符截。
+ *        Droid（11/27）：parseDroidModels() 读 test/fixture-droid-help.txt（真 droid exec --help 的原样），条数另用 sed + grep 数；droidPick() 核 /api/new 给 Droid 的 model / effort。端到端在 state.test.mjs 的 [7d-2]。
  * [PROTOCOL]: Update this header on change, then check CLAUDE.md
  */
 // 用法：node test/route.test.mjs [route.mjs 的路径]      node test/route.test.mjs --mutants
@@ -418,6 +419,32 @@ console.log('\n派活单 brief：表头按字符截（FIX-1 N1）');
 { const e = U(0x1f600), first = (g) => txt(tryBrief(with_({ goal: g }), STD)).split('\n')[0];
   same(first(e.repeat(85)), '【派活单】' + e.repeat(79) + '…', '目标是 85 个 emoji：表头留 79 个再加「…」，不切开代理项');
   same(first(e.repeat(80)), '【派活单】' + e.repeat(80), '目标正好 80 个 emoji：不截'); }
+
+console.log('\nDroid 的模型清单：parseDroidModels 读 droid exec --help（夹具是真 Droid 的帮助原样）；droidPick 核 /api/new 给的 model / effort');
+{ const FX = path.join(HERE, 'fixture-droid-help.txt'), P = R.parseDroidModels(fs.readFileSync(FX, 'utf8')), by = (id) => P.models.find((m) => m.id === id) || {};
+  // 条数另数一遍，不经 parseDroidModels：Available Models 那一段里，去掉 [Deprecated] 和 auto 的行
+  const g = spawnSync('/bin/sh', ['-c', "/usr/bin/sed -n '/^Available Models:/,/^$/p' \"$0\" | /usr/bin/grep -E '^  [^ ]' | /usr/bin/grep -v 'Deprecated' | /usr/bin/grep -vcE '^  auto '", FX], { encoding: 'utf8' });
+  const want = Number(String(g.stdout || '').trim());
+  ok(want > 40 && P.models.length === want, '模型条数 = 帮助里不带 [Deprecated]、不是 auto 的行数（sed + grep 另数）：' + want, P.models.length + ' / ' + want + ' ' + (g.stderr || ''));
+  same(P.defaultModel, 'claude-opus-5-5', '默认模型是带 (default) 的 claude-opus-5-5');
+  same([by('claude-opus-5-5').name, by('claude-opus-5-5').defaultEffort], ['Opus 5.5', 'medium'], 'claude-opus-5-5：显示名去掉 (default)，默认强度 medium');
+  same([by('gemini-3.1-pro-preview').name, by('gemini-3.1-pro-preview').efforts, by('gemini-3.1-pro-preview').defaultEffort], ['Gemini 3.1 Pro', ['low', 'medium', 'high'], 'high'], 'gemini-3.1-pro-preview：Gemini 3.1 Pro，强度 low / medium / high，默认 high');
+  same(by('gemini-3.5-flash').efforts, ['minimal', 'low', 'medium', 'high'], 'gemini-3.5-flash 的强度按 Model details 那一行（多一个 minimal）');
+  ok(!by('deepseek-v4-pro').id && !by('sonnet-4-5').id && !by('claude-sonnet-4-5-20250929').id && !by('auto').id && !P.models.some((m) => /Deprecated|\(default\)/.test(m.name)), '停用的（deepseek-v4-pro、Sonnet 4.5…）和 auto 不列', JSON.stringify(P.models.map((m) => m.id)));
+  same([P.models[0].id, P.models[P.models.length - 1].id], ['claude-fable-5.1', 'grok-4.5'], '顺序照帮助里列的');
+  same(R.parseDroidModels('Usage: droid exec [options]'), { models: [], defaultModel: null }, '帮助里没有模型清单：空清单');
+  same(R.droidPick({}, P), { ok: true, model: '', effort: '' }, '什么都没给：放行，不带模型和强度');
+  same(R.droidPick({ model: 'gemini-3.1-pro-preview', effort: 'low' }, P), { ok: true, model: 'gemini-3.1-pro-preview', effort: 'low' }, '清单里的模型 + 它认的强度：放行');
+  same(R.droidPick({ effort: 'high' }, P), { ok: true, model: '', effort: 'high' }, '只给强度：按默认模型（Opus 5.5）核，high 放行');
+  let e = R.droidPick({ effort: 'off' }, P);
+  ok(e.ok === false && e.error.includes('claude-opus-5-5（默认模型） 不认强度「off」，能选：low、medium、high、xhigh、max'), '只给强度、默认模型不认：拒，写明是默认模型和能选什么', e.error);
+  e = R.droidPick({ model: '不存在' }, P);
+  ok(e.ok === false && e.error.startsWith('Droid 不认模型「不存在」，能选：claude-fable-5.1、') && e.error.includes('gemini-3.1-pro-preview'), '不在清单里的模型：拒，点名这个值，列出能选的', e.error.slice(0, 80));
+  e = R.droidPick({ model: 'gemini-3.1-pro-preview', effort: 'xhigh' }, P);
+  ok(e.ok === false && e.error === 'Droid 的 gemini-3.1-pro-preview 不认强度「xhigh」，能选：low、medium、high', '模型不认的强度：拒，列出这个模型能选的', e.error);
+  e = R.droidPick({ model: 'gemini-3.1-pro-preview' }, { models: [], defaultModel: null });
+  ok(e.ok === false && /清单没读到/.test(e.error), '清单是空的（droid exec --help 读不到）：给了模型就拒，只能默认', e.error);
+  ok(R.droidPick({ model: ['gemini-3.1-pro-preview'] }, P).ok === false && R.droidPick({ effort: 3 }, P).ok === false, 'model / effort 不是字符串：拒'); }
 
 console.log('\n' + pass + ' 项过，' + fail + ' 项失败');
 process.exit(fail ? 1 : 0);

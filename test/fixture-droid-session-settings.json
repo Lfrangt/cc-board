@@ -1,0 +1,7 @@
+{
+ "model": "gemini-4-hydrogen",
+ "reasoningEffort": "low",
+ "autonomyLevel": "low",
+ "autonomyMode": "auto-low",
+ "providerLock": "google"
+}

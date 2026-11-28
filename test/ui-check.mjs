@@ -3981,16 +3981,16 @@ try {
     }
     ok(errs.length === 0, lang + '：列头新任务没有页面报错', errs.join(' | ')); await ctx.close();
   }
-  // ── config.json 里 codex 没打开时，服务只报 Claude Code 一家：新任务里不显示「交给谁」。场景里 codex 是打开的，这里在浏览器里把 Codex 从应答里拿掉 ──
+  // ── config.json 里 codex 没打开时，服务只报 Claude Code 一家：新任务里不显示「交给谁」。场景里 codex、droid、antigravity 都是打开的：打开那一轮四家都在；关着那一轮在浏览器里把这三家都从应答里拿掉，只剩 Claude Code ──
   for (const off of [false, true]) {
     const c3 = await browser.newContext({ viewport: { width: 1520, height: 900 }, colorScheme: 'dark' }); const pg = await c3.newPage(); const e3 = [];
     pg.on('pageerror', (e) => e3.push(String(e)));
-    if (off) await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); if (j.providers) delete j.providers.codex; await route.fulfill({ response: r, json: j }); });
+    if (off) await pg.route('**/api/state*', async (route) => { const r = await fullState(route); const j = await r.json(); if (j.providers) { delete j.providers.codex; delete j.providers.droid; delete j.providers.antigravity; } await route.fulfill({ response: r, json: j }); });
     await pg.goto(FX.url + '&lang=zh'); await pg.waitForSelector('.card'); await sleep(1800);
     await pg.click('#newBtn'); await sleep(400);
     const v = await pg.evaluate(() => ({ field: getComputedStyle(document.querySelector('#nProvField')).display, provs: [...document.querySelectorAll('#nProv button')].map((b) => b.textContent) }));
     if (off) ok(v.field === 'none' && v.provs.join() === 'Claude Code' && !e3.length, 'codex 关着：新任务里不显示「交给谁」', JSON.stringify({ v, e3 }));
-    else ok(v.field !== 'none' && v.provs.join() === 'Claude Code,Codex', 'codex 打开：「交给谁」照旧显示 Claude Code / Codex', JSON.stringify(v));
+    else ok(v.field !== 'none' && v.provs.join() === 'Claude Code,Codex,Droid,Antigravity', 'codex 打开：「交给谁」显示 Claude Code / Codex / Droid / Antigravity（场景里四家都开着）', JSON.stringify(v));
     await c3.close();
   }
   // ── 输入框上的预判（11/13）：灰字 Tab 收下；1/2/3 填进输入框，不会自己发出去。读屏幕那一半在 state.test.mjs 的 [7e]；这里把 suggest 塞进应答，只测界面 ──

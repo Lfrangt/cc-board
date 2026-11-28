@@ -325,6 +325,8 @@ async function boot(tag, port, extraEnv, conf) {
     state: () => fetch(`http://127.0.0.1:${port}/api/state?peek=1`, { headers: H }).then((r) => r.json()),
     post: (p2, body = {}, origin) => fetch(`http://127.0.0.1:${port}${p2}`, { method: 'POST', headers: { ...H, 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) }).then((r) => r.json()) };
 }
+const stopKids = () => Promise.all(kids.filter((k) => k.exitCode === null && k.signalCode === null).map((k) => new Promise((r) => {
+  const t = setTimeout(() => { try { k.kill('SIGKILL'); } catch {} }, 5000); k.once('exit', () => { clearTimeout(t); r(); }); k.kill('SIGTERM'); })));
 const P0 = 14700 + Math.floor(Math.random() * 200);
 try {
   fake.latest = '0.3.8'; fake.dmg = crypto.randomBytes(3000); fake.shaOverride = null; fake.hits = [];
@@ -363,6 +365,8 @@ try {
   await sleep(300);
   ok('服务：autoUpdate 写错 = 整份 config 不用（日志写原因），检查照默认开', /config .*读不了（autoUpdate 要是 true 或 false）/.test(s5.log()) && /update \S+ on：/.test(s5.log()));
 
+  // s6 之前先把还开着的试验服务都停掉、等它们真退出：s5 的检查在机器忙时会晚到，以前落进 s6「0 个请求」的窗口，整套里偶发红一条（11/27 公开包出包时报的）
+  await stopKids();
   fake.hits = [];
   const s6 = await boot('ro', P0 + 10, { CCBOARD_UPDATE_BASE: BASE, CCBOARD_UPDATE_CURRENT: '0.3.7', CCBOARD_UPDATE_DELAY_MS: '200', CCBOARD_READONLY: '1' });
   await sleep(800);

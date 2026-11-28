@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * [INPUT]: 依赖 ~/.claude/sessions 的会话登记（进程号、状态）、~/.claude/projects 和 ~/.codex/sessions 的对话记录（jsonl，只读）；
+ * [INPUT]: 依赖 ~/.claude/sessions 的会话登记（进程号、状态）、~/.claude/projects、~/.codex/sessions 和 ~/.factory/sessions（config 的 droid 打开才读）的对话记录（jsonl，只读）；
  *          依赖 tmux（每个窗口一台：-S ~/.cc-board/tmux/<会话名>.sock，11/16 之前开的在 -S ~/.cc-board/tmux.sock；每台由一个 /bin/sh 看护起在前台，退出状态写 <数据目录>/tmux-exit.log）和 Ghostty 的 AppleScript 接口往会话里送字；依赖 osascript 发系统通知；依赖 ./projects.mjs 认会话属于哪个项目；依赖 ./suggest.mjs 读输入框上的预判；依赖 ./limits.mjs 汇总各订阅的周额度；依赖 ./route.mjs 把 /api/new 里声明的档位 tier 翻成模型和强度；依赖 /usr/bin/open 打开正文里的路径（/api/open）；依赖 ./preview.mjs 起内置预览的只读端口；
  *          依赖 ./org.mjs 定「哪个窗口归哪个窗口管」；依赖 /usr/sbin/lsof 和 /bin/ps 认出是哪个会话在调 /api/new（测试用 CCBOARD_LSOF / CCBOARD_PS 换掉）；config.json 的 org.chief 指向的 JSON 文件（只读，点名总管）。
  *          依赖 node:http2 发 APNs；remote.mjs 生成载荷和 JWT；生产在前台推送前异步读 HIDIdleTime，试验场只读空闲夹具文件；首次发送时异步读 cc-board-apns 钥匙串项，试验场改读显式密钥文件。
@@ -25,7 +25,7 @@
  *        /api/new 带了 brief（七栏派活单）的再过 route.mjs 的 briefNew：缺栏、空白、只写「无」、派给和 tier / model 对不上都拒开（日志 brief … reject），齐了按固定版式拼在 prompt 前面（应答带 brief: true，日志 brief … ok）；没带 brief 的一字不差照旧。
  *        FIX-1（11/24 返修）起，请求另带的 prompt 里又写了一张派活单、派活单加 prompt 超过 14000 字节（BRIEF_MAX），也拒；判断都在 briefNew 里，这里只把 prompt 递过去。
  *        每个 Claude 会话记着它最近一条真回复的 model 和 effort（对话记录里每条 assistant 消息自带，跟着 /model、/effort 走），卡片右上角的模型胶囊显示它；Codex 会话用开窗口时给的值。
- *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex、autoTidy、tidyJudge 四个开关默认关。
+ *        启动时读一次数据目录里的 config.json（CONFIG）：项目表交给 useRules；autoTrust、codex、droid、autoTidy、tidyJudge 五个开关默认关。
  *        autoTidy 打开时，watchTidy() 把「已经交付、歇着、没人在等、没人再理」的会话交给 archiveSession 自动收工（tidyDue 定哪些，tidyVerdict 定删还是留）；
  *        tidyJudge 也打开时，无需处理的交付安静 4 小时，askJudge 用 ./judge.mjs 的参数跑一次 claude -p（haiku）读它最后那段交付：做完了就收，还有要你定的事就不收、卡片改成待跟进（applyJudged）；11/17 car5 起四条线到点都先问、只有 done 才收（它自己还有后续、要你定、判不出来都不收），答案落盘 judged.json；
  *        「你点过审完了」由界面经 /api/processed 告诉它（map 新增 / clear 撤销），落盘 processed.json（重启读回），界面每次载入、服务换了一台（重启）时也重发一遍；
@@ -55,8 +55,9 @@ import { fileURLToPath } from 'node:url';
 import { parseSuggest, promptEmpty } from './suggest.mjs';                                   // 输入框上的灰字建议和「下一步 1/2/3」（只从屏幕读）
 import { codexLimits, claudeLimits, geminiLimits, purgeTaps, limitPins, parseLimitsPin, TAP_PREFIX } from './limits.mjs';            // 顶栏右上角的各订阅周额度（Codex 读它自己的记录，Claude 读状态栏取数脚本存的文件），和 Gemini API 余额的估算
 import { noteTool, classify, pinnable, useRules } from './projects.mjs';
+import { agyStatus, agyReject, agyArgs, agySettings, parseAgyModels, agyUserText, agyText, agyTs, transcriptCandidates, agyStepLine, agyEdit, AGY_BUSY } from './agy.mjs';
 import { judgeArgs, judgeInput, parseJudge, failReason, VERDICTS } from './judge.mjs';             // 自动收工收之前看一眼：问小模型什么、答案怎么认
-import { routeNew, briefNew } from './route.mjs';                               // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数；带了派活单（brief）的，七栏核过再拼进 prompt
+import { routeNew, briefNew, parseDroidModels, droidPick } from './route.mjs';                               // 新窗口用哪个模型、多大强度：调用方声明档位，这里翻成参数；带了派活单（brief）的，七栏核过再拼进 prompt
 import { parseAccounts, parseFallback, pickDefault, accountState, wrapLaunch, wrapBackground, loginLabel } from './accounts.mjs';   // 新任务选账号：token 在钥匙串里，开会话时由一层 zsh 读出来     // 认会话属于哪个项目（按它动过的文件夹 + 标题 + 在哪一列开的）
 import { startPreview, kindOf, mimeOf, readText, serveFile, listGallery, canon, isTop, homeIds, idOf } from './preview.mjs';                                // 正文里的 HTML 点开在总控台里看（另一个端口，只读）
 import { buildOrg } from './org.mjs';
@@ -236,12 +237,12 @@ function parseReviewBatch(v) {
 }
 let CONFIG_OK = false;                  // 启动时 config.json 整份用上了没有。没用上（没有、坏了、某个键写错）就一直用默认值，自动续跑重读也不会把它打开（见 autoConf）
 const CONFIG = (() => {
-  const def = { autoTrust: false, codex: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], limitsPin: null, accountFallback: null, voiceHotwords: [], org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf(), reviewBatchSec: REVIEW_BATCH_DEF };
+  const def = { autoTrust: false, codex: false, droid: false, antigravity: false, autoTidy: false, tidyJudge: false, accounts: [], defaultAccount: '', judgeAccount: '', gemini: '', geminiLedgers: [], limitsPin: null, accountFallback: null, voiceHotwords: [], org: { ...ORG_DEF }, auto: parseAutoConfig(), remote: parseRemote(), apns: parseApns(), update: parseUpdateConf(), reviewBatchSec: REVIEW_BATCH_DEF };
   let raw; try { raw = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { console.log(`config ${CONFIG_FILE}：没有这个文件，用默认值`); return def; }
   try {
     const c = JSON.parse(raw);
     if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('不是一个 JSON 对象');
-    for (const k of ['autoTrust', 'codex', 'autoTidy', 'tidyJudge']) if (k in c && typeof c[k] !== 'boolean') throw new Error(k + ' 要是 true 或 false');
+    for (const k of ['autoTrust', 'codex', 'droid', 'antigravity', 'autoTidy', 'tidyJudge']) if (k in c && typeof c[k] !== 'boolean') throw new Error(k + ' 要是 true 或 false');
     const accounts = parseAccounts(c.accounts);
     // 没选账号时开哪个号（总管 11/17 17:3x）：只认 accounts 里登记过的 id；写错和别的键一样整份不用，不悄悄退回钥匙串当前登录的号
     if ('defaultAccount' in c && !accounts.some((a) => a.id === c.defaultAccount)) throw new Error('defaultAccount 要是 accounts 里登记过的 id');
@@ -261,8 +262,8 @@ const CONFIG = (() => {
     const auto = parseAutoConfig(c.autoContinue);
     const r = useRules({ projects: c.projects, neutral: c.neutral, roots: c.roots });
     CONFIG_OK = true;
-    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，limitsPin=${lp.pin ? lp.pin.length : '默认'}，voiceHotwords=${vh.list.length}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
-    return { autoTrust: c.autoTrust === true, codex: c.codex === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, voiceHotwords: vh.list, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns), limitsPin: lp.pin, reviewBatchSec: parseReviewBatch(c.reviewBatchSec) };   // remote / apns / limitsPin / reviewBatchSec 写错各自关闭（回默认），不抛
+    console.log(`config ${CONFIG_FILE}：${r.list.length} 个项目，autoTrust=${c.autoTrust === true}，codex=${c.codex === true}，droid=${c.droid === true}，antigravity=${c.antigravity === true}，autoTidy=${c.autoTidy === true}，tidyJudge=${c.tidyJudge === true}，accounts=${accounts.length}，defaultAccount=${defaultAccount || '无'}，judgeAccount=${judgeAccount || '跟 defaultAccount'}，gemini=${gemini ? '开' : '无'}，geminiLedgers=${geminiLedgers.length}，accountFallback=${fbr.fb ? `${fbr.fb.to}@${fbr.fb.at}%` : '无'}，limitsPin=${lp.pin ? lp.pin.length : '默认'}，voiceHotwords=${vh.list.length}，org.chief=${org.chief || '无'}，org.seats=${Object.keys(org.seats).length}${org.seatsBad ? `（丢掉 ${org.seatsBad} 条写错的）` : ''}，autoContinue=${auto.on ? `on(周<${auto.weekMax}% 5h<${auto.fiveMax}% 连续≤${auto.maxRun})` : 'off'}`);   // 检查新版本是开是关另有一行 update …（见下面 updater）
+    return { autoTrust: c.autoTrust === true, codex: c.codex === true, droid: c.droid === true, antigravity: c.antigravity === true, autoTidy: c.autoTidy === true, tidyJudge: c.tidyJudge === true, accounts, defaultAccount, judgeAccount, gemini, geminiLedgers, accountFallback: fbr.fb, voiceHotwords: vh.list, org, auto, update, remote: parseRemote(c.remote), apns: parseApns(c.apns), limitsPin: lp.pin, reviewBatchSec: parseReviewBatch(c.reviewBatchSec) };   // remote / apns / limitsPin / reviewBatchSec 写错各自关闭（回默认），不抛
   } catch (e) { useRules(); console.log(`config ${CONFIG_FILE}：读不了（${e.message}），用默认值`); return def; }
 })();
 
@@ -925,7 +926,7 @@ function repoOf(dir) {
 // wrote：[{ path（~ 开头的缩写；相对路径按会话的工作目录补全，没有工作目录才原样）, n }]，写得多的在前，一样多的最近写的在前，最多 20 个；wroteMore = 没列出来的个数（0 = 都列了）。
 // collide：[{ repo: '~/Projects/x', with: [{ sid, name（卡片上的标题） }] }]，没有撞车是 null。同一个会话写几次都只算它自己一个，不会撞自己。
 function markWrites(all, wall) {
-  const stOf = (o) => { const tr = (o.provider === 'codex' ? codexTracks : tracks).get(o.sid); return tr ? tr.st : null; };
+  const stOf = (o) => { const tr = (o.provider === 'codex' ? codexTracks : o.provider === 'droid' ? droidTracks : o.provider === 'antigravity' ? agyTracks : tracks).get(o.sid); return tr ? tr.st : null; };
   for (const o of all) {
     // 相对路径（Codex 补丁头常见）按会话的工作目录补全，界面上每一行都点得开；补全后是同一个文件的（一次写相对、一次写绝对）合成一行
     const st = stOf(o), cwd = String(o.cwd || '').replace(/^~(?=$|\/)/, HOME), m = new Map();
@@ -1148,8 +1149,8 @@ function locate(sid, cwd) {
 }
 
 class Track {
-  constructor(sid, cwd, codexFile) { this.sid = sid; this.cwd = cwd; this.file = codexFile || null; this.pos = 0; this.rest = null; this.restOff = 0;
-    this.codex = !!codexFile; this.mk = this.codex ? newCodexState : newState; this.ap = this.codex ? applyCodex : apply; this.st = this.mk(); this.loaded = false;
+  constructor(sid, cwd, codexFile, droid = false) { this.sid = sid; this.cwd = cwd; this.file = codexFile || null; this.pos = 0; this.rest = null; this.restOff = 0;   // droid：记录是 Droid 的格式（读法另一套，不读 subagents）
+    this.codex = !!codexFile; this.mk = droid ? newCodexState : this.codex ? newCodexState : newState; this.ap = droid ? applyDroid : this.codex ? applyCodex : apply; this.st = this.mk(); this.loaded = false;
     this.quiet = 0; this.mark = ''; this.sideM = 0; this.sideAt = 0; this.sub = 0; }
   // 「显示在运行、却没有新记录」累计了多久。只在服务自己醒着的时候累计（电脑睡一觉不算），有新记录就清零。
   // 派出去的子任务写在旁边的 subagents 文件夹里，那里有动静也算。
@@ -1328,6 +1329,296 @@ function codexSessions(seen) {
   if (dirty) saveAgents();
   return out;
 }
+// ── Factory Droid CLI（config.json 的 droid 打开才读 ~/.factory）：总控台起在 tmux 里的，记录在 ~/.factory/sessions/<工作目录把 / 换成 -> /<会话号>.jsonl ──
+// 开窗口（模型 / 强度经 --settings，见 newDroid）、墙上的忙 / 闲、接回归档。没有额度、档位、账号、派活单。忙 / 闲只看记录：最后一条 agent_turn_outcome = 闲，之后又来了他的话 = 忙；屏幕只读选择框
+const DROID_HOME = path.join(HOME, '.factory');
+const DROIDS_FILE = path.join(DATA, 'droids.json');   // 总控台起的 Droid 会话：tmux 名 → {cwd, at, prompt, sid, file, auto}。在数据目录里，关着也读：以前起的 Droid 窗格不当成「启动中」
+let droids = {};
+try { droids = JSON.parse(fs.readFileSync(DROIDS_FILE, 'utf8')) || {}; } catch {}
+function saveDroids() { if (READONLY) return; const tmp = DROIDS_FILE + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(droids, null, 1)); fs.renameSync(tmp, DROIDS_FILE); }
+const droidTracks = new Map();
+// Droid 的模型和强度（--settings 文件）：开窗口时给了才写，记在 droids.json；卡片上的模型以 Factory 自己记的 <会话号>.settings.json 为准（它会把请求的模型名换掉）
+let droidModels = { models: [], defaultModel: null };        // droid exec --help 读出的清单（findDroid 里读一次）
+const DROID_SET_DIR = path.join(DATA, 'droid-settings');
+const droidSetBody = (k) => JSON.stringify({ ...(k.model ? { model: k.model } : {}), ...(k.effort ? { reasoningEffort: k.effort } : {}) });
+function writeDroidSettings(file, k) { fs.mkdirSync(DROID_SET_DIR, { recursive: true }); fs.writeFileSync(file, droidSetBody(k), { mode: 0o600 }); }
+// 归档 / 进程退出时带上它开窗口时给的模型和强度，只给卡片显示。接回不带 --settings：会话自己的 <会话号>.settings.json 说了算（11/27 真 droid 1.23.0 实测：接回时给 --settings 也不换模型）
+const droidKeep = (tmux) => { const a = tmux && Object.hasOwn(droids, tmux) ? droids[tmux] : null; return a && (a.model || a.effort) ? { droid: { model: a.model || null, effort: a.effort || null, settings: a.settings || null } } : {}; };
+// 设置文件只在开窗口那一下有用：窗口停了（归档、删除、自动删、进程没了被清掉）就删。只认 DROID_SET_DIR 下的 ccb-*.json，还有别的条目指着它就不删
+const droidSetOk = (f) => typeof f === 'string' && path.dirname(f) === DROID_SET_DIR && /^ccb-[\w-]+\.json$/.test(path.basename(f));
+function dropDroidSettings(f) {
+  if (READONLY || !droidSetOk(f) || Object.values(droids).some((x) => x && x.settings === f)) return false;
+  try { fs.rmSync(f, { force: true }); return true; } catch { return false; }
+}
+// config 的 droid 关着时不碰 ~/.factory 里的东西（删除、自动删都只处理总控台自己的归档条目）
+const droidOff = (f) => !CONFIG.droid && typeof f === 'string' && (f === DROID_HOME || f.startsWith(DROID_HOME + '/'));
+// 挪 Droid 的 <会话号>.jsonl 时，旁边 Factory 记模型的 <会话号>.settings.json 一起挪
+function moveDroidSide(file, base) {
+  if (typeof file !== 'string' || !file.startsWith(DROID_HOME + '/')) return;
+  const side = file.replace(/\.jsonl$/, '.settings.json'); if (side === file) return;
+  try { if (fs.lstatSync(side).isFile()) fs.renameSync(side, base + '.settings.json'); } catch {}
+}
+const droidSetCache = new Map();                               // 记录文件 → { mt, model, effort }
+function droidSettingsOf(file) {
+  const fp = String(file || '').replace(/\.jsonl$/, '.settings.json'); if (!file || fp === file) return {};
+  let mt = 0; try { mt = fs.statSync(fp).mtimeMs; } catch { droidSetCache.delete(file); return {}; }
+  const c = droidSetCache.get(file); if (c && c.mt === mt) return c;
+  let j = null; try { j = JSON.parse(fs.readFileSync(fp, 'utf8')); } catch {}
+  const ok = (v, re) => (typeof v === 'string' && re.test(v) ? v : null);
+  const out = { mt, model: ok(j && j.model, /^[\w.:\-]{1,80}$/), effort: ok(j && j.reasoningEffort, /^[a-z]{2,10}$/) };
+  droidSetCache.set(file, out); return out;
+}
+const droidName = (id) => { const x = id ? droidModels.models.find((m) => m.id === id) : null; return x ? x.name : null; };
+const droidModelFields = (a, file) => { const d = droidSettingsOf(file), model = d.model || a.model || null; return { model, effort: d.effort || a.effort || null, modelName: droidName(model) }; };
+const droidDirs = (cwd) => { const out = new Set([cwd]); try { out.add(fs.realpathSync(cwd)); } catch {} return [...out].map((d) => path.join(DROID_HOME, 'sessions', d.replace(/\//g, '-'))); };
+const droidHead = (fp, max) => { try { const fd = fs.openSync(fp, 'r'); try { const b = Buffer.alloc(max); const n = fs.readSync(fd, b, 0, max, 0); return b.subarray(0, n).toString('utf8'); } finally { fs.closeSync(fd); } } catch { return null; } };
+const droidStart = (fp) => {                              // 记录开头的 session_start：{ id, cwd }
+  const head = droidHead(fp, 65536); if (head == null) return null;
+  for (const l of head.split('\n')) { let j; try { j = JSON.parse(l); } catch { continue; } if (j && j.type === 'session_start') return typeof j.id === 'string' && SID_RE.test(j.id) && typeof j.cwd === 'string' ? j : null; }
+  return null;
+};
+// 记录里他的第一句话（认法和 applyDroid / readDroidTurns 同一个 droidHuman：真 Droid 第一条 user 消息全是 llm_only 的 <system-reminder>，他的话在后面那条）。还没写到就是 null
+function droidFirstHuman(fp) {
+  const head = droidHead(fp, 256 << 10); if (head == null) return null;
+  for (const l of head.split('\n')) {
+    let d; try { d = JSON.parse(l); } catch { continue; }
+    if (!d || d.type !== 'message' || !d.message || typeof d.message !== 'object') continue;
+    const m = d.message, c = Array.isArray(m.content) ? m.content : [];
+    if (droidHuman(m, c)) return droidClean(droidText(c));
+  }
+  return null;
+}
+const droidNorm = (t) => cleanPrompt(t).replace(/\s+/g, ' ').trim();
+const droidAmbig = new Set();                                // 认领不了（几份都对得上）已经记过日志的窗口
+// 窗口开出来之后才出现的、工作目录对得上、还没被别的窗口认领的那份记录。信任框挂着时它不写记录，这段时间同一个文件夹里别处开的 droid（终端、droid exec、另一个窗口）
+// 也会冒出记录，所以：带了任务的，要记录里他的第一句话和开窗口时的任务对得上；对得上的有两份以上，这一拍不认，下一拍再看。
+// 没带任务的取开窗口以后建得最早的那份（第一句话是另一个还没认领的窗口的任务的不算）
+function findDroidSession(a, name) {
+  const claimed = new Set(Object.values(droids).map((x) => x.file).filter(Boolean)), ids = new Set(), cands = [];
+  for (const dir of droidDirs(a.cwd)) {
+    let files = []; try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+    for (const f of files) {
+      const fp = path.join(dir, f); if (claimed.has(fp)) continue;
+      let bt = 0; try { bt = fs.statSync(fp).birthtimeMs; } catch { continue; }
+      if (bt < a.at - 1000) continue;
+      const s = droidStart(fp);
+      if (!s || !sameDir(s.cwd, a.cwd) || ids.has(s.id)) continue;
+      ids.add(s.id); cands.push({ file: fp, sid: s.id, bt });
+    }
+  }
+  const want = droidNorm(a.prompt);
+  let pick = null;
+  if (want) {
+    const hit = cands.filter((c) => droidNorm(droidFirstHuman(c.file)) === want);
+    if (hit.length > 1) {
+      if (!droidAmbig.has(name)) { droidAmbig.add(name); console.log(`droid ${new Date().toISOString()} ${name} 认领不了：${hit.length} 份记录的第一句话都是这条任务（${hit.map((c) => c.sid.slice(0, 8)).join(' ')}），等下一拍`); }
+      return null;
+    }
+    pick = hit[0] || null;
+  } else {
+    const others = new Set(Object.entries(droids).filter(([n, x]) => n !== name && x && !x.file && !x.sid && droidNorm(x.prompt)).map(([, x]) => droidNorm(x.prompt)));
+    pick = cands.filter((c) => { const h = droidNorm(droidFirstHuman(c.file)); return !h || !others.has(h); }).sort((x, y) => x.bt - y.bt)[0] || null;
+  }
+  return pick ? { file: pick.file, sid: pick.sid } : null;
+}
+function droidFileOf(sid, cwd) {                          // 接回的：会话号已知，记录还是原来那份
+  for (const dir of droidDirs(cwd)) { const fp = path.join(dir, sid + '.jsonl'); if (fs.existsSync(fp)) return fp; }
+  return null;
+}
+const droidText = (c) => (Array.isArray(c) ? c.filter((x) => x && x.type === 'text' && typeof x.text === 'string').map((x) => x.text).join('\n') : typeof c === 'string' ? c : '');
+// 他的话：role user、有文字、不是工具结果、不是只给模型看的（llm_only，系统附的提示）
+// 他的话：真 Droid 1.23.0 会把任务里的 <system-reminder> 标签转义成 &lt;system-reminder&gt; 再存（11/27 实测：别的 & < > 引号都原样存，只转这个标签），
+// 总控台在主目录开窗时附的找文件夹说明就成了 &lt;…&gt;，cleanPrompt 去不掉，认领时第一句话对不上任务。只还原这一个标签再交给 cleanPrompt
+const droidClean = (t) => cleanPrompt(String(t || '').replace(/&lt;(\/?)system-reminder&gt;/g, '<$1system-reminder>'));
+const droidHuman = (m, c) => m.role === 'user' && m.visibility !== 'llm_only' && !c.some((x) => x && x.type === 'tool_result') && droidText(c).trim() !== '';
+const DROID_EDIT = /^(Edit|Create|MultiEdit|ApplyPatch|Write)$/;
+function applyDroid(st, d) {
+  const ts = typeof d.timestamp === 'string' ? d.timestamp : null;
+  if (d.type === 'message' && d.message && typeof d.message === 'object') {
+    const m = d.message, c = Array.isArray(m.content) ? m.content : [];
+    if (m.role === 'user' && m.visibility !== 'user_only') {   // 只给人看的（本地命令的输出）不叫醒模型，后面不会有 outcome，不算开了一轮
+      if (droidHuman(m, c)) {
+        st.turnAt = ts; st.steps = 0; st.note = null; st.tool = null; st.done = false; st.lastText = null; st.halt = null;
+        st.prompt = droidClean(droidText(c)); st.promptAt = ts; st.nHuman++; if (!st.firstPrompt) st.firstPrompt = st.prompt;
+      }
+      st.busy = true;
+    } else if (m.role === 'assistant') {
+      const text = droidText(c);
+      if (text.trim()) { st.lastText = text; if (st.busy) { st.note = text; st.noteAt = ts; } const eta = etaIn(text); if (eta) st.eta = { at: ts, mins: eta }; }
+      for (const b of c) if (b && b.type === 'tool_use') {
+        st.steps++; st.nTools++; st.tool = String(b.name || 'tool').slice(0, 40); noteTool(st.files, b.input || '');
+        if (DROID_EDIT.test(String(b.name || ''))) st.nEdits++;
+      }
+    }
+  } else if (d.type === 'agent_turn_outcome') {
+    st.busy = false; st.note = null; st.tool = null;
+    const at = ts || st.lastAt;
+    if (!d.reason || d.reason === 'completed') { if (st.lastText) { st.result = st.lastText; st.resultAt = at; st.done = true; st.halt = null; } }
+    else st.halt = { kind: d.reason === 'model_usage_exhausted' ? 'limit' : d.reason === 'permission_rejected' ? 'interrupt' : 'error', text: String(d.reason).slice(0, 80), at };
+  }
+  st.lastAt = ts || st.lastAt;
+}
+function readDroidTurns(file, want) {
+  const size = fs.statSync(file).size, turns = []; let cur = null, lastText = null;
+  scanRange(file, Math.max(0, size - (8 << 20)), size, size > (8 << 20), null, (d) => {
+    if (d.type === 'message' && d.message && typeof d.message === 'object') {
+      const m = d.message, c = Array.isArray(m.content) ? m.content : [];
+      if (droidHuman(m, c)) { cur = { prompt: droidClean(droidText(c)), at: d.timestamp || null, results: [], steps: 0 }; turns.push(cur); lastText = null; }
+      else if (cur && m.role === 'assistant') { const t = droidText(c); if (t.trim()) lastText = t; cur.steps += c.filter((x) => x && x.type === 'tool_use').length; }
+    } else if (cur && d.type === 'agent_turn_outcome' && lastText) { cur.results.push({ text: lastText, at: d.timestamp || null }); lastText = null; }
+  });
+  return turns.slice(-want);
+}
+function droidSessions(seen) {
+  const out = []; let dirty = false;
+  for (const [name, a] of Object.entries(droids)) {
+    const pane = panes.find((x) => x.name === name);
+    if (!pane) { if (panesAt > a.at + 6000) { delete droids[name]; droidAmbig.delete(name); dropDroidSettings(a.settings); if (a.sid) droidTracks.delete(a.sid); dirty = true; } continue; }
+    if (!a.file) {
+      const f = a.sid ? { file: droidFileOf(a.sid, a.cwd), sid: a.sid } : findDroidSession(a, name);
+      if (!f || !f.file) continue;
+      droidAmbig.delete(name);
+      a.file = f.file; a.sid = f.sid; dirty = true;
+    }
+    let tr = droidTracks.get(a.sid);
+    if (!tr) { tr = new Track(a.sid, a.cwd, a.file, true); droidTracks.set(a.sid, tr); }
+    try { tr.refresh(); } catch {}
+    const st = tr.st; seen.add(a.sid);
+    const first = a.prompt || st.firstPrompt || 'Droid 会话';
+    const ws = waitScreens.get(name);
+    const o = { sid: a.sid, provider: 'droid', pid: pane.pid, cwd: a.cwd, startedAt: a.at, status: ws && ws.dialog ? 'waiting' : st.busy ? 'busy' : 'idle', statusAt: null,
+      screen: ws ? ws.screen : null, dialog: ws ? ws.dialog : null,
+      regName: name, userNamed: false, title: first.replace(/\s+/g, ' ').slice(0, 28), aiTitle: null, custom: null,
+      prompt: st.prompt || a.prompt || null, promptAt: st.promptAt, ...deliver(st.result), resultAt: st.resultAt, done: st.done,
+      note: st.note, noteAt: st.noteAt, tool: st.tool, steps: st.steps, turnAt: st.turnAt, lastAt: st.lastAt, ask: null,
+      channel: 'tmux', tmux: name, order: 5e5, ...droidModelFields(a, tr.file), ctx: null, sub: 0, halt: st.halt, file: tr.file, codeMode: false, eta: st.eta || null };
+    o.quiet = tr.tick(o.status === 'busy', scanDt); o.alert = alertOf(o);
+    o.project = classify(st.files, { title: o.title, prompt: o.prompt, cwd: o.cwd, home: HOME, pin: pinOf(name) });
+    out.push(o);
+  }
+  if (dirty) saveDroids();
+  return out;
+}
+
+// ── Google Antigravity CLI（agy，config.json 的 antigravity 打开才起作用）。规则和状态栏取数脚本在 agy.mjs，合规的来龙去脉见那个文件开头 ──
+// 只做：他本人开窗口 / 发话、墙上的忙 / 闲 / 交付、归档接回。忙闲看状态栏 tap（agy 自己报的 agent_state），交付的正文看 agy 的对话记录。
+// 会话号 = agy 的 conversation_id：第一次说话以后才有，之前这个窗口留在「启动中」（屏幕照常给）
+const AGY_HOME = path.join(HOME, '.gemini');
+const AGY_DIR = path.join(DATA, 'agy');                  // 每个窗口的 --settings 文件和 tap 文件：<tmux 名>.settings.json / <tmux 名>.tap.json
+const AGYS_FILE = path.join(DATA, 'agys.json');          // 总控台起的 agy 窗口：tmux 名 → {cwd, at, prompt, cid, file, model, sent}。关着也读：以前起的窗格不当成「启动中」
+let agys = {};
+try { agys = JSON.parse(fs.readFileSync(AGYS_FILE, 'utf8')) || {}; } catch {}
+function saveAgys() { if (READONLY) return; const tmp = AGYS_FILE + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(agys, null, 1)); fs.renameSync(tmp, AGYS_FILE); }
+const agyTracks = new Map();
+const isAgyFile = (f) => typeof f === 'string' && f.startsWith(AGY_HOME + '/');
+const agyTapFile = (name) => path.join(AGY_DIR, name + '.tap.json');
+const agySetFile = (name) => path.join(AGY_DIR, name + '.settings.json');
+function readAgyTap(name) { try { return JSON.parse(fs.readFileSync(agyTapFile(name), 'utf8')); } catch { return null; } }
+function dropAgyFiles(name) { if (READONLY) return; for (const f of [agyTapFile(name), agySetFile(name)]) try { fs.unlinkSync(f); } catch {} }
+const agyOfSid = (sid) => Object.keys(agys).find((k) => agys[k].cid === sid) || null;
+const isAgySid = (sid) => !!sid && (!!agyOfSid(sid) || archive.items[sid]?.provider === 'antigravity' || allSessions.some((x) => x.sid === sid && x.provider === 'antigravity'));
+// 开在主目录的（界面新任务都是 ~）：改开在 ~/Projects。agy 的信任名单里只有 ~/Projects（主目录会先弹「信任这个文件夹吗」），它也不认 FOLDER_NOTE 那种附注
+const agyDir = (dir) => (sameDir(dir, HOME) && fs.existsSync(path.join(HOME, 'Projects')) ? path.join(HOME, 'Projects') : dir);
+// 他的话：USER_INPUT 里 <USER_REQUEST> 那段。模型的话：PLANNER_RESPONSE / ASK_QUESTION 的正文；别的 MODEL 步骤（改文件、跑命令……）各算一步。
+// 一轮的交付 = 这一轮最后一段模型的话，到 tap 报回 idle 才算（agySessions 里收）。step_index 只认往前走的：记录在 CHECKPOINT 会整份重写，重读不重复算
+function applyAgy(st, d) {
+  if (typeof d.step_index === 'number') { if (st.lastStep != null && d.step_index <= st.lastStep) return; st.lastStep = d.step_index; }
+  const ts = agyTs(d.created_at);
+  if (d.type === 'USER_INPUT' && d.source !== 'MODEL') {
+    const text = cleanPrompt(agyUserText(d.content));
+    if (text) {
+      if (st.lastText) { st.result = st.lastText; st.resultAt = st.lastTextAt; }   // 上一轮最后那段话 = 上一轮的交付（它停下来之前他又说了一句也一样）
+      st.turnAt = ts; st.steps = 0; st.note = null; st.tool = null; st.done = false; st.lastText = null; st.lastTextAt = null; st.halt = null;
+      st.prompt = text; st.promptAt = ts; st.nHuman++; if (!st.firstPrompt) st.firstPrompt = text;
+    }
+  } else if (d.source === 'MODEL') {
+    const calls = Array.isArray(d.tool_calls) ? d.tool_calls.filter((x) => x && typeof x === 'object') : [];
+    const talk = d.type === 'PLANNER_RESPONSE' || d.type === 'ASK_QUESTION';
+    const text = talk ? agyText(d.content).trim() : '';
+    if (text) { st.lastText = text; st.lastTextAt = ts; st.note = text; st.noteAt = ts; const eta = etaIn(text); if (eta) st.eta = { at: ts, mins: eta }; }
+    for (const c of calls) noteTool(st.files, c.args || '');
+    if (!talk && d.type !== 'CHECKPOINT') { st.steps++; st.nTools++; st.tool = agyStepLine(d) || String(d.type || 'step').slice(0, 40); if (!calls.length) noteTool(st.files, d.content || ''); if (agyEdit(d)) st.nEdits++; }
+    else if (calls.length) st.tool = agyStepLine(d) || st.tool;
+  }
+  st.lastAt = ts || st.lastAt;
+}
+// 最后一行没有换行结尾（agy 在 CHECKPOINT 整份重写时可能这样写）：试着当一整条读；下次接着读时从这一行开头重读，step_index 去重
+function agyRest(st, rest) { if (!rest || rest.length < 12) return; let d; try { d = JSON.parse(rest.toString('utf8')); } catch { return; } if (d && typeof d === 'object') applyAgy(st, d); }
+// 读法（FIX-1）：同一个文件变长了 → 从上次读到的地方接着读；整份重写（inode 换了 / 变小了）→ 只扫最后 TAIL_FIRST，交给原来的状态（step_index 去重），不往前扩；
+// 第一次读才在读不到他的话时往前扩（每条记录只扩这一次）。原来每次变化都整段重读、还会扩到 16 / 48 MB，跑在 1.2 秒一拍的 scanSessions 里
+class AgyTrack extends Track {
+  constructor(sid, cwd, file) { super(sid, cwd, null); this.file = file || null; this.codex = true; this.mk = newCodexState; this.ap = applyAgy; this.st = this.mk(); this.key = ''; this.tapAt = 0; }
+  refresh() {
+    if (!this.file) return;
+    let stt; try { stt = fs.statSync(this.file); } catch { return; }       // 还没写出来：留着上一份
+    const key = stt.size + ':' + stt.mtimeMs + ':' + stt.ino; if (key === this.key) return;
+    this.key = key;
+    const tail = (st, from, drop) => { const rest = scanRange(this.file, from, stt.size, drop, null, (d) => applyAgy(st, d)); agyRest(st, rest); return rest.length; };
+    if (this.loaded && stt.ino === this.ino && stt.size >= this.pos) { this.pos = stt.size - tail(this.st, this.pos, false); return; }   // 接着写的
+    if (this.loaded) { const from = Math.max(0, stt.size - TAIL_FIRST); this.pos = stt.size - tail(this.st, from, from > 0); this.ino = stt.ino; return; }   // 整份重写
+    let span = Math.min(stt.size, TAIL_FIRST), left = 0;
+    for (;;) {
+      const st = this.mk(); left = tail(st, stt.size - span, span < stt.size); this.st = st;
+      if (st.prompt || span >= stt.size || span >= TAIL_MAX) break;
+      span = Math.min(stt.size, TAIL_MAX, span * 4);
+    }
+    this.pos = stt.size - left; this.ino = stt.ino; this.loaded = true;
+  }
+  tick(busy, dt) {                                        // 「在忙却没动静」：记录和 tap 都没变才累计
+    const mark = this.key + ':' + this.tapAt;
+    if (!busy || mark !== this.mark) { this.mark = mark; this.quiet = 0; return 0; }
+    this.quiet += dt; return this.quiet;
+  }
+}
+function readAgyTurns(file, want) {
+  const size = fs.statSync(file).size, turns = []; let cur = null, last = -1;
+  const one = (d) => {
+    if (typeof d.step_index === 'number') { if (d.step_index <= last) return; last = d.step_index; }
+    if (d.type === 'USER_INPUT' && d.source !== 'MODEL') { const t = cleanPrompt(agyUserText(d.content)); if (t) { cur = { prompt: t, at: agyTs(d.created_at), results: [], steps: 0, last: null }; turns.push(cur); } }
+    else if (cur && d.source === 'MODEL') {
+      if (d.type === 'PLANNER_RESPONSE' || d.type === 'ASK_QUESTION') { const t = agyText(d.content).trim(); if (t) cur.last = { text: t, at: agyTs(d.created_at) }; }
+      else if (d.type !== 'CHECKPOINT') cur.steps++;
+    }
+  };
+  const rest = scanRange(file, Math.max(0, size - (8 << 20)), size, size > (8 << 20), null, one);
+  if (rest.length >= 12) { let d; try { d = JSON.parse(rest.toString('utf8')); } catch {} if (d && typeof d === 'object') one(d); }   // 最后一行没有换行结尾
+  for (const t of turns) { if (t.last) t.results.push(t.last); delete t.last; }   // 每轮只留最后一段（中间的是边做边说）
+  return turns.slice(-want);
+}
+function agySessions(seen) {
+  const out = []; let dirty = false;
+  for (const [name, a] of Object.entries(agys)) try {   // 一条坏了（记录读不了、tap 写坏）不中断整次 scanSessions
+    const pane = panes.find((x) => x.name === name);
+    if (!pane) { if (panesAt > a.at + (a.opening ? 60000 : 6000)) { delete agys[name]; if (a.cid) agyTracks.delete(a.cid); dropAgyFiles(name); dirty = true; } continue; }   // opening：newAgy / unarchiveAgy 先写的占位，窗口还在开（60 秒内不当成窗口没了）
+    const tap = readAgyTap(name), sv = agyStatus(tap);
+    if (tap && tap.cid && tap.cid !== a.cid && SID_RE.test(tap.cid)) { if (a.cid) agyTracks.delete(a.cid); a.cid = tap.cid; a.file = null; dirty = true; }   // 第一次说话以后才有会话号；在 agy 里换了一段对话也跟着换
+    if (!a.cid || !sv) continue;
+    if (!a.file || !fs.existsSync(a.file)) { const f = transcriptCandidates(HOME, a.cid, tap.transcript).find((x) => fs.existsSync(x)); if (f && f !== a.file) { a.file = f; dirty = true; } }
+    let tr = agyTracks.get(a.cid);
+    if (!tr) { tr = new AgyTrack(a.cid, a.cwd, a.file); agyTracks.set(a.cid, tr); }
+    if (a.file && tr.file !== a.file) { tr.file = a.file; tr.key = ''; }
+    try { tr.refresh(); } catch {}
+    tr.tapAt = tap.at || 0;
+    const st = tr.st; seen.add(a.cid);
+    if (!sv.busy && st.lastText) { st.result = st.lastText; st.resultAt = st.lastTextAt; st.done = true; st.note = null; st.tool = null; }   // tap 报回 idle：这一轮最后那段话就是交付
+    const sent = a.sent && a.sent.at > (Date.parse(st.promptAt || '') || 0) ? a.sent : null;   // 记录没写出来（或比发的那句旧）：卡片上先写总控台替他发的那句
+    const first = a.prompt || st.firstPrompt || 'Antigravity 会话';
+    const ws = waitScreens.get(name);
+    const o = { sid: a.cid, provider: 'antigravity', pid: pane.pid, cwd: a.cwd, startedAt: a.at, status: ws && ws.dialog ? 'waiting' : sv.status, statusAt: null,
+      screen: ws ? ws.screen : null, dialog: ws ? ws.dialog : null,
+      regName: name, userNamed: false, title: first.replace(/\s+/g, ' ').slice(0, 28), aiTitle: null, custom: null,
+      prompt: sent ? sent.text : st.prompt || a.prompt || null, promptAt: sent ? new Date(sent.at).toISOString() : st.promptAt, ...deliver(st.result), resultAt: st.resultAt, done: st.done,
+      note: st.note, noteAt: st.noteAt, tool: st.tool, steps: st.steps, turnAt: st.turnAt, lastAt: st.lastAt, ask: null,
+      channel: 'tmux', tmux: name, order: 5e5, model: tap.modelName || tap.model || a.model || null, effort: null, ctx: null, sub: 0, halt: sv.halt || st.halt, file: tr.file, eta: st.eta || null, codeMode: false };   // ctx 不填：agy 报的是百分比，Claude 那格是 token 数
+    o.quiet = tr.tick(o.status === 'busy', scanDt); o.alert = alertOf(o);
+    o.project = classify(st.files, { title: o.title, prompt: o.prompt, cwd: o.cwd, home: HOME, pin: pinOf(name) });
+    out.push(o);
+  } catch (e) { agyWarn(name, e); }
+  if (dirty) saveAgys();
+  return out;
+}
+const agyWarned = new Set();
+function agyWarn(name, e) { const k = name + ':' + (e && e.message); if (agyWarned.has(k)) return; agyWarned.add(k); if (agyWarned.size > 200) agyWarned.clear(); console.error(`agy ${new Date().toISOString()} ${name} card ${String((e && e.message) || e).slice(0, 160)}`); }
 
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
 
@@ -1447,7 +1738,7 @@ function watchGone(out, seen) {
     const cid = goneCrash.get(sid);
     if (!p.mid && !cid) { if (now - since > CRASH_WIN + 2000) { lastLive.delete(sid); goneSince.delete(sid); } continue; }   // 闲着的：等过了「一起退出」的窗口还是单个，就不记
     const account = readTap(sid)?.account;
-    archive.items[sid] = { sid, provider: p.provider, ...(typeof account === 'string' && account.trim() ? { account } : {}), title: p.title, cwd: p.cwd, file: p.file, prompt: p.prompt, resultAt: p.resultAt, ...(isGemini(p.model) ? { gemini: p.model } : {}), ...nameOf(p),
+    archive.items[sid] = { sid, provider: p.provider, ...(typeof account === 'string' && account.trim() ? { account } : {}), title: p.title, cwd: p.cwd, file: p.file, prompt: p.prompt, resultAt: p.resultAt, ...(isGemini(p.model) ? { gemini: p.model } : {}), ...(p.droid ? { droid: p.droid } : {}), ...nameOf(p),
       archivedAt: now, state: 'archived', lost: true, lostAt: since, project: p.project, role: p.role || null, lastAt: p.lastAt || 0, ...(cid ? { crash: cid, idle: !p.mid } : {}) };
     dirty = true; lastLive.delete(sid); goneSince.delete(sid);
     if (cid) {                                                         // 记成 lost 以后就不再挂在 goneCrash 上：它被接回、又上墙时不该把自己从这一起里拿掉（不然横幅的总数越接越小）
@@ -1457,8 +1748,8 @@ function watchGone(out, seen) {
     } else queueAlert(p.title, 'gone', sid);
   }
   for (const s of out) {
-    const tr = tracks.get(s.sid) || codexTracks.get(s.sid);
-    lastLive.set(s.sid, { title: s.title, cwd: s.cwd, provider: s.provider || 'claude', model: isGemini(s.model) ? s.model : null, file: (tr && tr.file) || s.file || null, prompt: s.prompt, resultAt: s.resultAt, project: s.project, regName: s.regName, userNamed: s.userNamed,
+    const tr = tracks.get(s.sid) || codexTracks.get(s.sid) || droidTracks.get(s.sid) || agyTracks.get(s.sid);
+    lastLive.set(s.sid, { title: s.title, cwd: s.cwd, provider: s.provider || 'claude', model: isGemini(s.model) && s.provider !== 'droid' && s.provider !== 'antigravity' ? s.model : null, ...(s.provider === 'droid' ? droidKeep(s.tmux) : {}), file: (tr && tr.file) || s.file || null, prompt: s.prompt, resultAt: s.resultAt, project: s.project, regName: s.regName, userNamed: s.userNamed,
       mid: s.status === 'busy' || s.status === 'waiting', role: roleOf.get(s.sid) || null, lastAt: Math.max(Date.parse(s.lastAt || '') || 0, s.statusAt || 0), tmux: s.tmux || null, sock: s.tmux ? sockFor(s.tmux) : null });
   }
   for (const [sid, t] of leaving) if (now - t > 120000) leaving.delete(sid);
@@ -1557,13 +1848,13 @@ function loadNow() {
   return os.loadavg()[0];
 }
 const ROLE_RANK = { chief: 0, lead: 1, head: 1 };                // 分支负责人和负责人一起先接
-function restoreOrder(c) {
+function restoreOrder(c, human = c.human === true) {   // human：按他本人点的算（横幅看「他点一下还能接回几个」时传 true）
   const tried = c.tried || [];                      // 每个只接一次：接过又倒下的记进 failed，不再排进来（不然一个起来就退的窗口会让队列每 20 秒重接它一次）
-  return c.sids.filter((sid) => { const it = archive.items[sid]; return it && it.state === 'archived' && it.lost && it.crash === c.id && !c.failed.includes(sid) && !tried.includes(sid); })   // 点过「知道了」的、后来另外归档的不接
+  return c.sids.filter((sid) => { const it = archive.items[sid]; return it && it.state === 'archived' && it.lost && it.crash === c.id && !c.failed.includes(sid) && !tried.includes(sid) && (human || it.provider !== 'antigravity'); })   // 不是他本人点的：Antigravity 不排进来（不试、不记失败，他本人再点照样接）   // 点过「知道了」的、后来另外归档的不接
     .sort((a, b) => { const x = archive.items[a], y = archive.items[b]; return ((ROLE_RANK[x.role] ?? 2) - (ROLE_RANK[y.role] ?? 2)) || ((y.lastAt || 0) - (x.lastAt || 0)); });
 }
 let restoreBusy = null;        // 正在排队接回的那一起（一次只排一起）
-function crashAction(id, action) {
+function crashAction(id, action, human = false) {
   const c = archive.crashes && Object.prototype.hasOwnProperty.call(archive.crashes, id) ? archive.crashes[id] : null;
   if (!c) return { ok: false, error: '没有这一起' };
   if (action === 'dismiss') { c.state = 'dismissed'; c.stop = true; saveArchive(); return { ok: true }; }
@@ -1571,7 +1862,7 @@ function crashAction(id, action) {
   if (action !== 'restore') return { ok: false, error: '不认识的动作' };
   if (restoreBusy === id) return { ok: true, already: true };
   if (restoreBusy) return { ok: false, error: '另一起还在接回，等它接完或先停下它' };
-  c.stop = false; c.state = 'running'; c.why = null; restoreBusy = id; saveArchive();
+  c.stop = false; c.state = 'running'; c.why = null; c.human = human === true; restoreBusy = id; saveArchive();   // 每点一次「全部接回」都按这一下重记
   restoreLoop(c).catch((e) => { console.error('restore', e); c.state = 'stopped'; c.why = 'error'; }).finally(() => { restoreBusy = null; try { saveArchive(); } catch (e) { console.error('restore', e); } });
   return { ok: true };
 }
@@ -1580,6 +1871,7 @@ async function restoreLoop(c) {
   for (;;) {
     if (c.stop) { if (c.state !== 'dismissed') { c.state = 'stopped'; c.why = 'user'; c.next = c.done + c.failed.length + 1; } return; }
     const todo = restoreOrder(c);
+    if (!todo.length && restoreOrder(c, true).length) { c.state = 'stopped'; c.why = 'human'; c.next = c.done + c.failed.length + 1; c.load = null; console.log(`restore ${new Date().toISOString()} ${c.id} stop human next=${c.next}`); return; }   // 剩下的是 Antigravity、这一下又不是他本人点的：停下等他点，不报「都接回了」
     if (!todo.length) { c.state = 'done'; c.next = null; c.load = null; console.log(`restore ${new Date().toISOString()} ${c.id} done ${c.done}/${c.sids.length}`); return; }
     c.next = c.done + c.failed.length + 1;
     const gapLeft = (c.restoredAt || 0) + RESTORE_GAP - Date.now();   // 上一个接完到这一个至少隔 RESTORE_GAP（新会话起来要吃一阵 CPU）；记在这一起上，跨「停下 → 接着接回」、跨服务重启也算
@@ -1596,7 +1888,7 @@ async function restoreLoop(c) {
     if (c.stop) continue;
     c.state = 'running'; c.load = Math.round(load * 10) / 10; c.waitSince = null;
     const sid = todo[0]; (c.tried = c.tried || []).push(sid);
-    const r = await unarchive(sid);
+    const r = await unarchive(sid, c.human === true);
     c.restoredAt = Date.now();
     if (r.ok) c.done++; else c.failed.push(sid);
     console.log(`restore ${new Date().toISOString()} ${c.id} ${sid.slice(0, 8)} ${r.ok ? 'ok ' + (r.name || '-') : 'fail ' + String(r.error || '').replace(/\s+/g, ' ').slice(0, 80)} ${c.done + c.failed.length}/${c.sids.length}`);
@@ -1604,7 +1896,7 @@ async function restoreLoop(c) {
   }
 }
 function crashView() {
-  const idle = (x) => (x.state === 'new' || x.state === 'stopped') && !restoreOrder(x).length;   // 一个个都自己接回、删掉了：横幅没事可做
+  const idle = (x) => (x.state === 'new' || x.state === 'stopped') && !restoreOrder(x, true).length;   // 一个个都自己接回、删掉了：横幅没事可做
   const busy = restoreBusy && archive.crashes && archive.crashes[restoreBusy];                    // 正在接的那一起先给（停得了它）
   const c = busy || Object.values(archive.crashes || {}).filter((x) => x.state !== 'dismissed' && Date.now() - x.at < 24 * 3600000 && !idle(x)).sort((a, b) => b.at - a.at)[0];
   if (!c) return null;
@@ -1746,7 +2038,7 @@ function watchAlerts() {
       if (!n) { alertHold.delete(hk); continue; }
       if (done[slot] === n.key) continue;                                     // 同一件事只发一次
       if (slot === 'review' && done.reply === 'reply@' + s.resultAt) { done.review = n.key; alertHold.delete(hk); continue; }   // 这一次交付已经按待跟进发过（或算作已知道）：改判成待审阅不再补发「做好了」
-      if (slot === 'ask' && s.provider === 'codex' && process.uptime() < 60) { done.ask = n.key; continue; }   // Codex 的弹框要等读屏（slowLoop）才知道，服务起来 60 秒内读到的算已有的
+      if (slot === 'ask' && (s.provider === 'codex' || s.provider === 'droid') && process.uptime() < 60) { done.ask = n.key; continue; }   // Codex / Droid 的弹框要等读屏（slowLoop）才知道，服务起来 60 秒内读到的算已有的
       const h = alertHold.get(hk);
       if (!h || h.key !== n.key || h.wait !== n.wait) { alertHold.set(hk, { key: n.key, since: now, wait: n.wait }); continue; }   // 要等多久变了（后台跑完 shell → idle）从头站稳
       if (now - h.since < n.wait) continue;
@@ -1817,6 +2109,8 @@ function scanSessions() {
   }
   attachChannels(out);
   if (CONFIG.codex) for (const c of codexSessions(seen)) out.push(c);   // codex 没打开：总控台起过的 Codex 会话和它们的记录都不读
+  if (CONFIG.droid) for (const c of droidSessions(seen)) out.push(c);   // droid 同上：关着就不碰 ~/.factory
+  if (CONFIG.antigravity) for (const c of agySessions(seen)) out.push(c);   // antigravity 同上：关着就不碰 ~/.gemini
   if (readOk) watchGone(out, seen);                        // 要在清掉 tracks 之前：记「它当时的对话记录在哪」。读不到会话登记的那一轮不判（不然所有窗口同一拍「不见」）
   for (const k of [...tracks.keys()]) if (!seen.has(k)) tracks.delete(k);
   for (const o of out) { applyJudged(o); applyAuto(o); }
@@ -2078,11 +2372,11 @@ const RP_MS = (SANDBOX && Number(process.env.CCBOARD_RP_TTL_MS)) || RP_TTL;   //
 const rpKeys = new Map();                          // 钥匙 → { dev, login, real, name, fid（发钥匙时核过的 dev:ino）, exp }
 const rpByFile = new Map();                        // 设备号 + 真身 → 钥匙（同一台再点同一个文件，网址不变、续期）
 function rpEvidence(sid) {
-  const tr = tracks.get(sid) || codexTracks.get(sid);
+  const tr = tracks.get(sid) || codexTracks.get(sid) || droidTracks.get(sid) || agyTracks.get(sid);
   const file = (tr && tr.file) || (Object.hasOwn(archive.items, sid) && archive.items[sid].file);
-  if (!file || !fs.existsSync(file) || (file.includes('/.codex/') && !CONFIG.codex)) return null;
+  if (!file || !fs.existsSync(file) || (file.includes('/.codex/') && !CONFIG.codex) || (file.startsWith(DROID_HOME + '/') && !CONFIG.droid) || (isAgyFile(file) && !CONFIG.antigravity)) return null;
   const raws = [];
-  for (const t of file.includes('/.codex/') ? readCodexTurns(file, 40) : readTurns(file, 40)) for (const r of t.results || []) raws.push(...pathsIn(r.text));
+  for (const t of file.includes('/.codex/') ? readCodexTurns(file, 40) : file.startsWith(DROID_HOME + '/') ? readDroidTurns(file, 40) : isAgyFile(file) ? readAgyTurns(file, 40) : readTurns(file, 40)) for (const r of t.results || []) raws.push(...pathsIn(r.text));
   const cur = sessions.find((x) => x.sid === sid);
   if (tr && tr.st && tr.st.wrote && cur) { const cwd = String(cur.cwd || '').replace(/^~(?=$|\/)/, HOME); for (const w of tr.st.wrote.keys()) { const a = absOf(w, cwd); if (a) raws.push(a); } }
   const abs = new Set(), real = new Set(), linked = new Set();
@@ -2186,7 +2480,9 @@ async function waitDelivered(sid, text, since, files = []) {
     return key ? t.includes(key) : (/\[Image #\d+\]/.test(t) || names.some((n) => t.includes(n))); };
   for (let i = 0; i < 24; i++) {
     await sleep(400);
-    const tr = tracks.get(sid) || codexTracks.get(sid); if (!tr) break;
+    const ag = agyOfSid(sid), t = ag ? readAgyTap(ag) : null;
+    if (t && t.at >= since - 500 && (AGY_BUSY.has(t.state) || t.queued > 0)) return true;   // agy：发完以后 tap 报了在忙（或排上了队）= 送到了（它的记录可能还没写）
+    const tr = tracks.get(sid) || codexTracks.get(sid) || droidTracks.get(sid) || agyTracks.get(sid); if (!tr) break;
     try { tr.refresh(); } catch {}
     const st = tr.st;
     if (st.promptAt && Date.parse(st.promptAt) >= since - 2000 && hit(st.prompt)) return true;
@@ -2196,11 +2492,12 @@ async function waitDelivered(sid, text, since, files = []) {
   return false;
 }
 
-async function sendTo(sid, text, rawFiles) {
+async function sendTo(sid, text, rawFiles, human = false) {   // human：他本人发的（界面 / 配过对的手机）。只有 /api/send 会给 true；自动续跑、保温都不给
   const files = await cleanFiles(rawFiles);
   if (!text && !files.length) return { ok: false, error: '没有内容' };
   const s0 = findSession(sid);
   if (!s0) return { ok: false, error: '这个会话已经不在了' };
+  if (s0.provider === 'antigravity') { const bad = agyReject({}, human); if (bad) return { ok: false, error: bad }; }
   if (s0.ask || s0.status === 'waiting') return { ok: false, error: '它弹了一个选择框在等你选，直接打字会替你乱选，请点「终端」去回答' };
   const since = Date.now();
   if (s0.channel === 'tmux') {
@@ -2219,6 +2516,7 @@ async function sendTo(sid, text, rawFiles) {
     }
     await sleep(500);
     await tmuxFor(s0.tmux, ['send-keys', '-t', s0.tmux, 'Enter']);
+    if (s0.provider === 'antigravity' && agys[s0.tmux]) { agys[s0.tmux].sent = { text: [text, ...files].filter(Boolean).join(' ').slice(0, 4000), at: since }; saveAgys(); }
   } else {
     await refreshTerms(); scanSessions();            // 发之前重新对一次，标题变了就不发
     const s = findSession(sid);
@@ -2287,7 +2585,7 @@ async function cleanFiles(list) {
 // 图片单独贴一段原始路径，Claude Code 会把它变成 [Image #n]；别的文件带引号当文字；最后才是你的话
 function pieces(s, text, files) {
   const q = (f) => (isImage(f) ? f : '"' + f + '"');
-  if (s.provider === 'codex') return [[...files.map((f) => '"' + f + '"'), text].filter(Boolean).join(' ')];
+  if (s.provider === 'codex' || s.provider === 'droid' || s.provider === 'antigravity') return [[...files.map((f) => '"' + f + '"'), text].filter(Boolean).join(' ')];
   const out = [];
   files.forEach((f, i) => { if (i) out.push(' '); out.push(q(f)); });
   if (text) out.push((files.length ? ' ' : '') + text);
@@ -2395,12 +2693,14 @@ async function closeAttachTabs(ttys, name) {
 // 停掉一个会话的进程。只认「登记里这个进程号现在还是这个会话」；不强杀。
 async function stopSession(s) {
   leaving.set(s.sid, Date.now());                   // 是我们自己停的，别当成「意外退出」来提醒
-  if (s.provider === 'codex') {                     // Codex 会话都是总控台自己起在 tmux 里的
+  if (s.provider === 'codex' || s.provider === 'droid' || s.provider === 'antigravity') {   // Codex / Droid / Antigravity 会话都是总控台自己起在 tmux 里的
     if (!/^ccb-[\w-]+$/.test(s.tmux || '')) return { ok: false, error: '不是总控台开的会话' };
     const ttys = await attachTtys(s.tmux);          // 要在 kill-session 之前问：杀了就没有 client 可查
     await tmuxFor(s.tmux, ['kill-session', '-t', s.tmux]);
     for (let i = 0; i < 25 && alive(s.pid); i++) await sleep(200);
-    delete agents[s.tmux]; saveAgents(); codexTracks.delete(s.sid);
+    if (s.provider === 'droid') { const was = droids[s.tmux]; delete droids[s.tmux]; saveDroids(); droidTracks.delete(s.sid); if (was) dropDroidSettings(was.settings); }
+    else if (s.provider === 'antigravity') { delete agys[s.tmux]; saveAgys(); agyTracks.delete(s.sid); dropAgyFiles(s.tmux); }
+    else { delete agents[s.tmux]; saveAgents(); codexTracks.delete(s.sid); }
     if (alive(s.pid)) return { ok: false, error: '它没停下来' };
     closeAttachTabs(ttys, s.tmux).catch(() => 0);   // 不等它：「删除」在等 stopSession 回话，关标签最多多等约 2 秒 + osascript 8 秒；关了几个也没人读（11/26 审查）
     return { ok: true };
@@ -2461,16 +2761,16 @@ function tidyNote(s, st) {
   return { project: s.project ? s.project.name : null, head: dg.head || null, ask: dg.need === 'reply' ? dg.ask || null : null, roots, human: st.nHuman, tools: st.nTools, edits: st.nEdits };
 }
 // 归档时记下它在 ListAgents 里的名字：接回时现在没人用就还给它（名字 + 是不是他自己起的）。Codex 没有这个名字
-const nameOf = (s) => (s && s.provider !== 'codex' && typeof s.regName === 'string' && s.regName.trim() ? { name: s.regName.slice(0, 120), ...(s.userNamed ? { named: true } : {}) } : {});
+const nameOf = (s) => (s && s.provider !== 'codex' && s.provider !== 'droid' && s.provider !== 'antigravity' && typeof s.regName === 'string' && s.regName.trim() ? { name: s.regName.slice(0, 120), ...(s.userNamed ? { named: true } : {}) } : {});
 function archiveSession(sid, force, auto) {      // auto = 自动收工的理由（字符串）；手点的不带
   const s = allSessions.find((x) => x.sid === sid);
   if (!s) return { ok: false, error: '这个会话已经不在了' };
   if (archive.items[sid]) return { ok: true, grace: GRACE };
   if (s.status === 'busy' && !force) return { ok: false, needConfirm: true, error: '它还在做事，归档会打断它。' };
-  const tr = tracks.get(sid) || codexTracks.get(sid), st = tr ? tr.st : newState(), v = tidyVerdict(s, st);
+  const tr = tracks.get(sid) || codexTracks.get(sid) || droidTracks.get(sid) || agyTracks.get(sid), st = tr ? tr.st : newState(), v = tidyVerdict(s, st);
   const why = auto ? auto + '，' + v.why : v.why;
   const account = readTap(sid)?.account;
-  archive.items[sid] = { sid, provider: s.provider || 'claude', ...(typeof account === 'string' && account.trim() ? { account } : {}), title: s.title, cwd: s.cwd, file: tr ? tr.file : null, prompt: s.prompt, resultAt: s.resultAt, ...(isGemini(s.model) ? { gemini: s.model } : {}), ...nameOf(s),
+  archive.items[sid] = { sid, provider: s.provider || 'claude', ...(typeof account === 'string' && account.trim() ? { account } : {}), title: s.title, cwd: s.cwd, file: tr ? tr.file : null, prompt: s.prompt, resultAt: s.resultAt, ...(isGemini(s.model) && s.provider !== 'droid' ? { gemini: s.model } : {}), ...(s.provider === 'droid' ? droidKeep(s.tmux) : {}), ...nameOf(s),
     archivedAt: Date.now(), state: 'archiving', stopAt: Date.now() + GRACE, note: tidyNote(s, st), why, ...(auto ? { auto: true } : {}), ...(v.keep ? {} : { drop: true }) };
   processed.delete(sid);
   saveArchive(); scheduleStop(sid); scanSessions();
@@ -2489,6 +2789,7 @@ function archiveSession(sid, force, auto) {      // auto = 自动收工的理由
 // 开着 tidyJudge 时四条线到点都先问小模型，只有明说 done 才收：waiting（它自己还有后续：在等别的窗口，或说了到点、明早、某件事之后由它来做、定了定时）、yours、判不出来都不收（car5）。
 const tidySpan = (ms) => (ms < 90000 ? '几十秒' : ms < 5400000 ? Math.round(ms / 60000) + ' 分钟' : Math.round(ms / 3600000) + ' 小时');
 function tidyDue(s, now) {
+  if (s.provider === 'antigravity') return null;                                             // Antigravity 不自动收、不问判官（合规：总控台的自动化不碰它，见 agy.mjs 开头）
   if (snoozes[s.sid]) return null;                                                          // 先放着的不收：它推迟中又交付了【进展】，到点要回来
   if (s.status !== 'idle' || s.ask || s.alert || !s.done || !s.result || !s.digest) return null;
   const need = s.digest.need;                                                                // 下面四条线各认自己的 need：reply（待跟进）、bg（后台还在跑）哪条都不沾
@@ -2562,7 +2863,7 @@ let judgeBusy = false;
 const judgeOn = () => CONFIG.tidyJudge && (!SANDBOX || !!process.env.CCBOARD_JUDGE);
 async function askJudge(s) {
   if (smallModelWaits()) return;
-  const at = String(s.resultAt), tr = tracks.get(s.sid) || codexTracks.get(s.sid), prev = judged.get(s.sid), owed = (prev && prev.owed) || null;
+  const at = String(s.resultAt), tr = tracks.get(s.sid) || codexTracks.get(s.sid) || droidTracks.get(s.sid) || agyTracks.get(s.sid), prev = judged.get(s.sid), owed = (prev && prev.owed) || null;
   const text = (tr && tr.st.result) || s.result;
   judgeBusy = true; judged.set(s.sid, { at, v: 'pending', owed, seen: Date.now() });
   let v = null, err = '', quota = false, failWhy = '';
@@ -2673,7 +2974,7 @@ async function lastReplMode(file, sid) {
   finally { if (fh) await fh.close().catch(() => {}); }
 }
 
-async function unarchive(sid) {
+async function unarchive(sid, human = false) {   // human：/api/unarchive 按 Origin / 配对手机给；排队接回按点「全部接回」的那一下是不是他本人（c.human）。默认不放行（FIX-1：原来默认 true，没带 Origin 的 /api/crash restore 能替他把 agy 接回）
   const it = archive.items[sid];
   if (!it) return { ok: false, error: '归档里没有它' };
   if (it.state === 'archiving') {                   // 还没真停：直接放回墙上
@@ -2684,6 +2985,8 @@ async function unarchive(sid) {
   if (it.state === 'restoring') return { ok: true, resumed: true, name: it.tmux };
   const dir = it.cwd && fs.existsSync(it.cwd) ? it.cwd : HOME;   // 已经停了：在后台把这段对话重新接上
   if (it.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };
+  if (it.provider === 'droid') return CONFIG.droid ? unarchiveDroid(sid, it, dir) : { ok: false, error: 'Droid 没有打开（config.json 的 droid）' };
+  if (it.provider === 'antigravity') return CONFIG.antigravity ? unarchiveAgy(sid, it, agyDir(dir), human) : { ok: false, error: 'Antigravity 没有打开（config.json 的 antigravity）' };
   // 它当初是 Gemini 模型开的：接回也走 claude-gemini，不悄悄换成 Claude 的模型（占 Max 额度、模型也变了）；脚本没开 / 不在就不接，说清原因
   const gemM = it.provider !== 'codex' && isGemini(it.gemini) ? it.gemini : null;
   if (gemM && !geminiOn()) return { ok: false, error: '这个会话是用 Gemini 模型开的，config.json 的 gemini 没开或脚本不在，接回会变成 Claude 的模型，所以没接' };
@@ -2728,43 +3031,83 @@ async function unarchive(sid) {
   return { ok: true, resumed: true, name, ...(nm ? { claudeName: nm.name } : {}) };
 }
 
+// 接回 Droid：droid --resume <会话号> --cwd <文件夹>，记录还是原来那份。不带 --settings（11/27 真 droid 1.23.0 实测：接回时模型以会话自己的 <会话号>.settings.json 为准，
+// 给了 --settings 也不换；他在 Droid 里用 /model 换过的不会被盖回去，下线了的模型也不照传）。归档里记的模型 / 强度只给卡片显示
+async function unarchiveDroid(sid, it, dir) {
+  if (!droidBin) return { ok: false, error: '这台机器上没找到 droid 命令' };
+  if (!SID_RE.test(sid)) return { ok: false, error: '会话号的写法不对' };
+  const name = newName();
+  const k = it.droid && typeof it.droid === 'object' ? { model: typeof it.droid.model === 'string' ? it.droid.model : '', effort: typeof it.droid.effort === 'string' ? it.droid.effort : '' } : null;
+  it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now();
+  const at = Date.now(), r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, droidBin, '--resume', sid, '--cwd', dir]);
+  if (!r.ok) { if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r.gone ? { ok: false, error: '会话一开就退了' } : r; }
+  droids[name] = { cwd: dir, at, prompt: it.prompt || '', sid, file: it.file || null, ...(k && (k.model || k.effort) ? { model: k.model || null, effort: k.effort || null } : {}) }; saveDroids();
+  launches.set(name, { at, prompt: '恢复「' + it.title + '」', cwd: dir, provider: 'droid' });
+  it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now(); saveArchive();
+  await refreshPanes();
+  return { ok: true, resumed: true, name };
+}
+
+// 接回 Antigravity：agy --conversation <会话号>，只重开终端、不往里打字。tap 照样挂上（新的 tmux 名、新的设置文件）
+async function unarchiveAgy(sid, it, dir, human) {
+  const bad = agyReject({}, human); if (bad) return { ok: false, error: bad };
+  if (!agyBin) return { ok: false, error: '这台机器上没找到 agy 命令' };
+  if (!SID_RE.test(sid)) return { ok: false, error: '会话号的写法不对' };
+  const name = newName();
+  it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now();
+  const at = Date.now();
+  agys[name] = { cwd: dir, at, prompt: it.prompt || '', cid: sid, file: it.file || null, model: null, opening: true };   // 占位：开窗口这两秒里闸也认得出它
+  const r = await openAgy(name, dir, { cid: sid });
+  if (!r.ok) { delete agys[name]; if (archive.items[sid] === it) { it.state = 'archived'; delete it.tmux; delete it.restoreAt; } return r.gone ? { ok: false, error: '会话一开就退了' } : r; }
+  if (agys[name]) delete agys[name].opening; saveAgys();
+  launches.set(name, { at, prompt: '恢复「' + it.title + '」', cwd: dir, provider: 'antigravity' });
+  it.state = 'restoring'; it.tmux = name; it.restoreAt = Date.now(); saveArchive();
+  console.log(`agy ${new Date().toISOString()} ${name} resume ${sid.slice(0, 8)}`);
+  await refreshPanes();
+  return { ok: true, resumed: true, name };
+}
 async function deleteSession(sid) {
   const s = allSessions.find((x) => x.sid === sid);
   const it = archive.items[sid];
   if (!s && !it) return { ok: false, error: '找不到这个会话' };
   clearTimeout(stopTimers.get(sid)); stopTimers.delete(sid);
-  const anyTr = tracks.get(sid) || codexTracks.get(sid);
-  const file = (it && it.file) || (anyTr && anyTr.file) || (s && s.provider !== 'codex' && locate(sid, s.cwd));
+  const anyTr = tracks.get(sid) || codexTracks.get(sid) || droidTracks.get(sid) || agyTracks.get(sid);
+  const agy = (s && s.provider === 'antigravity') || (it && it.provider === 'antigravity');   // agy 的对话记录在它自己的 brain 里、文件名都叫 transcript.jsonl：不挪，只拿掉卡片
+  const file = agy ? null : (it && it.file) || (anyTr && anyTr.file) || (s && s.provider !== 'codex' && locate(sid, s.cwd));
   if (s) { const r = await stopSession(s); if (!r.ok) return r; }
   let moved = false;
-  if (file && fs.existsSync(file)) {                // 对话记录不直接删：挪到暂存处，30 天后清
+  if (file && !droidOff(file) && fs.existsSync(file)) {                // 对话记录不直接删：挪到暂存处，30 天后清
     fs.mkdirSync(DELETED_DIR, { recursive: true });
     const base = path.join(DELETED_DIR, Date.now() + '-' + sid);
     fs.renameSync(file, base + '.jsonl'); moved = true;
     const side = file.replace(/\.jsonl$/, '');
     try { if (fs.statSync(side).isDirectory()) fs.renameSync(side, base + '.d'); } catch {}
+    moveDroidSide(file, base);
   }
-  delete archive.items[sid]; saveArchive(); tracks.delete(sid); scanSessions();
+  if (it && it.droid) dropDroidSettings(it.droid.settings);
+  delete archive.items[sid]; saveArchive(); tracks.delete(sid); droidTracks.delete(sid); agyTracks.delete(sid); scanSessions();
   purgeSessionTmp(sid);
   return { ok: true, moved };
 }
 
 function moveToDeleted(file) {                   // 对话记录不直接删：挪到暂存处，30 天后清
-  if (!file || !fs.existsSync(file)) return false;
+  if (!file || droidOff(file) || !fs.existsSync(file)) return false;
   fs.mkdirSync(DELETED_DIR, { recursive: true });
   const base = path.join(DELETED_DIR, Date.now() + '-' + path.basename(file, '.jsonl'));
   fs.renameSync(file, base + '.jsonl');
   const side = file.replace(/\.jsonl$/, '');
   try { if (fs.statSync(side).isDirectory()) fs.renameSync(side, base + '.d'); } catch {}
+  moveDroidSide(file, base);
   return true;
 }
 function dropArchived(sid, it) {
-  const moved = moveToDeleted(it.file);
+  const moved = it.provider === 'antigravity' ? false : moveToDeleted(it.file);   // 同 deleteSession：agy 的记录不挪
+  if (it.droid) dropDroidSettings(it.droid.settings);
   delete archive.items[sid];
   archive.dropped = (archive.dropped || []).filter((x) => Date.now() - x.at < KEEP_DELETED_DAYS * 86400000);
   archive.dropped.unshift({ sid, title: it.title, prompt: it.prompt, why: it.why, note: it.note, at: Date.now(), moved });
   archive.dropped = archive.dropped.slice(0, 200);
-  saveArchive(); tracks.delete(sid); codexTracks.delete(sid); scanSessions();
+  saveArchive(); tracks.delete(sid); codexTracks.delete(sid); droidTracks.delete(sid); agyTracks.delete(sid); scanSessions();
   purgeSessionTmp(sid);
 }
 function purgeDeleted() {
@@ -2869,11 +3212,31 @@ function parseDialog(text) {
   const question = lines.slice(Math.max(0, a - 10), a).filter((l) => l.trim() && !BORDER.test(l)).map((l) => l.trim()).join('\n');
   return { question, options, cursor: ci - a };
 }
-async function answerDialog(name, idx, text) {
+// Droid 的选择框：光标是行首的「>」，选项写成「N. 文字」（parseDialog 只认 ❯ / ›），框线「│」在行首。先照 Claude / Codex 的认，认不出再按这个认
+const DROID_OPT = /^\s*(>)?\s*(\d+)\.\s+(\S.*)$/;
+function parseDroidDialog(text) {
+  const d = parseDialog(text); if (d) return d;
+  const lines = String(text || '').split('\n').map((l) => l.replace(/^(\s*)[│┃]/, '$1 ').replace(/[\s│┃]+$/, ''));
+  let hint = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (/enter\s+(to\s+)?(confirm|select)/i.test(lines[i])) { hint = i; break; }
+  if (hint < 0) return null;
+  let ci = -1;
+  for (let i = hint - 1; i >= Math.max(0, hint - 14); i--) { const m = lines[i].match(DROID_OPT); if (m && m[1]) { ci = i; break; } }
+  if (ci < 0) return null;
+  let a = ci, b = ci;
+  while (a > 0 && DROID_OPT.test(lines[a - 1])) a--;
+  while (b + 1 < hint && DROID_OPT.test(lines[b + 1])) b++;
+  const options = [];
+  for (let i = a; i <= b; i++) options.push(lines[i].match(DROID_OPT)[3].trim());
+  if (options.length < 2 || options.length > 8) return null;
+  const question = lines.slice(Math.max(0, a - 10), a).filter((l) => l.trim() && !BORDER.test(l)).map((l) => l.trim()).join('\n');
+  return { question, options, cursor: ci - a };
+}
+async function answerDialog(name, idx, text, parse = parseDialog) {
   for (let i = 0; i < 12; i++) {
     const cap = await tmuxFor(name, ['capture-pane', '-p', '-t', name]);
     if (!cap.ok) return { ok: false, error: '这个会话已经不在了' };
-    const d = parseDialog(cap.out);
+    const d = parse(cap.out);
     if (!d || d.options[idx] !== text) return { ok: false, error: '选择框的内容变了，再看一眼再选' };
     if (d.cursor === idx) { const r = await tmuxFor(name, ['send-keys', '-t', name, 'Enter']); return { ok: r.ok, error: r.err }; }
     await tmuxFor(name, ['send-keys', '-t', name, d.cursor < idx ? 'Down' : 'Up']);
@@ -2885,11 +3248,11 @@ const waitScreens = new Map();   // tmux 会话名 → 弹框时屏幕上的字
 async function refreshWaitScreens() {
   const names = new Set();
   for (const s of sessions) {
-    if (s.channel !== 'tmux' || (s.status !== 'waiting' && s.provider !== 'codex')) continue;   // Codex 没有状态登记，只能看屏幕
+    if (s.channel !== 'tmux' || (s.status !== 'waiting' && s.provider !== 'codex' && s.provider !== 'droid' && s.provider !== 'antigravity')) continue;   // Codex / Droid / Antigravity 的选择框不进记录，只能看屏幕
     const cap = await tmuxFor(s.tmux, ['capture-pane', '-p', '-t', s.tmux]);
     if (!cap.ok) continue;
-    const dialog = parseDialog(cap.out);
-    if (s.provider === 'codex' && !dialog) continue;
+    const dialog = s.provider === 'droid' ? parseDroidDialog(cap.out) : parseDialog(cap.out);
+    if ((s.provider === 'codex' || s.provider === 'droid' || (s.provider === 'antigravity' && s.status !== 'waiting')) && !dialog) continue;   // agy 的 tap 报了「等你点允许」：认不出选择框也留屏幕
     names.add(s.tmux);
     waitScreens.set(s.tmux, { screen: screenLines(cap.out, 14), dialog });
   }
@@ -3059,6 +3422,37 @@ async function findCodex() {
   const p = r.out.split('\n').map((x) => x.trim()).filter((x) => x.startsWith('/')).pop();
   codexBin = p && fs.existsSync(p) ? p : null;
 }
+let droidBin = null;
+async function findDroid() {                              // 和 codex 一样按登录 shell 找
+  const r = await run('/bin/zsh', ['-lc', 'command -v droid']);
+  const p = r.out.split('\n').map((x) => x.trim()).filter((x) => x.startsWith('/')).pop();
+  droidBin = p && fs.existsSync(p) ? p : null;
+  console.log(`droid ${new Date().toISOString()} bin ${droidBin || '没找到'}`);
+  if (droidBin) await findDroidModels();
+}
+// 模型清单：问一次 droid exec --help（不经 shell、10 秒为限）。读不出来就是空清单，Droid 只能「默认」
+async function findDroidModels() {
+  const h = await run(droidBin, ['exec', '--help'], { timeout: 10000 });
+  const p = h.ok ? parseDroidModels(h.out) : null;
+  droidModels = p && p.models.length ? p : { models: [], defaultModel: null };
+  console.log(`droid ${new Date().toISOString()} models ${p && p.models.length ? p.models.length + ' default ' + (p.defaultModel || '-') : '读不到（' + (h.ok ? '帮助里没有模型清单' : String(h.err || '命令失败').slice(0, 80)) + '），只能用默认'}`);
+}
+
+let agyBin = null, agyModels = null;                    // agyModels：{ids, labels, at}，agy models 的结果
+const AGY_MODELS_FILE = path.join(AGY_DIR, 'models.json'), AGY_MODELS_MS = 24 * 3600000;
+// 模型表一天最多问 agy 一次（agy models 是它自己的命令、不发对话；仍然少问）。只读预览只用存着的
+async function findAgy() {
+  const r = await run('/bin/zsh', ['-lc', 'command -v agy']);
+  const p = r.out.split('\n').map((x) => x.trim()).filter((x) => x.startsWith('/')).pop();
+  agyBin = p && fs.existsSync(p) ? p : null;
+  try { const j = JSON.parse(fs.readFileSync(AGY_MODELS_FILE, 'utf8')); if (j && Array.isArray(j.ids) && j.ids.length) agyModels = j; } catch {}
+  if (agyBin && !READONLY && (!agyModels || Date.now() - (agyModels.at || 0) > AGY_MODELS_MS)) {
+    const m = await run(agyBin, ['models'], { timeout: 20000, env: TMUX_ENV, input: '' });
+    const got = m.ok ? parseAgyModels(m.out) : null;
+    if (got) { agyModels = { ...got, at: Date.now() }; try { fs.mkdirSync(AGY_DIR, { recursive: true }); const tmp = AGY_MODELS_FILE + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(agyModels)); fs.renameSync(tmp, AGY_MODELS_FILE); } catch {} }
+  }
+  console.log(`agy ${new Date().toISOString()} bin ${agyBin || '没找到'} models ${agyModels ? agyModels.ids.length : '没取到'}`);
+}
 // 账号表和「当前登录的是谁」放在内存里，每 30 秒刷新一次：providers() 每次轮询都要调，不能每次都读钥匙串和 170 KB 的 ~/.claude.json
 let acctList = [], loginNow = null, acctLoaded = false;   // acctLoaded：号表读完过一次（判官换号要等它，见 smallModelWaits）
 async function refreshAccounts() { acctList = await accountState(CONFIG.accounts, run); loginNow = acctList.length ? loginLabel(HOME) : null; acctLoaded = true; }
@@ -3072,6 +3466,10 @@ function providers() {
     claude: { label: 'Claude Code', ok: true, models: ['fable', 'opus', 'sonnet', 'haiku', ...gem], ...(gem.length ? { geminiModels: gem } : {}), efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultModel: cm, defaultEffort: ce,
       accounts: acctList, login: acctList.length ? loginNow : null, defaultAccount: CONFIG.defaultAccount || null },
     ...(CONFIG.codex ? { codex: { label: 'Codex', ok: !!codexBin, models: xm ? [xm] : [], efforts: ['low', 'medium', 'high', 'xhigh'], defaultModel: xm, defaultEffort: xe } } : {}),
+    ...(CONFIG.droid ? { droid: { label: 'Droid', ok: !!droidBin, models: droidModels.models.map((m) => m.id), modelNames: Object.fromEntries(droidModels.models.map((m) => [m.id, m.name])),
+      effortsByModel: Object.fromEntries(droidModels.models.map((m) => [m.id, m.efforts])), defaultEffortByModel: Object.fromEntries(droidModels.models.map((m) => [m.id, m.defaultEffort])),
+      efforts: [], defaultModel: droidModels.defaultModel, defaultEffort: null, autos: ['low', 'medium'] } } : {}),   // 强度跟着模型走（effortsByModel）；auto 只认 low / medium
+    ...(CONFIG.antigravity ? { antigravity: { label: 'Antigravity', ok: !!agyBin, models: agyModels ? agyModels.ids : [], modelLabels: agyModels ? agyModels.labels : {}, efforts: [], defaultModel: null, defaultEffort: null } } : {}),   // 强度写在模型名里（…-high）；没有账号、Code Mode
   };
 }
 // ───────────── 在某一列列头开的新任务：记住它属于哪一列 ─────────────
@@ -3463,6 +3861,29 @@ async function autoTrust(name) {
   return { ok: false, why: 'timeout' };
 }
 
+// Droid 的「信任这个文件夹」（11/27 真 Droid 1.23.0 截下来的样子）：
+//   │ Trust this folder? / │ <路径> / > 1. Trust this folder / 2. Exit without trusting / Enter to confirm · Esc to exit
+// 光标默认在 1，回车 = 信任。三句同时在屏幕上、光标正停在「1. Trust this folder」上才按一次 Enter；别的屏一个键都不按，照旧留给他在卡片上选。
+// 点之前它不写会话记录，所以认领到记录 = 已经过了这一屏，不用再看
+const DROID_TRUST = [/Trust this folder\?/, /^[\s│┃]*>\s*1\.\s*Trust this folder[\s│┃]*$/m, /Exit without trusting/];
+const droidTrustScreen = (t) => DROID_TRUST.every((re) => re.test(String(t || '')));
+// 按完回车隔 1.5 秒再看一眼：还是这一屏（回车没被收下）就再按，最多按 3 次，每次都记一行日志
+const DROID_TRUST_TRIES = 3, DROID_TRUST_RECHECK = 1500;
+async function autoTrustDroid(name) {
+  const end = Date.now() + TRUST_WAIT;
+  let n = 0;
+  while (Date.now() < end && n < DROID_TRUST_TRIES) {
+    await sleep(n ? DROID_TRUST_RECHECK : 400);
+    if (!Object.hasOwn(droids, name) || droids[name].file) return { ok: true, why: n ? 'answered' : 'no-dialog' };
+    const cap = await tmuxFor(name, ['capture-pane', '-p', '-t', name]);
+    if (!cap.ok) return { ok: false, why: 'gone' };
+    if (!droidTrustScreen(cap.out)) { if (n) return { ok: true, why: 'answered' }; continue; }
+    const r = await tmuxFor(name, ['send-keys', '-t', name, 'Enter']); n++;
+    console.log(`trust ${new Date().toISOString()} ${name} droid ${r.ok ? 'yes' : 'fail ' + r.err}${n > 1 ? '（第 ' + n + ' 次）' : ''}`);
+    if (!r.ok) return { ok: false, why: 'answered' };
+  }
+  return { ok: false, why: n ? 'still-dialog' : 'timeout' };
+}
 const SAFE_ARG = /^[\w.\-:\[\]\/]{1,64}$/;
 // 新任务不问「放哪个文件夹」（Khalil 11/12：「我也懒得去管……你就应该自己很聪明的去找应该在哪个项目文件夹，甚至新开一个文件夹」）。
 // 会话一律开在主目录：共用的记忆和规矩只有在这里才读得到，它靠这些才找得对项目。再附下面这一段让它自己定文件夹；
@@ -3473,6 +3894,8 @@ async function newSession(prompt, cwd, opt = {}) {
   let dir = String(cwd || '~').trim().replace(/^~(?=$|\/)/, HOME);
   if (!path.isAbsolute(dir)) dir = path.join(HOME, dir);
   try { if (!fs.statSync(dir).isDirectory()) throw new Error(); } catch { return { ok: false, error: '没有这个文件夹：' + dir }; }
+  if (opt.provider === 'droid') return newDroid(prompt, dir, opt);
+  if (opt.provider === 'antigravity') return newAgy(prompt, agyDir(dir), opt);
   if (opt.provider === 'codex' && !CONFIG.codex) return { ok: false, error: 'Codex 没有打开（config.json 的 codex）' };
   const provider = opt.provider === 'codex' ? 'codex' : 'claude';
   if (opt.codeMode === true && provider !== 'claude') return { ok: false, error: 'Code Mode 只有 Claude Code 有' };   // 报错不忽略：悄悄不开，调用方会以为开了（和写错档位同一个理由）
@@ -3546,6 +3969,67 @@ async function newSession(prompt, cwd, opt = {}) {
   else if (CONFIG.autoTrust) autoTrust(name).catch(() => {});   // config 里打开就替他点，开在哪个文件夹都一样；不等它，卡片先出来
   return { ok: true, name, ...(nm ? { claudeName: nm.name } : {}), project: pin, account: acct ? acct.id : null, codeMode, ...(gem ? { gemini: model } : {}), ...(fell ? { fallback: { from: fell.from, key: fell.key, used: fell.used } } : {}) };
 }
+// Droid 新窗口：droid --cwd <文件夹> [--auto low|medium] [--settings <文件>] -- "<任务>"（任务前一律加 --：以 - 开头的任务不会被当成参数）。不接的一律报错、不开（悄悄丢掉，调用方会以为生效了；和写错档位同一个理由）
+// 模型和强度：交互版 droid 没有 -m / -r，只能写进 --settings 的文件（只在这个进程里合进它的设置）。model 要在 droid exec --help 的清单里，effort 要是这个模型认的（droidPick）
+function droidReject(o) {
+  if (!CONFIG.droid) return 'Droid 没有打开（config.json 的 droid）';
+  for (const [k, what] of [['tier', '档位'], ['account', '账号'], ['brief', '派活单']]) if (o[k] != null && o[k] !== '') return 'Droid 不接' + what + '（' + k + '）';
+  if (o.codeMode != null && o.codeMode !== false) return 'Code Mode 只有 Claude Code 有';
+  if (o.auto != null && o.auto !== '' && o.auto !== 'low' && o.auto !== 'medium') return 'Droid 的 auto 只能是 low 或 medium';
+  const pk = droidPick({ model: o.model, effort: o.effort }, droidModels);
+  return pk.ok ? '' : pk.error;
+}
+async function newDroid(prompt, dir, opt) {
+  const bad = droidReject(opt); if (bad) return { ok: false, error: bad };
+  if (!droidBin) return { ok: false, error: '这台机器上没找到 droid 命令' };
+  const pk = droidPick({ model: opt.model, effort: opt.effort }, droidModels);
+  const files = await cleanFiles(opt.files);
+  let text = (prompt || '').trim();
+  if (files.length) text = (text ? text + '\n\n' : '') + '附件（先看这些文件再开始）：\n' + files.join('\n');
+  const shown = text;
+  const pin = opt.project ? pinnable(opt.project.key, opt.project.name) : null;
+  if (text && sameDir(dir, HOME)) text += pin ? pinNote(pin) : FOLDER_NOTE;
+  const name = newName(), at = Date.now();
+  const settings = pk.model || pk.effort ? path.join(DROID_SET_DIR, name + '.json') : null;
+  if (settings) try { writeDroidSettings(settings, pk); } catch (e) { return { ok: false, error: '写不了 Droid 的设置文件：' + (e.code || e.message) }; }
+  const r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, droidBin, '--cwd', dir, ...(opt.auto ? ['--auto', opt.auto] : []), ...(settings ? ['--settings', settings] : []), ...(text ? ['--', text] : [])]);
+  if (!r.ok) { if (settings) fs.rmSync(settings, { force: true }); return r.gone ? { ok: false, error: '会话一开就退了' } : r; }
+  launches.set(name, { at, prompt: shown, cwd: dir, provider: 'droid' });
+  if (pin) { pins[name] = { ...pin, at: Date.now() }; savePins(); }
+  droids[name] = { cwd: dir, at, prompt: shown, sid: null, file: null, auto: opt.auto || null, ...(settings ? { model: pk.model || null, effort: pk.effort || null, settings } : {}) }; saveDroids();
+  console.log(`droid ${new Date().toISOString()} ${name} new auto=${opt.auto || '-'} model=${pk.model || '-'} effort=${pk.effort || '-'}`);
+  if (CONFIG.autoTrust) autoTrustDroid(name).catch(() => {});   // 和 Claude 一样不等它，卡片先出来
+  return { ok: true, name, project: pin, account: null, codeMode: false, ...(opt.auto ? { auto: opt.auto } : {}), ...(pk.model ? { model: pk.model } : {}), ...(pk.effort ? { effort: pk.effort } : {}) };
+}
+
+// Antigravity 新窗口：agy [--model <id>] --settings <本窗口的设置文件> [-i "<任务>"]。任务原文照他写的，不附 FOLDER_NOTE（开在 ~/Projects，见 agyDir）
+async function openAgy(name, dir, { model, text, cid } = {}) {
+  const settings = agySetFile(name);
+  try { fs.mkdirSync(AGY_DIR, { recursive: true }); fs.writeFileSync(settings, JSON.stringify(agySettings(process.execPath, path.join(DIR, 'agy.mjs'), agyTapFile(name)))); }
+  catch (e) { return { ok: false, error: '写不了 agy 的设置文件：' + (e.code || e.message) }; }
+  const r = await openSession(name, ['-x', '160', '-y', '48', '-c', dir, ...agyArgs({ bin: agyBin, model, settings, text, cid })]);
+  if (!r.ok) dropAgyFiles(name);
+  return r;
+}
+async function newAgy(prompt, dir, opt) {
+  if (!CONFIG.antigravity) return { ok: false, error: 'Antigravity 没有打开（config.json 的 antigravity）' };
+  const bad = agyReject(opt, opt.human === true, agyModels && agyModels.ids); if (bad) return { ok: false, error: bad };
+  if (!agyBin) return { ok: false, error: '这台机器上没找到 agy 命令' };
+  const files = await cleanFiles(opt.files);
+  let text = (prompt || '').trim();
+  if (files.length) text = (text ? text + '\n\n' : '') + '附件（先看这些文件再开始）：\n' + files.join('\n');
+  const pin = opt.project ? pinnable(opt.project.key, opt.project.name) || null : null;   // 钉住：和 newSession 同一个规矩（写法不同是为了不和改坏版 pin-trusts-client 的原文撞）
+  const model = String(opt.model || '').trim();
+  const name = newName(), at = Date.now();
+  agys[name] = { cwd: dir, at, prompt: text, cid: null, file: null, model: model || null, opening: true };   // 占位：开窗口这两秒里闸也认得出它
+  const r = await openAgy(name, dir, { model, text });
+  if (!r.ok) { delete agys[name]; return r.gone ? { ok: false, error: '会话一开就退了' } : r; }
+  launches.set(name, { at, prompt: text, cwd: dir, provider: 'antigravity' });
+  if (pin) { pins[name] = { ...pin, at }; savePins(); }
+  if (agys[name]) delete agys[name].opening; saveAgys();
+  console.log(`agy ${new Date().toISOString()} ${name} new model=${model || '-'}`);
+  return { ok: true, name, project: pin, account: null, codeMode: false, ...(model ? { model } : {}) };
+}
 // 退回时让总管知道（总管 khalil-4c 11/22 要的）：config 的 accountFallback.note 写了文件就追加一行。同一件事（同一个号、同一个额度窗口）只写一次（只记在内存：服务重启后可能再写一次）。
 // 试验服务只往它自己的数据目录里写：拿真 config 拷贝起的试验服务不能往总管的 fyi.md 写假记录（11/22 审查）
 const fellNoted = new Set();
@@ -3566,10 +4050,12 @@ async function pendingLaunches() {
   for (const pane of panes) {
     if (onWall.has(pane.name)) { launches.delete(pane.name); continue; }
     if (agents[pane.name] && !CONFIG.codex) continue;           // codex 没打开：以前起的 Codex 窗格不当成「启动中」
+    if (droids[pane.name] && !CONFIG.droid) continue;
+    if (agys[pane.name] && !CONFIG.antigravity) continue;
     const L = launches.get(pane.name) || { at: pane.created, prompt: '', cwd: pane.cwd };
     const cap = await tmuxAt(pane.sock, ['capture-pane', '-p', '-t', pane.name]);
     const screen = cap.ok ? cap.out : '';
-    out.push({ name: pane.name, prompt: L.prompt, cwd: L.cwd, at: L.at, provider: L.provider || (agents[pane.name] ? 'codex' : 'claude'), dialog: parseDialog(screen),
+    out.push({ name: pane.name, prompt: L.prompt, cwd: L.cwd, at: L.at, provider: L.provider || (agents[pane.name] ? 'codex' : droids[pane.name] ? 'droid' : agys[pane.name] ? 'antigravity' : 'claude'), dialog: Object.hasOwn(droids, pane.name) ? parseDroidDialog(screen) : parseDialog(screen),
       screen: Date.now() - L.at > 20000 ? screenLines(screen, 12) : '' });
   }
   return out;
@@ -3732,7 +4218,7 @@ const handle = async (req, res, via) => {
     }
     if (req.method === 'GET' && u.pathname === '/api/diff') {
       const sid = u.searchParams.get('sid') || '', wanted = u.searchParams.get('path') || '';
-      const tr = tracks.get(sid) || (CONFIG.codex && codexTracks.get(sid));
+      const tr = tracks.get(sid) || (CONFIG.codex && codexTracks.get(sid)) || (CONFIG.droid && droidTracks.get(sid));
       const current = sessions.find(x => x.sid === sid);
       if (!tr || !tr.file || !fs.existsSync(tr.file) || !current) return reply(res, 404, { ok: false, error: '没有这段对话记录' });
       const cwd = String(current.cwd || '').replace(/^~(?=$|\/)/, HOME);
@@ -3742,11 +4228,11 @@ const handle = async (req, res, via) => {
     }
     if (req.method === 'GET' && u.pathname === '/api/turns') {
       const sid = u.searchParams.get('sid') || '';
-      const tr = tracks.get(sid) || codexTracks.get(sid);
+      const tr = tracks.get(sid) || codexTracks.get(sid) || droidTracks.get(sid) || agyTracks.get(sid);
       const file = (tr && tr.file) || (archive.items[sid] && archive.items[sid].file);
-      if (!file || !fs.existsSync(file) || (file.includes('/.codex/') && !CONFIG.codex)) return reply(res, 404, { error: '没有这段对话记录' });
+      if (!file || !fs.existsSync(file) || (file.includes('/.codex/') && !CONFIG.codex) || (file.startsWith(DROID_HOME + '/') && !CONFIG.droid) || (isAgyFile(file) && !CONFIG.antigravity)) return reply(res, 404, { error: '没有这段对话记录' });
       const n = Math.min(40, Number(u.searchParams.get('n')) || 12);
-      return reply(res, 200, { turns: file.includes('/.codex/') ? readCodexTurns(file, n) : readTurns(file, n) });
+      return reply(res, 200, { turns: file.includes('/.codex/') ? readCodexTurns(file, n) : file.startsWith(DROID_HOME + '/') ? readDroidTurns(file, n) : isAgyFile(file) ? readAgyTurns(file, n) : readTurns(file, n) });
     }
     if (REMOTE.on && !rem && req.method === 'GET' && u.pathname === '/api/remote/devices') {   // 配对管理只在本机：列出已配对的设备（不给哈希）
       if (!fromBoard(req)) return reply(res, 403, { ok: false, error: '只接受总控台自己的页面' });
@@ -3832,7 +4318,7 @@ const handle = async (req, res, via) => {
       return reply(res, 200, { ok: true });
     }
     if (u.pathname === '/api/crash') {              // 墙顶横幅：一起退出的那一起「全部接回」（restore）/「停下」（stop）/「先不管」「知道了」（dismiss）
-      return reply(res, 200, crashAction(String(body.id || ''), String(body.action || '')));
+      return reply(res, 200, crashAction(String(body.id || ''), String(body.action || ''), !!req.headers.origin));   // /api/crash 远程端口不给（remote.mjs 的名单），只看 Origin
     }
     if (u.pathname === '/api/ack') {                // 「知道了」：意外退出的那张卡收起来，对话留在归档里
       const it = archive.items[String(body.sid || '')];
@@ -3883,7 +4369,7 @@ const handle = async (req, res, via) => {
       return reply(res, 200, { ok: true, n: processed.size });
     }
     if (u.pathname === '/api/send') {
-      return reply(res, 200, await sendTo(String(body.sid || ''), String(body.text || '').trim(), body.files));
+      return reply(res, 200, await sendTo(String(body.sid || ''), String(body.text || '').trim(), body.files, !!req.headers.origin || !!rem));   // 带 Origin 的界面、配过对的手机 = 他本人（Antigravity 只认这两种）
     }
     if (u.pathname === '/api/upload') {             // 粘贴 / 拖进来的文件：存到 uploads，回它的路径
       const m = String(body.data || '').match(/^(?:data:[^;,]*;base64,)?([A-Za-z0-9+/=\s]+)$/);
@@ -3915,8 +4401,9 @@ const handle = async (req, res, via) => {
       return reply(res, 200, { ok: true, files: out });
     }
     if (u.pathname === '/api/focus') return reply(res, 200, await focusSession(String(body.sid || '')));
+    if ((u.pathname === '/api/archive' || u.pathname === '/api/delete') && isAgySid(String(body.sid || ''))) { const bad = agyReject({}, !!req.headers.origin || !!rem); if (bad) return reply(res, 200, { ok: false, error: bad }); }   // 停掉 / 删掉 agy 窗口也只认他本人
     if (u.pathname === '/api/archive') return reply(res, 200, archiveSession(String(body.sid || ''), body.force === true));
-    if (u.pathname === '/api/unarchive') return reply(res, 200, await unarchive(String(body.sid || '')));
+    if (u.pathname === '/api/unarchive') return reply(res, 200, await unarchive(String(body.sid || ''), !!req.headers.origin || !!rem));
     if (u.pathname === '/api/delete') return reply(res, 200, await deleteSession(String(body.sid || '')));
     if (u.pathname === '/api/new') {
       // 开窗口的一方（比如总指挥窗口）可以只说档位 tier（heavy / standard / light），由 route.mjs 翻成模型和强度；不说档位就和以前一样。
@@ -3925,6 +4412,15 @@ const handle = async (req, res, via) => {
       // 否则现在就按端口去认（趁调用方的 curl 还连着；newSession 要好几秒），newSession 成功以后再等结果。认不出就不记，/api/new 照常。
       const fromOk = typeof body.from === 'string' && allSessions.some((x) => x.sid === body.from);
       const who = req.headers.origin ? null : fromOk ? Promise.resolve({ sid: body.from, how: 'from' }) : findCaller(req.socket.remotePort).then((sid) => (sid ? { sid, how: 'lsof' } : null), () => null);
+      if (body.provider === 'droid') { const bad = droidReject(body); if (bad) return reply(res, 200, { ok: false, error: bad }); }   // 要在 routeNew 之前：它把 codex 以外的都当 claude 翻档位
+      if (body.provider === 'antigravity') {                 // 同上，而且整个不走 routeNew / 派活单 / 认调用方：只有他本人开（见 agy.mjs）
+        if (!CONFIG.antigravity) return reply(res, 200, { ok: false, error: 'Antigravity 没有打开（config.json 的 antigravity）' });
+        const human = !!req.headers.origin || !!rem, bad = agyReject(body, human, agyModels && agyModels.ids);
+        if (bad) { console.log(`agy ${new Date().toISOString()} - reject ${human ? 'param' : 'not-human'}`); return reply(res, 200, { ok: false, error: bad }); }
+        const r = await newSession(String(body.prompt || ''), String(body.cwd || '~'), { provider: 'antigravity', model: body.model || '', human, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null });
+        if (r.ok) await refreshPanes();
+        return reply(res, 200, r);
+      }
       const rt = routeNew({ provider: body.provider, model: body.model, effort: body.effort, tier: body.tier });
       if (!rt.ok) return reply(res, 200, rt);
       if (body.codeMode != null && typeof body.codeMode !== 'boolean') return reply(res, 200, { ok: false, error: 'codeMode 只能是 true 或 false' });   // "1"、1 这类写法不猜：只有 true 才开
@@ -3938,7 +4434,7 @@ const handle = async (req, res, via) => {
         if (!bf.ok) { console.log(`brief ${new Date().toISOString()} - reject missing=${bf.missing.join(',') || '-'} problems=${bf.problems.length}`); return reply(res, 200, bf); }
         prompt = bf.text + (prompt.trim() ? '\n\n' + prompt.trim() : '');
       }
-      const r = await newSession(prompt, String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, fromUi: !!req.headers.origin, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null, codeMode: body.codeMode === true });
+      const r = await newSession(prompt, String(body.cwd || '~'), { provider: body.provider, model: rt.model, effort: rt.effort, account: body.account, fromUi: !!req.headers.origin, files: body.files, project: body.project && typeof body.project === 'object' ? body.project : null, codeMode: body.codeMode === true, ...(body.provider === 'droid' ? { auto: body.auto } : {}) });
       if (r.ok) { await refreshPanes(); if (rt.tier) console.log(`route ${new Date().toISOString()} ${r.name} ${rt.tier} ${body.provider === 'codex' ? 'codex' : 'claude'} ${rt.model || '-'} ${rt.effort}`); if (withBrief) console.log(`brief ${new Date().toISOString()} ${r.name} ok`); }
       if (r.ok && withBrief) r.brief = true;               // 带了派活单才带 brief: true；没带的应答和以前一样
       if (r.ok && who) {
@@ -4039,7 +4535,8 @@ const handle = async (req, res, via) => {
     if (u.pathname === '/api/answer') {             // 用户在卡片上点了选择框里的某一项（只对总控台自己开的后台会话）
       const name = String(body.name || '');
       if (!/^ccb-[\w-]+$/.test(name)) return reply(res, 400, { ok: false, error: '不是总控台开的会话' });
-      return reply(res, 200, await answerDialog(name, Number(body.option), String(body.text || '')));
+      if (Object.hasOwn(agys, name)) { const bad = agyReject({}, !!req.headers.origin || !!rem); if (bad) return reply(res, 200, { ok: false, error: bad }); }   // agy 的选择框（多半是「允许跑这条命令吗」）也只有他本人能点
+      return reply(res, 200, await answerDialog(name, Number(body.option), String(body.text || ''), Object.hasOwn(droids, name) ? parseDroidDialog : parseDialog));
     }
     if (u.pathname === '/api/attach') {             // 把后台会话接到一个终端标签里看
       const name = String(body.name || '');
@@ -4085,6 +4582,8 @@ server.listen(PORT, '127.0.0.1', () => {
   if (!READONLY) { purgeDeleted(); purgeUploads(); purgeTaps(LIMITS_DIR); setInterval(() => { purgeDeleted(); purgeUploads(); purgeTaps(LIMITS_DIR); }, 12 * 3600 * 1000); }
   if (!READONLY) try { fs.writeFileSync(SERVER_FILE, JSON.stringify({ pid: process.pid, port: PORT, at: Date.now() }) + '\n'); } catch (e) { console.log(`datadir ${new Date().toISOString()} 记不了 ${SERVER_FILE}：${e.message}`); }
   if (CONFIG.codex) findCodex();
+  if (CONFIG.droid) findDroid();
+  if (CONFIG.antigravity) findAgy();
   refreshAccounts(); setInterval(refreshAccounts, 30000);
   if (updater) { setTimeout(() => updater.tick(), (SANDBOX && Number(process.env.CCBOARD_UPDATE_DELAY_MS)) || 60000).unref(); setInterval(() => updater.tick(), 3600000).unref(); }   // 起来一分钟后查一次，之后每小时看一眼（一天只真连一次）
   fastLoop(); slowLoop(); suggestLoop(); limitsLoop(); scrubTmuxEnv();

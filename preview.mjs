@@ -335,7 +335,8 @@ export function startPreview({ port, home, log = () => {} }) {
     const nope = (code) => { res.writeHead(code, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(String(code)); };
     if (req.headers.host !== '127.0.0.1:' + bound && req.headers.host !== 'localhost:' + bound) return nope(403);   // 挡 DNS 重绑定
     if (req.method !== 'GET' && req.method !== 'HEAD') return nope(405);
-    const f = resolve(new URL(req.url, 'http://127.0.0.1').pathname);
+    let f;
+    try { f = resolve(new URL(req.url, 'http://127.0.0.1').pathname); } catch { return nope(400); }   // 网址解析不了（比如 `GET //[`）：以前异常逃出这里，和服务同一个进程，整个总控台跟着退出
     if (!f) return nope(404);
     serveFile(req, res, f);
   });
